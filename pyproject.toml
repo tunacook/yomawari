@@ -1,0 +1,31 @@
+[project]
+name = "yomawari"
+version = "0.1.0"
+description = "Unity製ノベルゲームのビルドを夜間に自動プレイし、問題をMarkdownレポートにまとめるハーネス"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.12",
+    "rich>=13",
+]
+
+[project.scripts]
+yomawari = "yomawari.cli:main"
+ymw = "yomawari.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["yomawari"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv]
+# /usr/local の x86_64 Python を拾わないよう、uv 管理の arm64 Python に限定する
+python-preference = "only-managed"
