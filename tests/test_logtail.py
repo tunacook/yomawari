@@ -79,3 +79,22 @@ def test_tail_file_follows_appends_and_truncation(tmp_path: Path):
     asyncio.run(scenario())
     kinds = [r.data["ev"] if isinstance(r, YomawariRecord) else r.message for r in got]
     assert kinds == ["boot", "heartbeat", "Some message", "boot"]
+
+
+def test_unity6_with_log_stacks(fixtures_dir=Path(__file__).parent / "fixtures"):
+    """Log にもスタックを付ける設定（Unity 6、Filename 行なし）の Player.log。"""
+    recs = parse_all((fixtures_dir / "player_unity6_log_stacks.log").read_bytes())
+    yom = [r.data for r in recs if isinstance(r, YomawariRecord)]
+    assert [d["ev"] for d in yom] == ["boot", "log_error", "heartbeat"]
+    assert yom[1]["type"] == "Exception" and yom[1]["stack"].startswith("Game.Scenario.Runner:Step()")
+    entries = {e.message: e for e in recs if isinstance(e, UnityEntry)}
+    # [YOMAWARI] 行に付いたスタックは読み飛ばし、エントリにしない
+    assert not any("YomawariLog:Emit" in m or m.startswith("UnityEngine.DebugLogHandler") for m in entries)
+    panel = entries["[Panel] SetVisibility(False): char=(null)"]
+    assert panel.stack == [
+        "UnityEngine.DebugLogHandler:Internal_Log(LogType, LogOption, String, Object)",
+        "Game.PanelUI:SetVisibility(Boolean)",
+        "Game.UI.CustomUI:Awake()",
+    ]
+    assert entries["NullReferenceException: Object reference not set to an instance of an object"].has_stack
+    assert "Input System module state changed to: Shutdown." in entries

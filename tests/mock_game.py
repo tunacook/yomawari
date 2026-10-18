@@ -6,7 +6,7 @@ Unity と同じく -yomawari があるときだけ [YOMAWARI] 行を出し、-lo
   crash      --mock-after 秒後に終了コード3で落ちる
   hang       --mock-after 秒後にハートビートを止める（プロセスは生きたまま）
   noboot     何も出さずに生き続ける
-  exception  boot の直後に例外とスタックトレースを出し、その後は normal と同じ
+  exception  boot の直後に例外（Player.log の本文と log_error イベント）を出し、その後は normal と同じ
 """
 
 import argparse
@@ -53,6 +53,13 @@ if a.mock_mode == "exception":
         "\n"
         "(Filename: Assets/Scripts/Runner.cs Line: 42)\n"
         "\n"
+    )
+    # 実機の YomawariLog は logMessageReceived から log_error を出す
+    emit(
+        "log_error",
+        type="Exception",
+        message="NullReferenceException: Object reference not set to an instance of an object",
+        stack="Rachel.Scenario.Runner:Step () (at Assets/Scripts/Runner.cs:42)\n",
     )
 while True:
     elapsed = time.monotonic() - t0

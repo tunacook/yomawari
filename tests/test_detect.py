@@ -68,18 +68,34 @@ def test_h01_not_before_boot_nor_after_exit(repo_rules):
     assert run(Engine(repo_rules), exited, ticks=[20]) == []
 
 
-def test_l01_exception_and_error_with_stack(repo_rules):
+def test_l01_log_error_event(repo_rules):
     e = Engine(repo_rules)
-    exc = ev("log", "unity_log", 1, message="NullReferenceException: Object reference not set",
-             stack=["A.B:C () (at Assets/x.cs:1)", "(Filename: Assets/x.cs Line: 1)"], has_stack=True)
-    err = ev("log", "unity_log", 2, message="Save slot 1 not found",
-             stack=["Rachel.Save:Load (int) (at Assets/s.cs:8)"], has_stack=True)
-    info = ev("log", "unity_log", 3, message="Loading scene Title", stack=[], has_stack=False)
-    exc_nostack = ev("log", "unity_log", 4, message="System.IO.IOException: Disk full", stack=[], has_stack=False)
-    issues = run(e, [exc, err, info, exc_nostack])
+    exc = ev("game", "log_error", 1, type="Exception", message="NullReferenceException: Object reference not set",
+             stack="A.B:C()\nD.E:F()\n")
+    err = ev("game", "log_error", 2, type="Error", message="Save slot 1 not found", stack="Game.Save:Load(Int32)\n")
+    asrt = ev("game", "log_error", 3, type="Assert", message="Assertion failed", stack="")
+    issues = run(e, [exc, err, asrt])
     assert [(i.rule_id, i.severity) for i in issues] == [("L-01", "major")] * 3
-    assert issues[0].key != issues[1].key
-    assert "Assets/x.cs:1" in issues[0].evidence["log"]
+    assert len({i.key for i in issues}) == 3
+    assert issues[0].detail.startswith("Exception: NullReferenceException")
+    assert "A.B:C()" in issues[0].evidence["log"]
+
+
+def test_l01_ignores_player_log_text(repo_rules):
+    """Player.log の本文はスタックが付いていても例外の文面でも L-01 にしない（判定は log_error だけ）。"""
+    e = Engine(repo_rules)
+    with_stack = ev("log", "unity_log", 1, message="[Panel] SetVisibility(False)",
+                    stack=["UnityEngine.DebugLogHandler:Internal_Log(LogType, LogOption, String, Object)"], has_stack=True)
+    exc_text = ev("log", "unity_log", 2, message="NullReferenceException: x", stack=["A.B:C()"], has_stack=True)
+    assert run(e, [with_stack, exc_text]) == []
+
+
+def test_l01_type_filter_and_ignore(repo_rules):
+    rules = repo_rules
+    rules["L-01"].params["ignore_patterns"] = ["^Known noisy"]
+    e = Engine(rules)
+    assert run(e, [ev("game", "log_error", 1, type="Warning", message="w", stack="")]) == []
+    assert run(e, [ev("game", "log_error", 1, type="Error", message="Known noisy thing", stack="")]) == []
 
 
 def test_load_rules_validation(tmp_path):

@@ -43,16 +43,11 @@ rules:
 
   - id: L-01
     severity: major
-    title: Player.log に Exception / Error
+    title: Error / Exception / Assert ログ
     description: >-
-      Player.log に例外、またはスタックトレース付きのログが出た。
-      Player Settings で Log / Warning のスタックを None にしている前提で、
-      スタック付きのエントリを Error とみなす。
+      ゲームの YomawariLog が Application.logMessageReceived から出す log_error イベント。
+      Player.log の本文からは Log と Error を区別できないため、本文のパターンでは判定しない。
     params:
-      exception_patterns:
-        - '^(?:[A-Za-z_][\w.]*\.)?[A-Za-z_]\w*Exception\b'
-        - '^Unhandled Exception'
-        - '^Crash!!!'
-      error_if_stack: true
+      types: [Error, Exception, Assert]
       # 誤検知になる既知のメッセージ（正規表現）。ゲームごとに追記する
       ignore_patterns: []

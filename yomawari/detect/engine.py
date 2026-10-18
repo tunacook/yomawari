@@ -196,32 +196,28 @@ class HeartbeatDetector(Detector):
 
 
 class LogErrorDetector(Detector):
-    """L-01"""
+    """L-01: ゲームが出す log_error イベント（Application.logMessageReceived 由来）で判定する。"""
 
     def __init__(self, rule: Rule) -> None:
         super().__init__(rule)
-        self.exc = [re.compile(p) for p in rule.param("exception_patterns")]
+        self.types = set(rule.param("types"))
         self.ignore = [re.compile(p) for p in rule.param("ignore_patterns")]
-        self.error_if_stack = bool(rule.param("error_if_stack"))
 
     def on_event(self, ev: Event) -> list[Issue]:
-        if ev.kind != "unity_log":
+        if ev.source != "game" or ev.kind != "log_error":
             return []
-        msg: str = ev.data["message"]
-        stack: list[str] = ev.data["stack"]
-        if any(p.search(msg) for p in self.ignore):
+        kind = str(ev.data.get("type", ""))
+        msg = str(ev.data.get("message") or "")
+        stack = str(ev.data.get("stack") or "")
+        if kind not in self.types or any(p.search(msg) for p in self.ignore):
             return []
-        is_exc = any(p.search(msg) for p in self.exc)
-        if not is_exc and not (self.error_if_stack and ev.data.get("has_stack")):
-            return []
-        head = msg.split(":", 1)[0] if is_exc else msg[:80]
-        top = next((s for s in stack if not s.startswith("(Filename:")), "")
-        kind = "例外" if is_exc else "エラー"
+        head = msg.splitlines()[0] if msg else ""
+        top = next((s for s in stack.splitlines() if s.strip()), "")
         return [
             self.issue(
-                f"{kind}: {msg[:200]}",
-                key=f"{head}|{top}", launch=ev.launch, t=ev.t, wall=ev.wall,
-                log="\n".join([msg, *stack]),
+                f"{kind}: {head[:200]}",
+                key=f"{kind}|{head[:80]}|{top}", launch=ev.launch, t=ev.t, wall=ev.wall,
+                log="\n".join(x for x in (msg, stack) if x),
             )
         ]
 

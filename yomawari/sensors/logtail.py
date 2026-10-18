@@ -67,6 +67,8 @@ class LogParser:
         self._partial = ""
         self._entry: UnityEntry | None = None
         self._blank = False
+        # Log にもスタックを付ける設定だと [YOMAWARI] 行の後ろにもスタックが付くので読み飛ばす
+        self._after_yomawari = False
 
     def feed(self, chunk: bytes) -> list[Record]:
         text = self._partial + self._decoder.decode(chunk)
@@ -91,7 +93,12 @@ class LogParser:
         if line.startswith(PREFIX):
             out.extend(self.flush())
             out.append(self._parse_yomawari(line))
+            self._after_yomawari = True
             return out
+        if self._after_yomawari:
+            if not line.strip() or is_stack_line(line):
+                return out
+            self._after_yomawari = False
         if self._entry is not None:
             if _TRAILER_RE.match(line.strip()):
                 # Unity はスタックと "(Filename: ...)" の間に空行を入れる

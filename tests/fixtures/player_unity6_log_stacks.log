@@ -1,0 +1,33 @@
+Initialize engine version: 6000.3.14f1 (d68c3f99a318)
+UnloadTime: 0.170792 ms
+[Panel] SetVisibility(False): char=(null)
+UnityEngine.DebugLogHandler:Internal_Log(LogType, LogOption, String, Object)
+Game.PanelUI:SetVisibility(Boolean)
+Game.UI.CustomUI:Awake()
+
+[YOMAWARI] {"seq":0,"t":0.512,"f":1,"ev":"boot","version":"0.3.1","build_type":"development","build_time":"2026-08-16T00:00:00"}
+UnityEngine.DebugLogHandler:Internal_Log(LogType, LogOption, String, Object)
+YomawariLog:Emit(String, String)
+Game.Boot:Start()
+
+<color=cyan>[FocusStack]</color> Pushed: QuitButton
+UnityEngine.DebugLogHandler:Internal_Log(LogType, LogOption, String, Object)
+Game.AbstractButton:OnButtonClick()
+UnityEngine.Events.UnityEvent:Invoke()
+UnityEngine.EventSystems.ExecuteEvents:Execute(GameObject, BaseEventData, EventFunction`1)
+
+NullReferenceException: Object reference not set to an instance of an object
+Game.Scenario.Runner:Step()
+UnityEngine.EventSystems.ExecuteEvents:Execute(GameObject, BaseEventData, EventFunction`1)
+
+[YOMAWARI] {"seq":1,"t":2.000,"f":120,"ev":"log_error","type":"Exception","message":"NullReferenceException: Object reference not set to an instance of an object","stack":"Game.Scenario.Runner:Step()\nUnityEngine.EventSystems.ExecuteEvents:Execute(GameObject, BaseEventData, EventFunction`1)\n"}
+UnityEngine.DebugLogHandler:Internal_Log(LogType, LogOption, String, Object)
+YomawariLog:Emit(String, String)
+YomawariLog:OnLog(String, String, LogType)
+UnityEngine.Application:CallLogCallback(String, String, LogType, Boolean)
+
+[YOMAWARI] {"seq":2,"t":3.000,"f":180,"ev":"heartbeat","fps":60.0,"gc_mem":10485760}
+UnityEngine.DebugLogHandler:Internal_Log(LogType, LogOption, String, Object)
+YomawariLog:Emit(String, String)
+
+Input System module state changed to: Shutdown.
