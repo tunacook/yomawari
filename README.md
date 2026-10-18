@@ -6,6 +6,7 @@ Unity のビルド（`.app` / `.exe`）を夜間に自動でプレイさせ、�
 ## 環境構築（macOS / Apple Silicon）
 
 ### 1. uv を入れる
+[uv](https://docs.astral.sh/uv/) は Python のパッケージ・プロジェクト管理ツール。このリポジトリでは、Python 本体の取得、仮想環境（`.venv`）の作成、依存パッケージのインストール、`yomawari` コマンドのインストールをすべて uv で行う（pip / venv / pyenv の代わり）。
 ```zsh
 brew install uv
 ```
