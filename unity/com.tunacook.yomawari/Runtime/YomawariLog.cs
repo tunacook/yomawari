@@ -1,4 +1,8 @@
 using UnityEngine;
+using UnityEngine.Scripting;
+
+// ゲームのコードはこのアセンブリを参照しないので、指定しないと IL2CPP のストリッピングでアセンブリごと消える
+[assembly: AlwaysLinkAssembly]
 
 namespace Yomawari
 {
@@ -23,7 +27,7 @@ namespace Yomawari
         }
 
         // できるだけ早く購読し、起動直後の例外も拾う
-        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration), Preserve]
         static void Init()
         {
             seq = 0;
@@ -37,7 +41,7 @@ namespace Yomawari
                 ",\"unity\":" + YomawariFormat.Str(Application.unityVersion));
         }
 
-        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad), Preserve]
         static void StartHeartbeat()
         {
             if (!Enabled) return;
