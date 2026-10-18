@@ -6,17 +6,30 @@ Unity のビルド（`.app` / `.exe`）を夜間に自動でプレイさせ、�
 ## 環境構築（macOS / Apple Silicon）
 
 ### 1. uv を入れる
+[uv](https://docs.astral.sh/uv/) は Python のパッケージ・プロジェクト管理ツール。このリポジトリでは、Python 本体の取得、仮想環境（`.venv`）の作成、依存パッケージのインストール、`yomawari` コマンドのインストールをすべて uv で行う（pip / venv / pyenv の代わり）。
+
+pip / venv / pyenv ではなく uv を使う理由:
+- **arm64 の Python を確実に使える**: Mac によっては `/usr/local/bin/python3` が x86_64（Rosetta）で、pip / venv はそれをそのまま使ってしまう。uv はマシンに合ったビルド済みの Python を自分で取得し、`pyproject.toml` の設定でシステムの Python を使わないようにしている
+- **道具が1つで済む**: pyenv・venv・pip・pipx の役割を uv だけで担えるので、手順が `uv sync` と `uv tool install` の2つで済む
+- **依存を固定できる**: `uv.lock` で依存のバージョンを固定し、別の Mac や Windows 機でも同じ環境を再現できる
+
+`pyproject.toml` は標準形式なので、uv がなくても、arm64 の Python で `python -m venv .venv && .venv/bin/pip install -e .` とすれば動く（ただし `uv.lock` による固定は効かない）。
+
 ```zsh
-# arm64 の Homebrew（/opt/homebrew）を使う
-/opt/homebrew/bin/brew install uv
+brew install uv
 ```
 - 「Xcode のライセンスに同意していない」というエラーで止まる場合は、先に `sudo xcodebuild -license accept` を実行する。
 - brew を使わない場合は、公式インストーラ `curl -LsSf https://astral.sh/uv/install.sh | sh` でも入る（インストール先は `~/.local/bin`）。
 
 ### 2. PATH を通す
-`uv tool` で入れたコマンドは `~/.local/bin` に置かれる。`~/.zshrc` に次の行がなければ足し、ターミナルを開き直す。
+`uv tool` で入れたコマンドは `~/.local/bin` に置かれる。`~/.zshrc` に次の行がなければ足す。
 ```zsh
 export PATH="$HOME/.local/bin:$PATH"
+```
+足したあとは、開いているターミナルで読み込み直す（新しいタブやウィンドウを開いてもよい）。読み込み直さないと `zsh: command not found: uv` になる。
+```zsh
+source ~/.zshrc
+which uv    # ~/.local/bin/uv と出ればよい
 ```
 
 ### 3. リポジトリの準備とテスト
