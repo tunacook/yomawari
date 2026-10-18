@@ -1,0 +1,23 @@
+Mono path[0] = '/Applications/Rachel.app/Contents/Resources/Data/Managed'
+Initialize engine version: 2022.3.20f1 (61c2feb0970d)
+[Subsystems] Discovering subsystems at path /Applications/Rachel.app/Contents/Resources/Data/UnitySubsystems
+[YOMAWARI] {"seq":0,"t":0.512,"f":1,"ev":"boot","version":"0.3.1","build_type":"development","build_time":"2026-10-17T22:10:00"}
+[YOMAWARI] {"seq":1,"t":1.000,"f":60,"ev":"heartbeat","fps":60.0,"gc_mem":10485760}
+[YOMAWARI] {"seq":2,"t":1.200,"f":72,"ev":"line","label":"ch1_start","line_id":"ch1_001","speaker":"レイチェル","text":"「おはよう。\"今日\"も\\n晴れね」"}
+Loading scene Title
+NullReferenceException: Object reference not set to an instance of an object
+Rachel.Scenario.Runner:Step () (at Assets/Scripts/Runner.cs:42)
+UnityEngine.EventSystems.ExecuteEvents:Execute (UnityEngine.EventSystems.IPointerClickHandler,UnityEngine.EventSystems.BaseEventData)
+
+(Filename: Assets/Scripts/Runner.cs Line: 42)
+
+Save slot 1 not found
+Rachel.Save.SaveManager:Load (int) (at Assets/Scripts/Save/SaveManager.cs:88)
+Rachel.UI.LoadMenu:OnClick () (at Assets/Scripts/UI/LoadMenu.cs:20)
+
+(Filename: Assets/Scripts/Save/SaveManager.cs Line: 88)
+
+[YOMAWARI] {"seq":3,"t":2.000,"f":120,"ev":"heartbeat","fps":59.8,"gc_mem":10485760}
+[YOMAWARI] {"seq":4,"t":2.5,"ev":"heartbeat"
+Just a normal info log without stack
+[YOMAWARI] {"seq":5,"t":3.000,"f":180,"ev":"heartbeat","fps":60.0,"gc_mem":10485760}

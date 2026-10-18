@@ -235,3 +235,6 @@ yomawari.toml
 
 # JetBrains Rider
 .idea/
+
+# テスト用の Player.log サンプルはコミットする
+!tests/fixtures/*.log
