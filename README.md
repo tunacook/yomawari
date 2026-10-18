@@ -14,9 +14,14 @@ Unity のビルド（`.app` / `.exe`）を夜間に自動でプレイさせ、�
 - brew を使わない場合は、公式インストーラ `curl -LsSf https://astral.sh/uv/install.sh | sh` でも入る（インストール先は `~/.local/bin`）。
 
 ### 2. PATH を通す
-`uv tool` で入れたコマンドは `~/.local/bin` に置かれる。`~/.zshrc` に次の行がなければ足し、ターミナルを開き直す。
+`uv tool` で入れたコマンドは `~/.local/bin` に置かれる。`~/.zshrc` に次の行がなければ足す。
 ```zsh
 export PATH="$HOME/.local/bin:$PATH"
+```
+足したあとは、開いているターミナルで読み込み直す（新しいタブやウィンドウを開いてもよい）。読み込み直さないと `zsh: command not found: uv` になる。
+```zsh
+source ~/.zshrc
+which uv    # ~/.local/bin/uv と出ればよい
 ```
 
 ### 3. リポジトリの準備とテスト
