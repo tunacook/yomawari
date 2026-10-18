@@ -51,7 +51,7 @@ class FakePlatform(MacPlatform):
         return self.save
 
     def default_prefs_domain(self, ident: GameIdentity) -> str | None:
-        return f"unity.{ident.company}.{ident.product}"
+        return ident.bundle_id
 
     def crash_dir(self) -> Path:
         return self.crashes

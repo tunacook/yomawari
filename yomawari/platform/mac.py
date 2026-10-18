@@ -96,33 +96,23 @@ class MacPlatform:
                 product = product or parts[-1]
         return GameIdentity(company, product, bundle_id)
 
-    def _first_existing(self, candidates: list[Path]) -> Path | None:
-        for c in candidates:
-            if c.exists():
-                return c
-        return candidates[0] if candidates else None
-
     def default_save_dir(self, ident: GameIdentity) -> Path | None:
-        # Unity のバージョンによって Company/Product 形式とバンドルID形式がある。存在する方を優先する
+        # ビルドはバンドルID形式を使う。Company/Product 形式はエディタ側のもので、
+        # バンドルIDが分からないときの予備としてだけ使う
         base = HOME / "Library" / "Application Support"
-        cands = []
-        if ident.company and ident.product:
-            cands.append(base / ident.company / ident.product)
         if ident.bundle_id:
-            cands.append(base / ident.bundle_id)
-        return self._first_existing(cands)
+            return base / ident.bundle_id
+        if ident.company and ident.product:
+            return base / ident.company / ident.product
+        return None
 
     def default_prefs_domain(self, ident: GameIdentity) -> str | None:
-        prefs = HOME / "Library" / "Preferences"
-        domains = []
-        if ident.company and ident.product:
-            domains.append(f"unity.{ident.company}.{ident.product}")
+        # ビルドの PlayerPrefs はバンドルID。unity.<company>.<product> はエディタ側のもの
         if ident.bundle_id:
-            domains.append(ident.bundle_id)
-        for d in domains:
-            if (prefs / f"{d}.plist").exists():
-                return d
-        return domains[0] if domains else None
+            return ident.bundle_id
+        if ident.company and ident.product:
+            return f"unity.{ident.company}.{ident.product}"
+        return None
 
     def crash_dir(self) -> Path:
         return HOME / "Library" / "Logs" / "DiagnosticReports"

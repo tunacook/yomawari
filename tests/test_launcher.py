@@ -80,3 +80,19 @@ def test_real_defaults_roundtrip(tmp_path: Path):
         subprocess.run(["defaults", "delete", domain], capture_output=True)
         # cfprefsd が空の plist ファイルを残すので消しておく
         (Path.home() / "Library" / "Preferences" / f"{domain}.plist").unlink(missing_ok=True)
+
+
+def test_save_and_prefs_prefer_bundle_id(tmp_path: Path, monkeypatch):
+    """ビルドはバンドルID形式。Company/Product 形式（エディタ側）が存在していても選ばない。"""
+    import yomawari.platform.mac as mac
+    from yomawari.platform import GameIdentity
+
+    monkeypatch.setattr(mac, "HOME", tmp_path)
+    (tmp_path / "Library" / "Application Support" / "My Co" / "Game").mkdir(parents=True)
+    ident = GameIdentity("My Co", "Game", "com.My-Co.Game")
+    assert plat.default_save_dir(ident) == tmp_path / "Library" / "Application Support" / "com.My-Co.Game"
+    assert plat.default_prefs_domain(ident) == "com.My-Co.Game"
+    # バンドルIDが無いときだけ Company/Product 形式を使う
+    no_bundle = GameIdentity("My Co", "Game", None)
+    assert plat.default_save_dir(no_bundle) == tmp_path / "Library" / "Application Support" / "My Co" / "Game"
+    assert plat.default_prefs_domain(no_bundle) == "unity.My Co.Game"

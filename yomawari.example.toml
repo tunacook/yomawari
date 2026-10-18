@@ -9,11 +9,9 @@ default_build = "mac_dev"
 path = "~/Builds/Rachel_Dev/Rachel.app"
 args = ["-screen-fullscreen", "0", "-screen-width", "1280", "-screen-height", "720"]
 watermark_mask = { anchor = "bottom-right", w = 220, h = 40 }   # Development Build の透かし（フェーズ3〜）
-# 保存場所は Info.plist から推定する。外れる場合は明示する
-# company = "MyCompany"
-# product = "Rachel"
-# save_dir = "~/Library/Application Support/MyCompany/Rachel"
-# prefs_domain = "unity.MyCompany.Rachel"
+# セーブと PlayerPrefs の場所は Info.plist の CFBundleIdentifier（バンドルID）から決める。外れる場合は明示する
+# save_dir = "~/Library/Application Support/com.MyCompany.Rachel"
+# prefs_domain = "com.MyCompany.Rachel"
 # initial_save = "fixtures/saves/start"        # テスト用初期セーブ（ラン前に配置）
 
 [run]
