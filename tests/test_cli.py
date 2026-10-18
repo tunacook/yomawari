@@ -5,20 +5,13 @@ from typer.testing import CliRunner
 
 from yomawari.cli import app
 
+# 実装済みのコマンド（run / builds / doctor / restore）は test_e2e.py などで確かめる
 COMMANDS = [
-    (["run", "--build", "mac_dev", "--hours", "0.5", "--mode", "aging", "--seed", "42", "--no-open"], "run"),
-    (["run", "--build-path", "/x/Game.app"], "run"),
     (["replay", "C-01-0001"], "replay"),
     (["minimize", "C-01-0001"], "minimize"),
     (["report", "2026-10-18_0100_mac_dev"], "report"),
-    (["builds", "list"], "builds list"),
-    (["builds", "add", "mac_dev", "/x/Game.app"], "builds add"),
-    (["builds", "edit", "mac_dev"], "builds edit"),
-    (["builds", "check", "mac_dev"], "builds check"),
-    (["doctor"], "doctor"),
     (["schedule", "install", "--at", "02:30"], "schedule install"),
     (["schedule", "uninstall"], "schedule uninstall"),
-    (["restore"], "restore"),
 ]
 
 
@@ -39,7 +32,7 @@ def test_args_are_logged(caplog):
 
 def test_verbose_enables_debug(caplog):
     caplog.set_level(logging.DEBUG, logger="yomawari")
-    res = CliRunner().invoke(app, ["-v", "--config", "/tmp/y.toml", "doctor"])
+    res = CliRunner().invoke(app, ["-v", "--config", "/tmp/y.toml", "report", "r1"])
     assert res.exit_code == 0
     assert any(r.levelno == logging.DEBUG and "config=" in r.getMessage() for r in caplog.records)
 
