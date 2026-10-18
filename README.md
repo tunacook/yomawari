@@ -7,8 +7,7 @@ Unity のビルド（`.app` / `.exe`）を夜間に自動でプレイさせ、�
 
 ### 1. uv を入れる
 ```zsh
-# arm64 の Homebrew（/opt/homebrew）を使う
-/opt/homebrew/bin/brew install uv
+brew install uv
 ```
 - 「Xcode のライセンスに同意していない」というエラーで止まる場合は、先に `sudo xcodebuild -license accept` を実行する。
 - brew を使わない場合は、公式インストーラ `curl -LsSf https://astral.sh/uv/install.sh | sh` でも入る（インストール先は `~/.local/bin`）。
