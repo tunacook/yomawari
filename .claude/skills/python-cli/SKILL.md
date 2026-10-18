@@ -64,7 +64,8 @@ def main() -> None:
 - 対話入力は `rich.prompt.Prompt` / `Confirm`。パス入力は前後の引用符を除き、`\ ` をアンエスケープし、`~` を展開する（Finder からのドラッグ&ドロップに対応するため）。
 
 ## 4. ログ
-- 標準の `logging` を使い、ハンドラは `rich.logging.RichHandler` にする。設定はエントリポイントのコールバックで1回だけ行う。
+- 標準の `logging` を使い、ハンドラは `rich.logging.RichHandler`（`Console(stderr=True)`）にする。設定はエントリポイントのコールバックで1回だけ行う。
+- ハンドラは **自分のパッケージのロガー（`logging.getLogger("<pkg>")`）にだけ** 付ける。ルートを `basicConfig(force=True)` で設定すると、pytest の caplog のハンドラまで外れ、ログのテストが通らなくなる。
 - ルートのオプションに `--verbose/-v`（DEBUG）を用意する。ライブラリ側のモジュールは `log = logging.getLogger(__name__)` を使い、`print` しない。
 - ユーザーへの結果表示（表・レポートのパス）は `Console` で出し、経過や診断はログで出す。
 
