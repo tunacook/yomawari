@@ -1,3 +1,6 @@
+# --- GitHub Python テンプレートの内容 ---
+# （.venv/、__pycache__/、*.egg-info/、dist/ など）
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -218,3 +221,17 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Yomawari 固有 ---
+# 実行結果（スクショ・ログ・レポート・セーブの退避など）
+runs/
+
+# ローカルのビルドパスを含む設定
+yomawari.toml
+
+# macOS
+.DS_Store
+
+
+# JetBrains Rider
+.idea/
