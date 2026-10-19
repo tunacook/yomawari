@@ -1,0 +1,47 @@
+# Yomawari の設定例。yomawari.toml にコピーして使う（yomawari.toml はコミットしない）
+# 相対パスはこのファイルのあるディレクトリが基準
+
+default_build = "mac_dev"
+# runs_dir = "runs"
+# rules = "rules.yaml"
+
+[builds.mac_dev]
+path = "~/Builds/Rachel_Dev/Rachel.app"
+args = ["-screen-fullscreen", "0", "-screen-width", "1280", "-screen-height", "720"]
+watermark_mask = { anchor = "bottom-right", w = 220, h = 40 }   # Development Build の透かし（フェーズ3〜）
+# セーブと PlayerPrefs の場所は Info.plist の CFBundleIdentifier（バンドルID）から決める。外れる場合は明示する
+# save_dir = "~/Library/Application Support/com.MyCompany.Rachel"
+# prefs_domain = "com.MyCompany.Rachel"
+# initial_save = "fixtures/saves/start"        # テスト用初期セーブ（ラン前に配置）
+
+[run]
+hours = 8
+seed = "auto"
+open_report = true
+keep_runs_days = 14
+max_restarts = 20            # これを超えたらランを打ち切る
+quit_timeout_sec = 10        # 終了要求から強制終了までの待ち時間
+
+[sensors]
+log_poll_sec = 0.1           # Player.log を読みに行く間隔
+log_flush_sec = 0.5          # 新しい行が来ないとき保留中のログエントリを確定するまでの時間
+process_poll_sec = 1.0
+crash_poll_sec = 2.0
+tick_sec = 0.5               # タイムアウト系ルールを評価する間隔
+
+[expect]                      # Player Settings の期待値（判定に使う。フェーズ3〜）
+run_in_background = false
+resizable_window = true
+allow_fullscreen_switch = true
+
+[exclude]
+dark_labels = ["ch1_blackout"]   # 意図的な暗転・長い静止演出（フェーズ3〜）
+
+[decider]
+kind = "random"              # random | local | jev（フェーズ2〜）
+model = ""
+
+[judge]
+kind = "local"               # local | none（フェーズ5〜）
+endpoint = "http://localhost:11434"
+model = "<画像対応モデル名:タグ>"

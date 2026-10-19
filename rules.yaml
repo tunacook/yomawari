@@ -1,0 +1,53 @@
+# Yomawari 検出ルール（DESIGN.md §10）
+# 閾値・パターン・検出時の動作はここに置き、コードには書かない。
+# 実装済みのルールだけを並べる。未実装のルールはフェーズごとに追加する。
+#
+# severity: critical | major | minor | info
+# on_detect: restart（ゲームを止めて再起動し継続）| 省略（記録のみ）
+
+version: 1
+
+rules:
+  - id: C-01
+    severity: critical
+    title: プロセスの異常終了
+    description: ハーネスが終了させていないのにプロセスが消滅した、または終了コードが0以外
+    on_detect: restart
+    params:
+      # ハーネスが送ったシグナルによる終了コード（負値はシグナル番号）は異常扱いしない
+      harness_exit_codes: [0, -15, -9]
+
+  - id: C-02
+    severity: critical
+    title: クラッシュダンプの出現
+    description: 起動後にクラッシュダンプフォルダへゲームのダンプが出現した
+    params:
+      # プロセス終了後にダンプが書き出されるまで待つ時間
+      wait_after_exit_sec: 5
+
+  - id: C-03
+    severity: critical
+    title: 起動しない（boot なし）
+    description: 起動から一定時間内に [YOMAWARI] boot 行が出ない
+    on_detect: restart
+    params:
+      timeout_sec: 30
+
+  - id: H-01
+    severity: critical
+    title: ハング（ハートビート途絶）
+    description: プロセス生存中にハートビートが途絶えた（CPU使用率を付記）
+    on_detect: restart
+    params:
+      timeout_sec: 10
+
+  - id: L-01
+    severity: major
+    title: Error / Exception / Assert ログ
+    description: >-
+      ゲームの YomawariLog が Application.logMessageReceived から出す log_error イベント。
+      Player.log の本文からは Log と Error を区別できないため、本文のパターンでは判定しない。
+    params:
+      types: [Error, Exception, Assert]
+      # 誤検知になる既知のメッセージ（正規表現）。ゲームごとに追記する
+      ignore_patterns: []

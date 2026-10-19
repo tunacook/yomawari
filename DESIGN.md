@@ -74,6 +74,7 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 ## 3. ゲーム側: YomawariLog（C#）
 
 ゲームのコードに追加する小さな静的クラス。`Debug.Log` で `[YOMAWARI]` 接頭辞の1行JSONを出すだけ。Player.log に混ざって書かれる。
+あわせて `Application.logMessageReceived` を購読し、Error / Exception / Assert を `log_error` イベントとして出す。Player.log の本文からは Log と Error を区別できない（Stack Trace Logging の設定次第でどちらにもスタックが付く）ため、L-01 はこのイベントで判定する。
 
 ### 有効化
 - 起動引数 `-yomawari` があるときだけ出力（リリースビルドの製品版では出ない）
@@ -91,8 +92,48 @@ public static class YomawariLog
         if (!Enabled) return;
         Debug.Log($"[YOMAWARI] {{\"seq\":{seq++},\"t\":{Time.realtimeSinceStartupAsDouble:F3},\"f\":{Time.frameCount},\"ev\":\"{ev}\",{jsonBody}}}");
     }
+
+    // できるだけ早く購読し、起動直後の例外も拾う
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    static void Init()
+    {
+        if (!Enabled) return;
+        Application.logMessageReceived -= OnLog;
+        Application.logMessageReceived += OnLog;
+    }
+
+    // Error / Exception / Assert だけを出す。Emit 自身の Debug.Log は LogType.Log なので再帰しない
+    static void OnLog(string message, string stackTrace, LogType type)
+    {
+        if (type == LogType.Log || type == LogType.Warning) return;
+        Emit("log_error", $"\"type\":\"{type}\",\"message\":{Str(message)},\"stack\":{Str(stackTrace)}");
+    }
+
+    // JSON の文字列リテラルにする（改行・引用符・制御文字をエスケープ）
+    public static string Str(string s)
+    {
+        if (s == null) return "null";
+        var sb = new System.Text.StringBuilder(s.Length + 2).Append('"');
+        foreach (var c in s)
+        {
+            switch (c)
+            {
+                case '"': sb.Append("\\\""); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default:
+                    if (c < 0x20) sb.Append("\\u").Append(((int)c).ToString("x4"));
+                    else sb.Append(c);
+                    break;
+            }
+        }
+        return sb.Append('"').ToString();
+    }
 }
 ```
+- `logMessageReceived` はメインスレッドのログだけを受け取る。別スレッドの例外まで拾う場合は `logMessageReceivedThreaded` を使うが、その場合は `Time.frameCount` などメインスレッド専用 API を Emit で呼べないので、後日対応とする
 
 ### 行フォーマット
 - 1イベント＝1行。本文中の改行・引用符は必ずエスケープ
@@ -116,10 +157,11 @@ public static class YomawariLog
 | `save` / `load` | `slot`, `phase: start/end` | セーブ検証、分岐の巻き戻し |
 | `bgm_play` / `bgm_stop` / `voice` | `id` | 音声の整合性 |
 | `error_shown` | `kind` | ゲームがエラー表示を出した（セーブ失敗等） |
+| `log_error` | `type`（Error / Exception / Assert）, `message`, `stack` | `logMessageReceived` から出す。L-01 の判定 |
 
 ### Player Settings
 - Use Player Log: 有効（デフォルト）
-- Stack Trace Logging: Log は None、Warning は None、Error/Exception は Script Only 以上
+- Stack Trace Logging: Error/Exception は Script Only 以上（`log_error` の `stack` に入る）。Log / Warning は任意（スタックを付けても L-01 の判定には影響しない。`[YOMAWARI]` 行に付くスタックはハーネスが読み飛ばす）
 - Development Build ではIL2CPPの場合「IL2CPP Stacktrace Information」を行番号付きに
 
 ---
@@ -291,9 +333,10 @@ model = "<画像対応モデル名:タグ>"
 - 終了時のセーブ・設定の復元。異常終了した場合は次回起動時に未復元を検出して復元
 - `caffeinate -dimsu` の下で動く
 
-保存場所（macOS）:
-- セーブ: `~/Library/Application Support/<Company>/<Product>/`
-- PlayerPrefs: `~/Library/Preferences/unity.<company>.<product>.plist`
+保存場所（macOS、ビルド）:
+- セーブ: `~/Library/Application Support/<バンドルID>/`（`Info.plist` の `CFBundleIdentifier`。例: `com.Company.Product`）
+- PlayerPrefs: `~/Library/Preferences/<バンドルID>.plist`
+- `~/Library/Application Support/<Company>/<Product>/` と `~/Library/Preferences/unity.<company>.<product>.plist` はエディタ側のもの。ビルドの退避・復元の対象にしない
 - Player.log 既定: `~/Library/Logs/<Company>/<Product>/Player.log`
 - クラッシュ: `~/Library/Logs/DiagnosticReports/*.ips`
 
@@ -386,7 +429,7 @@ class Decider(Protocol):
 | S-03 | `transition` 開始から10秒で終了が来ない | Critical |
 | S-04 | 同じ行IDの並びが繰り返されるだけ（K回以上） | Major |
 | S-05 | ログの矩形中心をクリックしても反応が3回連続でない | Major |
-| L-01 | Player.log に Exception / Error | Major（直後にS系ならCriticalに統合） |
+| L-01 | `log_error` イベント（Error / Exception / Assert） | Major（直後にS系ならCriticalに統合） |
 | L-02 | TextMeshProの未収録文字警告 | Minor |
 | L-03 | リソース読み込み失敗 | Major |
 | L-04 | 同じ警告が1分間に100回以上 | Minor |
