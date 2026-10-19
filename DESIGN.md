@@ -126,6 +126,22 @@ public static class YomawariLog
 
 ## 4. Pythonパッケージ
 
+### 言語に Python を選んだ理由
+フェーズ1（Player.log の追跡、プロセス監視、ルール判定、レポート）はどの言語でも書ける。差が出るのはフェーズ2以降の次の3つで、どれも Python がいちばん素直に書ける。
+
+| 用途 | Python | Go | Node（TypeScript） |
+|---|---|---|---|
+| 画像判定（差分、テンプレート照合、表示異常） | `opencv-python` / `numpy` をそのまま使える | gocv は cgo と OpenCV のビルドが必要 | sharp で縮小・差分はできるが、OpenCV 相当は保守が止まりがち |
+| OS入力・ウィンドウ情報・スクショ | `pyautogui` / `pywinctl` / `mss`。足りなければ pyobjc で Quartz を直接呼べる | robotgo（cgo）か、CoreGraphics を cgo で書く | nut.js / robotjs などネイティブアドオン頼みで、保守がまちまち |
+| Ollama | 公式クライアントがある。httpx でも足りる | HTTP で足りる | 公式クライアントがある |
+
+Go や Node のほうが優れている点と、それを今は重視しない理由:
+- Go は1バイナリで配布でき、uv も Python も入れずに動かせる。プロセス監視やタイムアウトも goroutine と context で堅く書ける。いまの実行環境は手元の Mac が主で、配布の必要はまだない
+- Node は非同期 I/O を素直に書け、レポートを Web の画面にするなら強い。ただし重い部分（画像と OS 入力）ではネイティブアドオンの手間が上回る
+- Python の弱点のうち、環境構築は uv で、型の弱さは型ヒントで補う。処理は毎秒のログと数秒おきの画像判定なので、速度は問題にならない
+
+見直すきっかけ: 複数の機材に配って回したくなったとき。そのときも全部を書き換えず、起動と監視だけを Go にして画像判定は Python に残す、という分け方を先に考える。OS 差分は `platform/` と `input/` に閉じ込めてあるので、分けるときもこの境界を使える。
+
 ### 依存
 `typer`, `rich`, `httpx`, `psutil`, `mss`, `pywinctl`, `pyautogui`, `numpy`, `opencv-python`, `pyyaml`
 （`tomllib` は標準ライブラリ）
