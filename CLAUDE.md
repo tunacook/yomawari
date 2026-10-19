@@ -8,6 +8,7 @@ Unity製ノベルゲームのビルド（.app / .exe）を夜間に自動プレ�
 - 閾値・除外・猶予期間は `rules.yaml` / `yomawari.toml` に置き、コードに直書きしない
 - OS差分は `yomawari/platform/` と `yomawari/input/` に閉じ込め、上位層はOSを意識しない
 - 座標は常にクライアント領域に対する0〜1の正規化座標で扱う
+- ゲーム側は `unity/com.tunacook.yomawari/`（UPM パッケージ）。`[YOMAWARI]` 行の形式を変えるときは、パッケージ・ハーネス・`DESIGN.md` §3 を同じ PR で変える。パッケージの `.meta` は Unity プロジェクトから `file:` パスで参照して Editor に生成させ、コミットする
 
 ## 環境
 - Python 3.11+、arm64 ネイティブ、uv で管理

@@ -44,7 +44,7 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 | システム | 中身 |
 |---|---|
 | macOS標準機能 | `launchd`（時刻起動）、`caffeinate`（スリープ防止）、画面収録・入力API |
-| Unityビルド（C#） | ゲーム本体、`YomawariLog`（`[YOMAWARI]` 行の出力） |
+| Unityビルド（C#） | ゲーム本体、`com.tunacook.yomawari` パッケージ（`[YOMAWARI]` 行の出力） |
 | Pythonハーネス | ウォッチドッグ（別プロセス）、ハーネス本体（センサー、ファジング、検出器、後処理） |
 | Ollama（ローカル） | テキストモデル（操作選択・任意）、画像対応モデル（画面判定・誤検知除去・再現手順の文章化） |
 | ファイル | `yomawari.toml`、`rules.yaml`、Player.log、`runs/` |
@@ -73,67 +73,24 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 
 ## 3. ゲーム側: YomawariLog（C#）
 
-ゲームのコードに追加する小さな静的クラス。`Debug.Log` で `[YOMAWARI]` 接頭辞の1行JSONを出すだけ。Player.log に混ざって書かれる。
-あわせて `Application.logMessageReceived` を購読し、Error / Exception / Assert を `log_error` イベントとして出す。Player.log の本文からは Log と Error を区別できない（Stack Trace Logging の設定次第でどちらにもスタックが付く）ため、L-01 はこのイベントで判定する。
+ゲーム側は UPM パッケージ `com.tunacook.yomawari`（このリポジトリの `unity/com.tunacook.yomawari/`）として提供する。ゲームの `Packages/manifest.json` に Git URL を1行足すだけで入り、ゲームのコードからは呼ばない（`RuntimeInitializeOnLoadMethod` で自動的に始まる）。ゲーム本体はこのパッケージに依存しないので、外すときは manifest の1行を消すだけでよい。
+
+- `Debug.Log` で `[YOMAWARI]` 接頭辞の1行JSONを出す（Player.log に混ざって書かれる）。`LogOption.NoStacktrace` を付け、Log にスタックを付ける設定でも行にスタックを付けない
+- `Application.logMessageReceived` を購読し、Error / Exception / Assert を `log_error` イベントとして出す。Player.log の本文からは Log と Error を区別できない（Stack Trace Logging の設定次第でどちらにもスタックが付く）ため、L-01 はこのイベントで判定する。メインスレッドのログだけが対象（別スレッドの例外は後日対応）
+- 数値はロケールに関係なく `CultureInfo.InvariantCulture` で書く（小数点がカンマになる環境でも JSON が壊れないように）
+
+### パッケージの構成
+| asmdef | 中身 | 依存 |
+|---|---|---|
+| `Yomawari` | `YomawariFormat`（行の組み立て・エスケープ）、`YomawariLog`（boot・log_error）、`YomawariHeartbeat` | なし |
+| `Yomawari.Tests.Editor` | EditMode テスト（ゲームの manifest の `testables` に入れると Test Runner に出る） | `Yomawari` |
+| `Yomawari.Naninovel`（フェーズ2で追加） | Naninovel のサービスのイベントを購読して `line` / `choices` / `save` などを出す。Naninovel があるときだけコンパイル（`versionDefines` + `defineConstraints`） | `Yomawari`、Naninovel |
+
+ゲーム固有の UI（Naninovel のイベントで取れないもの）を観察する場合は、ゲームのリポジトリ側に小さな asmdef を作り、そこからゲームの UI を読んで `YomawariLog.Emit` を呼ぶ。ゲーム本体の asmdef からは参照しない。
 
 ### 有効化
 - 起動引数 `-yomawari` があるときだけ出力（リリースビルドの製品版では出ない）
 - `[Conditional]` 属性は使わない（リリースで消えるため）。実行時フラグで判定
-
-```csharp
-public static class YomawariLog
-{
-    static readonly bool Enabled =
-        System.Array.IndexOf(System.Environment.GetCommandLineArgs(), "-yomawari") >= 0;
-    static int seq;
-
-    public static void Emit(string ev, string jsonBody)
-    {
-        if (!Enabled) return;
-        Debug.Log($"[YOMAWARI] {{\"seq\":{seq++},\"t\":{Time.realtimeSinceStartupAsDouble:F3},\"f\":{Time.frameCount},\"ev\":\"{ev}\",{jsonBody}}}");
-    }
-
-    // できるだけ早く購読し、起動直後の例外も拾う
-    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
-    static void Init()
-    {
-        if (!Enabled) return;
-        Application.logMessageReceived -= OnLog;
-        Application.logMessageReceived += OnLog;
-    }
-
-    // Error / Exception / Assert だけを出す。Emit 自身の Debug.Log は LogType.Log なので再帰しない
-    static void OnLog(string message, string stackTrace, LogType type)
-    {
-        if (type == LogType.Log || type == LogType.Warning) return;
-        Emit("log_error", $"\"type\":\"{type}\",\"message\":{Str(message)},\"stack\":{Str(stackTrace)}");
-    }
-
-    // JSON の文字列リテラルにする（改行・引用符・制御文字をエスケープ）
-    public static string Str(string s)
-    {
-        if (s == null) return "null";
-        var sb = new System.Text.StringBuilder(s.Length + 2).Append('"');
-        foreach (var c in s)
-        {
-            switch (c)
-            {
-                case '"': sb.Append("\\\""); break;
-                case '\\': sb.Append("\\\\"); break;
-                case '\n': sb.Append("\\n"); break;
-                case '\r': sb.Append("\\r"); break;
-                case '\t': sb.Append("\\t"); break;
-                default:
-                    if (c < 0x20) sb.Append("\\u").Append(((int)c).ToString("x4"));
-                    else sb.Append(c);
-                    break;
-            }
-        }
-        return sb.Append('"').ToString();
-    }
-}
-```
-- `logMessageReceived` はメインスレッドのログだけを受け取る。別スレッドの例外まで拾う場合は `logMessageReceivedThreaded` を使うが、その場合は `Time.frameCount` などメインスレッド専用 API を Emit で呼べないので、後日対応とする
 
 ### 行フォーマット
 - 1イベント＝1行。本文中の改行・引用符は必ずエスケープ
@@ -239,6 +196,8 @@ yomawari/
 │   │   ├─ minimize.py   # 操作列の最小化（デルタデバッギング）
 │   │   └─ report.py     # Markdown 生成
 │   └─ replay.py
+├─ unity/
+│   └─ com.tunacook.yomawari/   # ゲーム側の UPM パッケージ（§3）
 ├─ rules.yaml
 ├─ yomawari.example.toml
 ├─ tests/
