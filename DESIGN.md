@@ -282,6 +282,12 @@ allow_fullscreen_switch = true
 [exclude]
 dark_labels = ["ch1_blackout"]   # 意図的な暗転・長い静止演出
 
+[guard.buttons]               # §9 ガード。"<menu の name>/<ボタンの name>"
+expect_exit = ["TitleUI/QuitButton", "RClickMenuUI/ToExit"]
+external = ["TitleUI/WebSiteButton"]
+irregular_only = ["RClickMenuUI/ToTitle", "TitleUI/NewGameButton", "ExSettingsUI/ResolutionDropdown"]
+deny = []
+
 [decider]
 kind = "random"              # random | local | jev
 model = ""
@@ -366,8 +372,17 @@ class Decider(Protocol):
 - `jev`: 将来の選択肢（TypeSafe Jev。「普通のプレイヤーがやりそうな操作」の確率が低いものを優先する使い方）
 
 ### ガード
-- 「Exit」「タイトルへ」はイレギュラーモード以外では禁止
-- データ削除・外部リンクは押さない
+ボタンは「押さない」ではなく、ハーネスが押したことを分かったうえで結果を確かめる操作として扱う。ボタンは `yomawari.toml` の `[guard.buttons]` に `"<menu の name>/<ボタンの name>"` で書く（名前は `menu` イベントの値）。
+
+| 区分 | 扱い | 確かめること |
+|---|---|---|
+| （指定なし） | 通常の操作の候補 | 応答確認 |
+| `expect_exit` | 終了を期待する専用の操作として押し、終わったら再起動して続ける | 終了コード 0 で終わるか。終わらなければ C-04。ハーネスが押したので C-01 にはしない |
+| `external` | 1回のランで1回だけ押し、少し待ってからゲームのウィンドウを前面に戻す | ブラウザなどが前面に出たか、戻ったあとも操作が効くか。開いた URL の中身は見ない（人が確認する） |
+| `irregular_only` | イレギュラー操作として差し込むときだけ押す（タイトルへ戻る、ニューゲーム、解像度・画面モード・言語の変更など） | 応答確認 |
+| `deny` | 押さない。マシンの外に影響が出るもの（課金、データの送信など）だけに使う | — |
+
+- セーブの削除や上書きは指定しなくてよい（ラン前に退避し、ラン後に戻すため）
 - 押す直前に、押す位置の要素が最新の状態に含まれているか確認
 - 同一状態で同じ操作を繰り返そうとしたら次点へ
 
