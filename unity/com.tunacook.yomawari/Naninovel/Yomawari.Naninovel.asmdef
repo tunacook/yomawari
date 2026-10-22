@@ -1,0 +1,26 @@
+{
+    "name": "Yomawari.Naninovel",
+    "rootNamespace": "Yomawari",
+    "references": [
+        "Yomawari",
+        "Elringus.Naninovel.Runtime",
+        "UnityEngine.UI"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "YOMAWARI_NANINOVEL"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.elringus.naninovel",
+            "expression": "1.21",
+            "define": "YOMAWARI_NANINOVEL"
+        }
+    ],
+    "noEngineReferences": false
+}

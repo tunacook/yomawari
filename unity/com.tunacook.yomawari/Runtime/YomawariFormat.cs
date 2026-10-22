@@ -61,5 +61,18 @@ namespace Yomawari
         {
             return v.ToString("0.###", CultureInfo.InvariantCulture);
         }
+
+        // スクリーン座標（左下原点、ピクセル）の矩形を、左上原点の 0〜1 の [x0,y0,x1,y1] にする。DESIGN.md §3
+        public static string Rect(double xMin, double yMin, double xMax, double yMax, double width, double height)
+        {
+            if (width <= 0 || height <= 0) return "null";
+            return "[" + Coord(xMin / width) + "," + Coord(1 - yMax / height) + "," +
+                   Coord(xMax / width) + "," + Coord(1 - yMin / height) + "]";
+        }
+
+        static string Coord(double v)
+        {
+            return v.ToString("0.####", CultureInfo.InvariantCulture);
+        }
     }
 }

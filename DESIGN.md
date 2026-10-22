@@ -82,11 +82,11 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 ### パッケージの構成
 | asmdef | 中身 | 依存 |
 |---|---|---|
-| `Yomawari` | `YomawariFormat`（行の組み立て・エスケープ）、`YomawariLog`（boot・log_error）、`YomawariHeartbeat` | なし |
+| `Yomawari` | `YomawariFormat`（行の組み立て・エスケープ・矩形の正規化）、`YomawariLog`（boot・log_error）、`YomawariHeartbeat`、`YomawariRect`（`RectTransform` → 正規化矩形） | なし |
 | `Yomawari.Tests.Editor` | EditMode テスト（ゲームの manifest の `testables` に入れると Test Runner に出る） | `Yomawari` |
-| `Yomawari.Naninovel`（フェーズ2で追加） | Naninovel のサービスのイベントを購読して `line` / `choices` / `save` などを出す。Naninovel があるときだけコンパイル（`versionDefines` + `defineConstraints`） | `Yomawari`、Naninovel |
+| `Yomawari.Naninovel` | `YomawariNaninovel`（サービスのイベントから `scene` / `line` / `line_done` / `choices_done` / `save` / `load`）、`YomawariUiWatcher`（表示中の UI を 0.2 秒ごとに見て `menu` / `menu_close` / `choices` / `transition`）。Naninovel 1.21 以上があるときだけコンパイル（`versionDefines` + `defineConstraints`） | `Yomawari`、Naninovel、uGUI |
 
-ゲーム固有の UI（Naninovel のイベントで取れないもの）を観察する場合は、ゲームのリポジトリ側に小さな asmdef を作り、そこからゲームの UI を読んで `YomawariLog.Emit` を呼ぶ。ゲーム本体の asmdef からは参照しない。
+ゲームへの組み込み手順は [docs/game-integration.md](docs/game-integration.md)。ゲーム固有の UI（Naninovel のイベントで取れないもの）を観察する場合は、ゲームのリポジトリ側に小さな asmdef を作り、そこからゲームの UI を読んで `YomawariLog.Emit` を呼ぶ。ゲーム本体の asmdef からは参照しない。
 
 ### 有効化
 - 起動引数 `-yomawari` があるときだけ出力（リリースビルドの製品版では出ない）
@@ -100,18 +100,18 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 ### イベント一覧（初期）
 | ev | 主なフィールド | 用途 |
 |---|---|---|
-| `boot` | `version`, `build_type`, `build_time` | 起動確認、ビルド取り違え検出 |
+| `boot` | `version`, `build_type`, `build_guid`, `unity` | 起動確認、ビルド取り違え検出（ビルド時刻は実行時に取れないため `build_guid` で代える） |
 | `heartbeat` | `fps`, `gc_mem` | 1秒ごと。ハング検出、エイジング |
-| `scene` | `name` | 進行把握 |
-| `line` | `label`, `line_id`, `speaker`, `text` | 進行把握、テンポ |
+| `scene` | `name`（Naninovel ではスクリプトのパス） | 進行把握 |
+| `line` | `label`, `line_id`, `speaker`, `text`, `printer`, `append` | 進行把握、テンポ。Naninovel では `label` はスクリプトのパス、`line_id` は `<パス>:<行>.<インライン>` |
 | `line_done` | `line_id` | 文字送り完了。操作の待ち合わせ |
-| `choices` | `items: [{text, rect}]` | クリック候補 |
-| `choices_done` | `index` | 選択確定 |
-| `menu` | `name`, `buttons: [{name, rect}]` | メニュー表示とクリック候補 |
+| `choices` | `items: [{id, text, rect, locked}]` | クリック候補。並びか矩形が変わったときにも出し直す |
+| `choices_done` | `id`, `index` | 選択確定。`index` は直前の `choices` の中での順番（不明なら -1） |
+| `menu` | `name`, `modal`, `buttons: [{name, rect}]` | メニュー表示とクリック候補。押せるボタンの並びか矩形が変わったときにも出し直す |
 | `menu_close` | `name` | 応答確認 |
-| `transition` | `phase: start/end` | 操作待ち、進行不能判定 |
+| `transition` | `phase: start/end`, `name` | 操作待ち、進行不能判定 |
 | `resolution` | `w`, `h`, `mode` | 変化時のみ（`Update` で監視）。解像度テスト |
-| `save` / `load` | `slot`, `phase: start/end` | セーブ検証、分岐の巻き戻し |
+| `save` / `load` | `slot`, `type`, `phase: start/end` | セーブ検証、分岐の巻き戻し |
 | `bgm_play` / `bgm_stop` / `voice` | `id` | 音声の整合性 |
 | `error_shown` | `kind` | ゲームがエラー表示を出した（セーブ失敗等） |
 | `log_error` | `type`（Error / Exception / Assert）, `message`, `stack` | `logMessageReceived` から出す。L-01 の判定 |
