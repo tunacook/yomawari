@@ -45,6 +45,15 @@ namespace Yomawari.Tests
         }
 
         [Test]
+        public void 矩形を左上原点の正規化座標にする ()
+        {
+            // 1280x720 の画面で、左下 (128, 72)〜右上 (640, 360) の矩形
+            Assert.AreEqual("[0.1,0.5,0.5,0.9]", YomawariFormat.Rect(128, 72, 640, 360, 1280, 720));
+            Assert.AreEqual("[0,0,1,1]", YomawariFormat.Rect(0, 0, 1280, 720, 1280, 720));
+            Assert.AreEqual("null", YomawariFormat.Rect(0, 0, 1, 1, 0, 720));
+        }
+
+        [Test]
         public void 小数点はロケールに関係なくピリオド ()
         {
             var saved = Thread.CurrentThread.CurrentCulture;
@@ -53,6 +62,7 @@ namespace Yomawari.Tests
                 Thread.CurrentThread.CurrentCulture = new CultureInfo("de-DE");
                 StringAssert.Contains("\"t\":1.500", YomawariFormat.Line(0, 1.5, 0, "x", null));
                 Assert.AreEqual("59.5", YomawariFormat.Num(59.5));
+                Assert.AreEqual("[0.3333,0,1,1]", YomawariFormat.Rect(100, 0, 300, 300, 300, 300));
             }
             finally
             {

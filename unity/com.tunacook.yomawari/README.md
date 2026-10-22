@@ -10,6 +10,8 @@
 | `heartbeat` | 1 秒ごと（`fps`, `gc_mem`） |
 | `log_error` | Error / Exception / Assert のログ（`type`, `message`, `stack`） |
 
+Naninovel 1.21 以上が入っていると、`Yomawari.Naninovel` が `scene` / `line` / `line_done` / `choices` / `choices_done` / `menu` / `menu_close` / `transition` / `save` / `load` も出す。ゲームへの組み込み手順はリポジトリの `docs/game-integration.md`。
+
 ## 導入
 
 `Packages/manifest.json` の `dependencies` に追加する。`#` の後ろはタグかコミット。

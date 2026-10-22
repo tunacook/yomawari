@@ -59,7 +59,7 @@ yomawari builds add mac_dev ~/Builds/Rachel_Dev/Rachel.app
 「システム設定 → プライバシーとセキュリティ」で、yomawari を実行するターミナルアプリに **画面収録** と **アクセシビリティ** の権限を付ける。そのあと `yomawari doctor` で、すべて OK になることを確かめる。
 
 ### 7. ゲーム側の準備
-Unity のビルドに `YomawariLog`（[DESIGN.md §3](DESIGN.md#3-ゲーム側-yomawarilogc)）を組み込む。起動引数 `-yomawari` を付けたときに Player.log へ `[YOMAWARI]` 行が出ればよい。`yomawari builds check mac_dev` で確かめられる。
+ゲームの `Packages/manifest.json` にパッケージ `com.tunacook.yomawari` を足してビルドする。手順と Player Settings、Naninovel のゲームで自動で出るイベントは [docs/game-integration.md](docs/game-integration.md) を参照。`yomawari builds check mac_dev` で `boot を受信しました` と出ればよい。
 
 ### 補足
 - Ollama（画像判定）はフェーズ5から使う。今は入れなくても動く。
