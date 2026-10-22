@@ -136,7 +136,11 @@ Unity ではないので、Ren'Py と同じくゲーム側・ハーネス側の�
 
 ```sh
 yomawari builds check <ビルド名>          # boot を受信しました と出ればよい
+yomawari inspect -b <ビルド名>            # 画面に出ている menu とボタン名、描画領域を表示する
+yomawari inspect -b <ビルド名> --click TitleUI/SettingsButton   # ボタンを押して、入力が届くか確かめる
 ```
+
+`inspect` が表示するボタン名（`<menu>/<ボタン>`）は、`yomawari.toml` の `[guard.buttons]` にそのまま書ける。セーブと PlayerPrefs は `run` と同じく、起動前に退避して終了後に戻す。
 
 ハーネスを通さずに、出力を直接見ることもできる（実行ファイル名は `ls <.app>/Contents/MacOS/` で調べる）。
 

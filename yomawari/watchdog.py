@@ -26,6 +26,7 @@ from .events import Event, Issue, now_wall
 from .platform import Platform
 from .post.report import RunSummary, write_report
 from .savestate import SaveState, resolve_target
+from .state import GameState
 from .sensors.crash import watch_crash_dir
 from .sensors.logtail import InvalidRecord, Record, UnityEntry, YomawariRecord, tail_file
 from .sensors.process import watch_process
@@ -85,6 +86,7 @@ class Harness:
         self.sensor_cfg = sensor_cfg
         self.on_status = on_status
         self.engine = Engine(rules)
+        self.state = GameState()
         self.issues: list[Issue] = []
         self.notes: list[str] = []
         self.launches = 0
@@ -105,6 +107,7 @@ class Harness:
     def _on_event(self, ev: Event) -> None:
         if ev.kind == "issue":
             return
+        self.state.feed(ev)
         self._handle_issues(self.engine.feed(ev))
         if ev.kind == "proc_exit" and not ev.data["by_harness"] and self._restart_req is not None:
             self._restart_req.set()
@@ -152,6 +155,7 @@ class Harness:
                 "restarts": self.restarts,
                 "counts": counts,
                 "last": f"{last.rule_id} {last.detail}" if last else "",
+                "scene": self.state.scene,
             }
         )
 

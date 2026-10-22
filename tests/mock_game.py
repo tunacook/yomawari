@@ -7,6 +7,7 @@ Unity と同じく -yomawari があるときだけ [YOMAWARI] 行を出し、-lo
   hang       --mock-after 秒後にハートビートを止める（プロセスは生きたまま）
   noboot     何も出さずに生き続ける
   exception  boot の直後に例外（Player.log の本文と log_error イベント）を出し、その後は normal と同じ
+  menus      boot の後に resolution とタイトルの menu を出し、--mock-after 秒後に設定画面（モーダル）を開く
 """
 
 import argparse
@@ -61,8 +62,18 @@ if a.mock_mode == "exception":
         message="NullReferenceException: Object reference not set to an instance of an object",
         stack="Rachel.Scenario.Runner:Step () (at Assets/Scripts/Runner.cs:42)\n",
     )
+if a.mock_mode == "menus":
+    emit("resolution", w=2560, h=1440, mode="Windowed")
+    emit("menu", name="TitleUI", modal=False, buttons=[
+        {"name": "NewGameButton", "rect": [0.1, 0.5, 0.3, 0.6]},
+        {"name": "SettingsButton", "rect": [0.1, 0.7, 0.3, 0.8]},
+    ])
+opened = False
 while True:
     elapsed = time.monotonic() - t0
+    if a.mock_mode == "menus" and not opened and elapsed >= a.mock_after:
+        opened = True
+        emit("menu", name="SettingsUI", modal=True, buttons=[{"name": "ReturnButton", "rect": [0.8, 0.9, 0.95, 0.98]}])
     if a.mock_mode == "crash" and elapsed >= a.mock_after:
         sys.exit(3)
     if not (a.mock_mode == "hang" and elapsed >= a.mock_after):
