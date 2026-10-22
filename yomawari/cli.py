@@ -29,6 +29,8 @@ from .config import BuildConfig, Config, ConfigError, find_config_path, normaliz
 from .detect.engine import Rule, RuleError, load_rules
 from .platform import Platform, get_platform
 from .savestate import SaveState, resolve_target
+from .sensors.window import ClientArea
+from .state import GameState
 from .watchdog import Harness, RunOptions
 
 EXIT_OK, EXIT_CRITICAL, EXIT_HARNESS_ERROR = 0, 1, 2
@@ -144,6 +146,8 @@ def _status_text(s: dict[str, Any]) -> Text:
         f"launches {s['launches']}  restarts {s['restarts']}  "
         f"issues: C{c['critical']} M{c['major']} m{c['minor']}"
     )
+    if s.get("scene"):
+        line += f"  scene: {s['scene']}"
     if s["last"]:
         line += f"\n           last: {s['last'][:100]}"
     return Text(line)
@@ -195,6 +199,67 @@ def run(
     if rc["open_report"] and not no_open:
         plat.open_file(result.report_path)
     raise typer.Exit(result.exit_code)
+
+
+@app.command()
+def inspect(
+    ctx: typer.Context,
+    build: str | None = typer.Option(None, "--build", "-b", help="登録済みビルドの名前"),
+    seconds: float = typer.Option(60, "--seconds", help="起動しておく時間（秒）"),
+    click: list[str] = typer.Option([], "--click", help='押すボタン "<menu>/<ボタン>"（複数指定で順に押す）'),
+) -> None:
+    """ビルドを起動し、画面に出ている menu とボタン、描画領域を表示する。--click で押すこともできる。"""
+    from .inspector import inspect_build
+    from .input.mouse_kb import PyAutoGuiDriver
+
+    cfg = _config(ctx)
+    plat = get_platform()
+    b = cfg.resolve_build(build, None)
+    if b is None:
+        err.print("[red]ビルドを --build で指定するか、yomawari.toml の default_build を設定してください[/]")
+        raise typer.Exit(EXIT_HARNESS_ERROR)
+    exe, msgs = launcher.validate_build(b, plat)
+    if exe is None:
+        _print_msgs(msgs)
+        raise typer.Exit(EXIT_HARNESS_ERROR)
+
+    def on_change(state: GameState, area: ClientArea | None) -> None:
+        console.rule(f"scene: {state.scene or '-'}  busy: {state.busy}")
+        if state.resolution:
+            r = state.resolution
+            where = (
+                f"描画領域 ({area.rect.x:.0f}, {area.rect.y:.0f}) {area.rect.w:.0f}x{area.rect.h:.0f}pt  倍率 {area.scale:g}"
+                if area else "描画領域: 取得できません"
+            )
+            console.print(f"解像度 {r['w']}x{r['h']} {r['mode']}  {where}")
+        top = state.top_modal()
+        table = Table("menu", "modal", "ボタン（--click に渡す名前）", show_lines=False)
+        for m in sorted(state.menus.values(), key=lambda m: -m.order):
+            mark = "最前面" if top is m else ("yes" if m.modal else "")
+            table.add_row(m.name, mark, "\n".join(t.key for t in m.buttons) or "-")
+        if state.choices:
+            table.add_row("choices", "", "\n".join(f"{c.key}  {c.text or ''}" for c in state.choices))
+        console.print(table)
+
+    def on_click(key: str, pos: tuple[float, float] | None, error: str | None) -> None:
+        if pos is not None:
+            console.print(f"[green]押しました[/] {key} ({pos[0]:.0f}, {pos[1]:.0f})")
+        else:
+            console.print(f"[red]押せませんでした[/] {key}: {error}")
+
+    result = asyncio.run(
+        inspect_build(
+            exe, b, plat, cfg.runs_dir, seconds, click, cfg.sensors,
+            float(cfg.run["quit_timeout_sec"]), PyAutoGuiDriver, on_change, on_click,
+        )
+    )
+    for key, reason in result.not_clicked:
+        console.print(f"[yellow]押していません[/] {key}: {reason}")
+    if result.exit_code is not None:
+        console.print(f"[yellow]ゲームが終了しました（終了コード {result.exit_code}）[/]")
+    for n in result.notes:
+        log.info(n)
+    raise typer.Exit(EXIT_OK if not result.not_clicked else EXIT_CRITICAL)
 
 
 @app.command()
@@ -312,7 +377,10 @@ def schedule_uninstall() -> None:
 
 
 @app.command()
-def doctor(ctx: typer.Context) -> None:
+def doctor(
+    ctx: typer.Context,
+    fix: bool = typer.Option(False, "--fix", help="足りない権限の確認ダイアログと、システム設定の該当画面を開く"),
+) -> None:
     """実行環境を確認する。"""
     cfg = _config(ctx)
     plat = get_platform()
@@ -321,11 +389,14 @@ def doctor(ctx: typer.Context) -> None:
     machine = pyplatform.machine()
     msgs.append(("ok" if machine == "arm64" else "error", f"Python {sys.version.split()[0]} ({machine})"))
 
+    missing: list[str] = []
     for perm, granted in plat.check_permissions().items():
         if granted is None:
             msgs.append(("warn", f"{perm}権限: 確認できませんでした"))
         else:
-            msgs.append(("ok" if granted else "error", f"{perm}権限: {'あり' if granted else 'なし（システム設定 → プライバシーとセキュリティ で実行元のターミナルに付与）'}"))
+            msgs.append(("ok" if granted else "error", f"{perm}権限: {'あり' if granted else 'なし'}"))
+            if not granted:
+                missing.append(perm)
 
     try:
         rules = load_rules(cfg.rules_path)
@@ -364,6 +435,15 @@ def doctor(ctx: typer.Context) -> None:
         msgs.append(("warn", "caffeinate が見つかりません"))
 
     _print_msgs(msgs)
+    if missing:
+        console.print("\n権限の付け方:")
+        for line in plat.permission_help(missing):
+            console.print(f"  - {line}")
+        if fix:
+            plat.request_permissions(missing)
+            console.print("  確認ダイアログとシステム設定を開きました。オンにしたら、上のアプリを再起動して doctor をもう一度実行してください")
+        else:
+            console.print("  yomawari doctor --fix で、確認ダイアログとシステム設定の該当画面を開けます")
     raise typer.Exit(EXIT_CRITICAL if any(lv == "error" for lv, _ in msgs) else EXIT_OK)
 
 

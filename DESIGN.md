@@ -110,7 +110,7 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 | `menu` | `name`, `modal`, `buttons: [{name, rect}]` | メニュー表示とクリック候補。押せるボタンの並びか矩形が変わったときにも出し直す |
 | `menu_close` | `name` | 応答確認 |
 | `transition` | `phase: start/end`, `name` | 操作待ち、進行不能判定 |
-| `resolution` | `w`, `h`, `mode` | 変化時のみ（`Update` で監視）。解像度テスト |
+| `resolution` | `w`, `h`, `mode` | 起動直後と変化時（`Update` で監視）。描画領域の位置と Retina 倍率の計算（§8）、解像度テスト |
 | `save` / `load` | `slot`, `type`, `phase: start/end` | セーブ検証、分岐の巻き戻し |
 | `bgm_play` / `bgm_stop` / `voice` | `id` | 音声の整合性 |
 | `error_shown` | `kind` | ゲームがエラー表示を出した（セーブ失敗等） |
@@ -131,7 +131,7 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 | 用途 | Python | Go | Node（TypeScript） |
 |---|---|---|---|
 | 画像判定（差分、テンプレート照合、表示異常） | `opencv-python` / `numpy` をそのまま使える | gocv は cgo と OpenCV のビルドが必要 | sharp で縮小・差分はできるが、OpenCV 相当は保守が止まりがち |
-| OS入力・ウィンドウ情報・スクショ | `pyautogui` / `pywinctl` / `mss`。足りなければ pyobjc で Quartz を直接呼べる | robotgo（cgo）か、CoreGraphics を cgo で書く | nut.js / robotjs などネイティブアドオン頼みで、保守がまちまち |
+| OS入力・ウィンドウ情報・スクショ | `pyautogui` / `mss`。ウィンドウ情報は pyobjc で Quartz を直接呼ぶ | robotgo（cgo）か、CoreGraphics を cgo で書く | nut.js / robotjs などネイティブアドオン頼みで、保守がまちまち |
 | Ollama | 公式クライアントがある。httpx でも足りる | HTTP で足りる | 公式クライアントがある |
 
 Go や Node のほうが優れている点と、それを今は重視しない理由:
@@ -142,7 +142,7 @@ Go や Node のほうが優れている点と、それを今は重視しない�
 見直すきっかけ: 複数の機材に配って回したくなったとき。そのときも全部を書き換えず、起動と監視だけを Go にして画像判定は Python に残す、という分け方を先に考える。OS 差分は `platform/` と `input/` に閉じ込めてあるので、分けるときもこの境界を使える。
 
 ### 依存
-`typer`, `rich`, `httpx`, `psutil`, `mss`, `pywinctl`, `pyautogui`, `numpy`, `opencv-python`, `pyyaml`
+`typer`, `rich`, `httpx`, `psutil`, `pyyaml`, `tomlkit`, `pyautogui`, `pyobjc-framework-Quartz` / `pyobjc-framework-Cocoa`（macOS のみ）, `mss`, `numpy`, `opencv-python`（`mss` 以降はフェーズ3から）
 （`tomllib` は標準ライブラリ）
 
 ### pyproject.toml（抜粋）
@@ -167,10 +167,11 @@ yomawari/
 │   ├─ launcher.py       # ビルド起動、.app の実行ファイル解決、引数付与
 │   ├─ bus.py            # asyncio イベントバス
 │   ├─ state.py          # 状態トラッカー
+│   ├─ inspector.py      # yomawari inspect
 │   ├─ sensors/
 │   │   ├─ logtail.py    # Player.log tail、[YOMAWARI] 行と Unity の Error/Exception のパース
 │   │   ├─ screen.py     # mss によるキャプチャ、リングバッファ
-│   │   ├─ window.py     # pywinctl によるウィンドウ矩形
+│   │   ├─ window.py     # ウィンドウ矩形と、正規化座標 → 画面座標の変換（取得は platform/）
 │   │   ├─ process.py    # psutil
 │   │   └─ crash.py      # クラッシュダンプフォルダ監視
 │   ├─ platform/
@@ -178,7 +179,8 @@ yomawari/
 │   │   └─ win.py
 │   ├─ input/
 │   │   ├─ base.py       # InputDriver インターフェース
-│   │   └─ mouse_kb.py   # pyautogui 実装
+│   │   ├─ mouse_kb.py   # pyautogui 実装
+│   │   └─ pointer.py    # 状態の rect を画面座標に直して押す（前面化、押す直前の確認）
 │   ├─ fuzz/
 │   │   ├─ loop.py       # トリガー → 操作 → 応答確認
 │   │   ├─ ops_ui.py     # UI上のイレギュラー操作カタログ
@@ -215,6 +217,7 @@ yomawari replay <issue-id>
 yomawari minimize <issue-id>
 yomawari report <run-id>
 yomawari builds list | add NAME PATH | edit NAME | check NAME
+yomawari inspect [--build NAME] [--seconds 60] [--click MENU/BUTTON ...]   # 画面の menu とボタン名を見る。押して入力を確かめる
 yomawari doctor
 yomawari schedule install --at 01:00 | uninstall
 yomawari restore
@@ -250,7 +253,7 @@ Ctrl+C でもゲーム終了・セーブ復元・途中までのレポート出�
 
 ### doctor の確認項目
 - Python が arm64 で動いているか（`platform.machine()`）
-- ターミナルに「画面収録」「アクセシビリティ」権限があるか
+- ターミナルに「画面収録」「アクセシビリティ」権限があるか。ない場合は、親プロセスをたどって権限を付ける対象のアプリ（最初の `.app`）を特定し、手順を表示する。`--fix` で OS の確認ダイアログ（`AXIsProcessTrustedWithOptions` / `CGRequestScreenCaptureAccess`）とシステム設定の該当画面を開く
 - Ollama が起動しており、設定のモデルが pull 済みか
 - 登録ビルドのパスが存在するか
 
@@ -331,7 +334,7 @@ model = "<画像対応モデル名:タグ>"
 |---|---|---|
 | ログ | Player.log を改行単位でtail（部分行はバッファ） | `[YOMAWARI]` 行のイベント、Unity の Error/Exception/Warning |
 | 画面 | `mss`、ウィンドウ矩形で切り出し、直近30秒程度のリングバッファ | 静止度、単色度、フレーム |
-| ウィンドウ | `pywinctl` | 矩形、最小化、フォーカス |
+| ウィンドウ | Quartz（`CGWindowListCopyWindowInfo`）、AppKit（前面のアプリ・前面化）。`platform/` に置く | 外枠、画面に出ているか、前面か |
 | プロセス | `psutil` | 生存、終了コード、CPU、RSS、スレッド数 |
 | クラッシュ | フォルダ監視 | ダンプ出現 |
 
@@ -340,6 +343,8 @@ model = "<画像対応モデル名:タグ>"
 - 操作前に毎回ウィンドウ矩形を取り直し、変わっていたらキャッシュ破棄
 - 「正規化座標 → クライアント座標 → スクリーン座標」の変換を1か所に集約
 - Retina: キャプチャはピクセル、入力はポイント単位（2倍差）に注意
+- 描画領域の求め方: OS から取れるのはウィンドウの外枠（タイトルバー込み、ポイント）だけなので、ゲームの `resolution`（描画領域のピクセル数）と組み合わせる。倍率 = `w` / 外枠の幅、描画領域の高さ = `h` / 倍率、描画領域は外枠の下端に揃える。辻褄が合わなければ押さない
+- 押す前に、ゲームが前面でなければ前面にする。押す直前に、押す要素が最新の状態に残っているか確かめる
 
 ---
 

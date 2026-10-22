@@ -56,7 +56,7 @@ yomawari builds add mac_dev ~/Builds/Rachel_Dev/Rachel.app
 ビルドが未登録のまま `yomawari run` を実行した場合も、対話で登録できる。
 
 ### 6. macOS の権限
-「システム設定 → プライバシーとセキュリティ」で、yomawari を実行するターミナルアプリに **画面収録** と **アクセシビリティ** の権限を付ける。そのあと `yomawari doctor` で、すべて OK になることを確かめる。
+「システム設定 → プライバシーとセキュリティ」で、yomawari を実行するターミナルアプリに **画面収録** と **アクセシビリティ** の権限を付ける。`yomawari doctor` を実行すると、権限が足りないときに付ける対象のアプリと手順を表示する。`yomawari doctor --fix` で、OS の確認ダイアログとシステム設定の該当画面を開ける。付けたらそのアプリを ⌘Q で終了して起動し直し、もう一度 `yomawari doctor` で、すべて OK になることを確かめる。
 
 ### 7. ゲーム側の準備
 ゲームの `Packages/manifest.json` にパッケージ `com.tunacook.yomawari` を足してビルドする。手順と Player Settings、Naninovel のゲームで自動で出るイベントは [docs/game-integration.md](docs/game-integration.md) を参照。`yomawari builds check mac_dev` で `boot を受信しました` と出ればよい。

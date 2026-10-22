@@ -1,0 +1,16 @@
+"""OS レベルの入力のインターフェース。座標は画面座標（ポイント）。
+
+ゲームパッド（フェーズ7）は別の実装として足す。
+"""
+
+from __future__ import annotations
+
+from typing import Protocol
+
+
+class InputDriver(Protocol):
+    def move(self, x: float, y: float) -> None: ...
+    def click(self, x: float, y: float, button: str = "left", clicks: int = 1) -> None: ...
+    def scroll(self, x: float, y: float, amount: int) -> None: ...
+    def key(self, name: str) -> None: ...
+    def hotkey(self, *names: str) -> None: ...
