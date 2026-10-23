@@ -291,7 +291,7 @@ class Harness:
                 raise RuleError(f"モード {opts.mode} には rules.yaml の S-01（応答を待つ時間）が必要です")
             self._fuzz = FuzzRun(
                 mode=opts.mode,
-                decider=RandomDecider(random.Random(seed)),
+                decider=RandomDecider(random.Random(seed), float(self.fuzz_cfg["no_response_factor"])),
                 guard=Guard(self.guard_buttons),
                 rng=random.Random(f"{seed}:trigger"),
                 cfg=self.fuzz_cfg,

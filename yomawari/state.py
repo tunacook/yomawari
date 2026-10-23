@@ -45,7 +45,12 @@ class Target:
 
     @property
     def label(self) -> str:
-        """同じ名前のボタンを区別する名前。操作の記録と試行回数の数え方に使う。"""
+        """同じ名前のボタンを区別する名前。操作の記録と試行回数の数え方に使う。
+
+        選択肢は本文で表す（Naninovel の選択肢の id は表示のたびに変わり、周回をまたいで数えられないため）。
+        """
+        if self.kind == "choice" and self.text:
+            return f"{self.menu}/{self.text}"
         return f"{self.key}#{self.nth}" if self.nth else self.key
 
 

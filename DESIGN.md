@@ -302,6 +302,7 @@ rapid_count = 10              # 連打の回数
 stuck_modal_sec = 5           # ボタンのないモーダルがこの時間残ったら、Esc・右クリックで抜けようとする
 external_wait_sec = 3         # external のボタンを押してから前面を確かめるまで
 exit_min_interval_sec = 1800  # expect_exit のボタンを押す間隔の下限（ラン開始からも数える）
+no_response_factor = 0.2      # 押して反応がなかった操作の重みに、反応がなかった回数だけ掛ける
 
 [fuzz.weights]                # 通常の操作の重み
 advance = 20
@@ -418,7 +419,7 @@ model = "<画像対応モデル名:タグ>"
 class Decider(Protocol):
     def choose(self, state: dict, candidates: list[Op]) -> list[tuple[Op, float]]: ...
 ```
-- 初期実装は `random`: 「状態×操作」の試行回数を記録し、未試行を優先する重み付きランダム（重み = `[fuzz.weights]` ÷ (1 + 試行回数)。本文送りなど何度もする操作は減らさない）。状態はボタンのある menu の組み合わせで分け、本文の位置は含めない。試行回数は再起動しても引き継ぐ
+- 初期実装は `random`: 「状態×操作」の試行回数を記録し、未試行を優先する重み付きランダム（重み = `[fuzz.weights]` ÷ (1 + 試行回数) × `no_response_factor` ^ 反応がなかった回数。本文送りなど何度もする操作は減らさない）。状態はボタンのある menu の組み合わせで分け、本文の位置は含めない。試行回数は再起動しても引き継ぐ
 - `local`: Ollama の小さいテキストモデル（JSONスキーマで出力を固定）
 - `jev`: 将来の選択肢（TypeSafe Jev。「普通のプレイヤーがやりそうな操作」の確率が低いものを優先する使い方）
 

@@ -55,6 +55,7 @@ rapid_count = 10              # 連打の回数
 stuck_modal_sec = 5           # ボタンのないモーダルがこの時間残ったら、Esc・右クリックで抜けようとする
 external_wait_sec = 3         # external のボタンを押してから前面を確かめるまで
 exit_min_interval_sec = 1800  # expect_exit のボタンを押す間隔の下限
+no_response_factor = 0.2      # 押して反応がなかった操作の重みに、反応がなかった回数だけ掛ける（同じ状態で後回しにする）
 
 [fuzz.weights]                # 通常の操作の重み
 advance = 20

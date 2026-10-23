@@ -138,7 +138,7 @@ def run_sim(mode, seconds, bugs=(), title=TITLE, guard=None, cfg=CFG, seed="1"):
 
     game = SimGame(lambda kind, **d: publish(Event("game", kind, d, 0)), title=title, bugs=bugs)
     run = FuzzRun(
-        mode=mode, decider=RandomDecider(random.Random(seed)), guard=Guard(guard or {}),
+        mode=mode, decider=RandomDecider(random.Random(seed), cfg["no_response_factor"]), guard=Guard(guard or {}),
         rng=random.Random(seed), cfg=cfg, response_timeout=float(rules["S-01"].param("timeout_sec")),
     )
     driver = SimDriver(game)
@@ -387,3 +387,23 @@ def test_example_toml_matches_fuzz_defaults():
     c = Config(ROOT / "yomawari.example.toml")
     assert c.fuzz == FUZZ_DEFAULTS
     assert c.guard_buttons == {"expect_exit": [], "external": [], "irregular_only": [], "deny": []}
+
+
+def test_choice_label_uses_text():
+    s = GameState()
+    items = [{"id": "f3a9", "text": "話す", "rect": [0.3, 0.4, 0.7, 0.5]},
+             {"id": "0c1d", "text": "話さない", "rect": [0.3, 0.6, 0.7, 0.7]}]
+    s.feed(Event("game", "choices", {"items": items}, 0))
+    assert [t.label for t in s.targets()] == ["choices/話す", "choices/話さない"]
+    assert s.find("choices/0c1d").text == "話さない"
+
+
+def test_decider_puts_no_response_ops_later():
+    t = lambda n: Target("button", "M", n, (0, 0, 1, 1))  # noqa: E731
+    dead, alive = Op("click", t("Locked"), novelty=True), Op("click", t("Open"), novelty=True)
+    d = RandomDecider(random.Random(0), 0.2)
+    d.feedback("k", dead, responded=False)
+    d.feedback("k", dead, responded=False)
+    assert d.weight("k", dead) == pytest.approx(d.weight("k", alive) * 0.04)
+    d.feedback("k", dead, responded=True)  # 反応があれば戻す
+    assert d.weight("k", dead) == d.weight("k", alive)

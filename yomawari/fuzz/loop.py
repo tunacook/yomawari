@@ -177,6 +177,7 @@ class FuzzSession:
         waited = time.monotonic() - started
         responded = self.state.signature() != before
         self.run.stats["normal"] += 1
+        self.run.decider.feedback(key, op, responded)
         if responded:
             self.run.responsive.add((key, op.label))
         else:
