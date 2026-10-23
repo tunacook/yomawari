@@ -36,11 +36,17 @@ class Target:
     rect: Rect
     text: str | None = None
     index: int | None = None
+    nth: int = 0  # 同じ menu に同じ名前のボタンが複数あるとき、何番目か（セーブスロットなど）
 
     @property
     def key(self) -> str:
         """[guard.buttons] で使う "<menu の name>/<ボタンの name>"。"""
         return f"{self.menu}/{self.name}"
+
+    @property
+    def label(self) -> str:
+        """同じ名前のボタンを区別する名前。操作の記録と試行回数の数え方に使う。"""
+        return f"{self.key}#{self.nth}" if self.nth else self.key
 
 
 @dataclass
@@ -104,10 +110,13 @@ class GameState:
     def _on_menu(self, d: dict[str, Any], t: float) -> None:
         name = str(d.get("name"))
         buttons = []
+        seen: dict[str, int] = {}
         for b in d.get("buttons") or []:
             r = _rect(b.get("rect")) if isinstance(b, dict) else None
             if r is not None:
-                buttons.append(Target("button", name, str(b.get("name")), r))
+                bname = str(b.get("name"))
+                buttons.append(Target("button", name, bname, r, nth=seen.get(bname, 0)))
+                seen[bname] = seen.get(bname, 0) + 1
         prev = self.menus.get(name)
         if prev is None:
             self._order += 1
@@ -163,16 +172,30 @@ class GameState:
             out.extend(m.buttons)
         return out
 
-    def find(self, key: str) -> Target | None:
-        """"<menu>/<name>" で探す。押せるかどうか（モーダル）は問わない。"""
+    def find(self, key: str, nth: int = 0) -> Target | None:
+        """"<menu>/<name>" で探す（同じ名前が複数あれば nth 番目）。押せるかどうか（モーダル）は問わない。"""
         for m in self.menus.values():
             for b in m.buttons:
-                if b.key == key:
+                if b.key == key and b.nth == nth:
                     return b
         for c in self.choices:
             if c.key == key:
                 return c
         return None
+
+    def signature(self) -> tuple[Any, ...]:
+        """画面の状態の要約。操作のあとにこれが変われば「反応があった」とみなす。
+
+        ボタンの矩形は含めない（マウスを載せただけで変わることがあるため）。
+        """
+        return (
+            self.scene,
+            self.line["line_id"] if self.line else None,
+            self.line_done,
+            tuple(sorted((m.name, m.modal, tuple(b.label for b in m.buttons)) for m in self.menus.values())),
+            tuple(c.key for c in self.choices),
+            self.busy,
+        )
 
     def snapshot(self) -> dict[str, Any]:
         top = self.top_modal()

@@ -182,12 +182,11 @@ yomawari/
 │   │   ├─ mouse_kb.py   # pyautogui 実装
 │   │   └─ pointer.py    # 状態の rect を画面座標に直して押す（前面化、押す直前の確認）
 │   ├─ fuzz/
-│   │   ├─ loop.py       # トリガー → 操作 → 応答確認
-│   │   ├─ ops_ui.py     # UI上のイレギュラー操作カタログ
-│   │   ├─ ops_os.py     # OS上の操作カタログ
-│   │   ├─ guard.py      # 禁止操作、押す直前の存在確認
-│   │   ├─ coverage.py   # 状態×操作の試行回数
-│   │   └─ deciders.py   # Decider: random / local(Ollama) / jev(将来)
+│   │   ├─ loop.py       # トリガー → 操作 → 反応の確認（op / op_result イベントを出す）
+│   │   ├─ ops.py        # 操作の種類と、状態から候補を作る（UI 上の通常の操作・イレギュラー操作）
+│   │   ├─ ops_os.py     # OS上の操作カタログ（フェーズ3）
+│   │   ├─ guard.py      # [guard.buttons] の区分
+│   │   └─ decider.py    # Decider: random（状態×操作の試行回数）/ local(Ollama) / jev(将来)
 │   ├─ detect/
 │   │   ├─ engine.py     # rules.yaml を読んで評価
 │   │   └─ visual.py     # 黒画面・静止・SSIM 等の画像特徴量
@@ -212,7 +211,8 @@ yomawari/
 
 ### コマンド
 ```bash
-yomawari run [--build NAME | --build-path PATH] [--hours 8] [--mode fuzz|aging|random] [--seed N] [--no-open]
+yomawari run [--build NAME | --build-path PATH] [--hours 8] [--mode fuzz|random|aging] [--seed N] [--no-open]
+#   fuzz: 通常の操作 + イレギュラー操作 / random: 通常の操作のみ / aging: 操作せず観測のみ
 yomawari replay <issue-id>
 yomawari minimize <issue-id>
 yomawari report <run-id>
@@ -288,8 +288,26 @@ dark_labels = ["ch1_blackout"]   # 意図的な暗転・長い静止演出
 [guard.buttons]               # §9 ガード。"<menu の name>/<ボタンの name>"
 expect_exit = ["TitleUI/QuitButton", "RClickMenuUI/ToExit"]
 external = ["TitleUI/WebSiteButton"]
-irregular_only = ["RClickMenuUI/ToTitle", "TitleUI/NewGameButton", "ExSettingsUI/ResolutionDropdown"]
+irregular_only = ["RClickMenuUI/ToTitle", "ExSettingsUI/ResolutionDropdown"]
 deny = []
+
+[fuzz]                        # §9 ファジング
+op_interval_sec = 0.5         # 通常の操作の間隔
+settle_sec = 0.5              # 画面が変わってから次の操作までに待つ時間
+advance_point = [0.5, 0.5]    # 本文送り・右クリック・ホイールの位置（描画領域の正規化座標）
+trigger_prob = 0.3            # fuzz: きっかけのイベントでイレギュラー操作を差し込む確率
+trigger_delay_max_sec = 0.5   # きっかけから差し込むまでの遅延の上限（0〜この値でランダム）
+irregular_prob = 0.05         # fuzz: 通常の操作の代わりにイレギュラー操作をする確率（時間ベース）
+rapid_count = 10              # 連打の回数
+stuck_modal_sec = 5           # ボタンのないモーダルがこの時間残ったら、Esc・右クリックで抜けようとする
+external_wait_sec = 3         # external のボタンを押してから前面を確かめるまで
+exit_min_interval_sec = 1800  # expect_exit のボタンを押す間隔の下限（ラン開始からも数える）
+
+[fuzz.weights]                # 通常の操作の重み
+advance = 20
+right_click = 1
+wheel_up = 1
+click = 5                     # ボタン・選択肢1つあたり（まだ押していないものほど選ばれやすい）
 
 [decider]
 kind = "random"              # random | local | jev
@@ -345,6 +363,8 @@ model = "<画像対応モデル名:タグ>"
 - Retina: キャプチャはピクセル、入力はポイント単位（2倍差）に注意
 - 描画領域の求め方: OS から取れるのはウィンドウの外枠（タイトルバー込み、ポイント）だけなので、ゲームの `resolution`（描画領域のピクセル数）と組み合わせる。倍率 = `w` / 外枠の幅、描画領域の高さ = `h` / 倍率、描画領域は外枠の下端に揃える。辻褄が合わなければ押さない
 - 押す前に、ゲームが前面でなければ前面にする。押す直前に、押す要素が最新の状態に残っているか確かめる
+- macOS の前面のアプリは `lsappinfo front` で調べる。`NSWorkspace.frontmostApplication` は、イベントループを回していないプロセス（このハーネス）では起動時の値のまま更新されない。前面化は `NSRunningApplication.activateWithOptions_` で足りる（System Events の AppleScript は不要）
+- ウィンドウは、画面に出ているものを優先していちばん大きいものを選ぶ。Unity のゲームは画面外に隠れたウィンドウ（500x500 など）を持つことがあり、大きさだけで選ぶと取り違える
 
 ---
 
@@ -355,6 +375,32 @@ model = "<画像対応モデル名:タグ>"
 2. トリガー発火 → イレギュラー操作を1つ差し込む
 3. 応答確認（決まった操作に決まったイベントが返るか）
 4. 異常なら証跡回収、必要なら再起動して継続
+
+### モード
+| `--mode` | 通常の操作 | イレギュラー操作 | 使いどころ |
+|---|---|---|---|
+| `fuzz`（既定） | する | する | 夜間の通常のラン |
+| `random` | する | しない | 通常のプレイで先まで進むか、ボタンが反応するか |
+| `aging` | しない | しない | 放置（タイトルや本文のまま長時間置く） |
+
+### 状態ごとの通常の操作（フェーズ2の実装）
+状態トラッカー（`state.py`）の内容から、次のように候補を作る（`fuzz/ops.py`）。
+
+| 状態 | 候補 |
+|---|---|
+| 暗転・セーブ・ロードの途中（`busy`） | なし（待つ） |
+| ボタンのある menu か選択肢がある | そのボタン・選択肢（モーダルがあれば最前面のモーダルのボタンだけ）。ガードの区分に従う |
+| ボタンのないモーダル（暗転の幕など） | なし。`stuck_modal_sec` 残ったら Esc・右クリック・本文送りで抜けようとする |
+| それ以外（本文を読んでいる） | 本文送り（`advance_point` をクリック）、右クリック、ホイール上 |
+
+- 画面の状態が変わったら `settle_sec` 待ってから操作する
+- 操作のあとは、画面の状態（`GameState.signature()`: scene、行ID、本文の表示が終わったか、menu とボタンの並び、選択肢、暗転中か）が変わるまで、S-01 の `timeout_sec` まで待つ。変われば「反応あり」。ボタンの矩形は比べない（マウスを載せただけで変わるため）
+- 同じ名前のボタンが複数あるとき（セーブスロットなど）は、出てきた順に `#1`、`#2` … を付けて区別する（`[guard.buttons]` は名前だけで書く）
+- 操作は `op`、結果は `op_result`、押せなかったときは `op_error` として `events.jsonl` に残す
+- pyautogui の FailSafe（人がマウスを画面の隅に動かした）などで止まったら、以降はそのランを観測だけで続ける
+
+### イレギュラー操作（フェーズ2の実装）
+連打（クリック `rapid_count` 回、Enter・Space）、右クリック、Esc、ホイール（上下3段）、ボタンのダブルクリック、`irregular_only` のボタン。暗転・セーブの途中でも差し込む。きっかけは `transition`・`save`・`load` の開始、`line`、`choices`、`scene`（`trigger_prob` の確率で、0〜`trigger_delay_max_sec` 後）と、通常の操作の代わりに `irregular_prob` の確率。下の「UI上のイレギュラー操作」の残り（選択肢の2択ほぼ同時クリック、スキップ・オートの切り替えなど）は、ゲームごとのボタン名に頼らない形にできるものから足す
 
 ### トリガー
 ログイベント（`transition` 開始、`choices` 表示、`save` 開始、`line` 表示直後など）の受信から0〜500msのランダム遅延で操作を差し込む。時間ベースのランダム差し込みも併用。
@@ -372,7 +418,7 @@ model = "<画像対応モデル名:タグ>"
 class Decider(Protocol):
     def choose(self, state: dict, candidates: list[Op]) -> list[tuple[Op, float]]: ...
 ```
-- 初期実装は `random`: 「状態×操作」の試行回数を記録し、未試行を優先する重み付きランダム
+- 初期実装は `random`: 「状態×操作」の試行回数を記録し、未試行を優先する重み付きランダム（重み = `[fuzz.weights]` ÷ (1 + 試行回数)。本文送りなど何度もする操作は減らさない）。状態はボタンのある menu の組み合わせで分け、本文の位置は含めない。試行回数は再起動しても引き継ぐ
 - `local`: Ollama の小さいテキストモデル（JSONスキーマで出力を固定）
 - `jev`: 将来の選択肢（TypeSafe Jev。「普通のプレイヤーがやりそうな操作」の確率が低いものを優先する使い方）
 
@@ -387,12 +433,20 @@ class Decider(Protocol):
 | `irregular_only` | イレギュラー操作として差し込むときだけ押す（タイトルへ戻る、ニューゲーム、解像度・画面モード・言語の変更など） | 応答確認 |
 | `deny` | 押さない。マシンの外に影響が出るもの（課金、データの送信など）だけに使う | — |
 
+- `expect_exit` は、`exit_min_interval_sec` に1回まで押す。終了したら再起動するが、`max_restarts` には数えない。確認ダイアログが出るゲームでは、ダイアログの「はい」を `expect_exit` に書き、元のボタンは指定しない
+- `external` の結果（前面のアプリが切り替わったか、ゲームを前面に戻せたか）は、レポートの「ハーネスの記録」に書く
+- タイトルの「ニューゲーム」は本編に入る唯一の道なので、`irregular_only` にしない（`random` で本編に進めなくなる）
+
 - セーブの削除や上書きは指定しなくてよい（ラン前に退避し、ラン後に戻すため）
 - 押す直前に、押す位置の要素が最新の状態に含まれているか確認
 - 同一状態で同じ操作を繰り返そうとしたら次点へ
 
 ### 応答確認
 イレギュラー操作の後に毎回、決まった操作（例: メニューを開く→`menu`、閉じる→`menu_close`、クリック→`line`/`line_done`）をして、一定時間内にイベントが返るか確認。
+
+フェーズ2の実装: イレギュラー操作の次の通常の操作を応答確認として扱い、画面の状態が変わらなければ S-01。ゲームごとのボタン名に頼らずに済むため。
+- 応答確認には、同じ状態で前に反応があった操作だけを使う。空のセーブスロット、ロックされた回想、押せないロールバックなど、普段から反応しないボタンで S-01 を出さないため（Rachel の実機で、バックログの RollbackButton で誤検知した）。そういう操作がまだなければ、その回は応答確認をしない（止まっていれば S-02 が拾う）
+- 応答確認を待っている間に別のイレギュラー操作が入ったときは判定しない
 
 ### 猶予期間
 操作の種類ごとに、直後の画面系・進行系ルールの判定を止める時間を `rules.yaml` で設定（例: リサイズ2秒）。
@@ -422,8 +476,8 @@ class Decider(Protocol):
 | S-01 | 応答確認のイベントが5秒以内に来ない（ハートビートは生存） | Critical |
 | S-02 | 本文表示中に20回クリックしても `line`/`choices`/`scene` が来ない | Critical |
 | S-03 | `transition` 開始から10秒で終了が来ない | Critical |
-| S-04 | 同じ行IDの並びが繰り返されるだけ（K回以上） | Major |
-| S-05 | ログの矩形中心をクリックしても反応が3回連続でない | Major |
+| S-04 | 同じ行IDの並びが繰り返されるだけ（K回以上）。タイトルに戻って最初から読み直すのと区別する方法を決めてから実装する | Major |
+| S-05 | ログの矩形中心をクリックしても反応がない回が、同じボタンで3回続く（トグル・ドロップダウンなど押しても並びが変わらないものは除く） | Major |
 | L-01 | `log_error` イベント（Error / Exception / Assert） | Major（直後にS系ならCriticalに統合） |
 | L-02 | TextMeshProの未収録文字警告 | Minor |
 | L-03 | リソース読み込み失敗 | Major |

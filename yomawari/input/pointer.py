@@ -57,7 +57,7 @@ class Pointer:
 
     def click(self, target: Target, button: str = "left", clicks: int = 1) -> tuple[float, float]:
         """target を押し、押した画面座標を返す。押す直前に、target が最新の状態にまだあるか確かめる。"""
-        current = self.state.find(target.key)
+        current = self.state.find(target.key, target.nth)
         if current is None:
             raise PointerError(f"{target.key} は押す直前に画面から消えました")
         return self.click_at((current.rect[0] + current.rect[2]) / 2, (current.rect[1] + current.rect[3]) / 2,
@@ -70,3 +70,16 @@ class Pointer:
         self.ensure_front()
         self.driver.click(x, y, button=button, clicks=clicks)
         return (x, y)
+
+    def scroll_at(self, nx: float, ny: float, amount: int) -> tuple[float, float]:
+        area = self.area()
+        x, y = area.to_screen(nx, ny)
+        self.ensure_front()
+        self.driver.scroll(x, y, amount)
+        return (x, y)
+
+    def key(self, name: str, times: int = 1) -> None:
+        self.area()  # ウィンドウが出ていなければ押さない
+        self.ensure_front()
+        for _ in range(times):
+            self.driver.key(name)
