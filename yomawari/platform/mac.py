@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import os
 import plistlib
+import re
 import struct
 import subprocess
 from pathlib import Path
@@ -23,6 +24,12 @@ _PERMISSION_PANES = {
     "画面収録": ("Privacy_ScreenCapture", "画面収録とシステム音声録音"),
     "アクセシビリティ": ("Privacy_Accessibility", "アクセシビリティ"),
 }
+
+
+def parse_lsappinfo_pid(out: str) -> int | None:
+    """`lsappinfo info -only pid <ASN>` の出力（`"pid"=12345`）から pid を取り出す。"""
+    m = re.search(r'"pid"\s*=\s*(\d+)', out)
+    return int(m.group(1)) if m else None
 
 
 def app_bundle_of(exe: str) -> str | None:
@@ -244,7 +251,12 @@ class MacPlatform:
     # --- ウィンドウ（pyobjc。テストや権限のない環境でも import だけで落ちないよう、使うときに読み込む） ---
 
     def window_info(self, pid: int) -> WindowInfo | None:
-        """pid のいちばん大きい通常ウィンドウ（レイヤー0）。外枠はポイント単位、メインディスプレイの左上原点。"""
+        """pid の通常ウィンドウ（レイヤー0）のうち、画面に出ているものを優先していちばん大きいもの。
+        外枠はポイント単位、メインディスプレイの左上原点。
+
+        Unity のゲームは、本体のほかに画面外の隠れたウィンドウ（500x500 など）を持つことがあり、
+        大きさだけで選ぶと本体より大きくて取り違える。
+        """
         import Quartz
 
         infos = Quartz.CGWindowListCopyWindowInfo(
@@ -260,15 +272,24 @@ class MacPlatform:
             if rect.w <= 1 or rect.h <= 1:
                 continue
             info = WindowInfo(pid, rect, bool(w.get(Quartz.kCGWindowIsOnscreen, False)))
-            if best is None or rect.w * rect.h > best.bounds.w * best.bounds.h:
+            if best is None or (info.on_screen, rect.w * rect.h) > (best.on_screen, best.bounds.w * best.bounds.h):
                 best = info
         return best
 
     def frontmost_pid(self) -> int | None:
-        from AppKit import NSWorkspace
+        """前面のアプリの pid。
 
-        app = NSWorkspace.sharedWorkspace().frontmostApplication()
-        return int(app.processIdentifier()) if app is not None else None
+        NSWorkspace.frontmostApplication は、イベントループを回していないプロセス（このハーネス）では
+        起動時の値のまま更新されないので使わない。LaunchServices に lsappinfo で聞く。
+        """
+        try:
+            asn = subprocess.run(["lsappinfo", "front"], capture_output=True, text=True, timeout=5).stdout.strip()
+            out = subprocess.run(
+                ["lsappinfo", "info", "-only", "pid", asn], capture_output=True, text=True, timeout=5
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return parse_lsappinfo_pid(out)
 
     def activate(self, pid: int) -> None:
         from AppKit import NSApplicationActivateAllWindows, NSRunningApplication

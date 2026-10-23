@@ -148,6 +148,8 @@ def _status_text(s: dict[str, Any]) -> Text:
     )
     if s.get("scene"):
         line += f"  scene: {s['scene']}"
+    if s.get("ops") is not None:
+        line += f"  ops: {s['ops']}"
     if s["last"]:
         line += f"\n           last: {s['last'][:100]}"
     return Text(line)
@@ -159,7 +161,10 @@ def run(
     build: str | None = typer.Option(None, "--build", "-b", help="登録済みビルドの名前"),
     build_path: Path | None = typer.Option(None, "--build-path", help="その場限りで使うビルドのパス（登録しない）"),
     hours: float | None = typer.Option(None, "--hours", help="実行時間（時間）。既定は yomawari.toml の run.hours"),
-    mode: str = typer.Option("fuzz", "--mode", help="fuzz | aging | random（フェーズ1は観測のみ）"),
+    mode: str = typer.Option(
+        "fuzz", "--mode",
+        help="fuzz（通常の操作 + イレギュラー操作）| random（通常の操作のみ）| aging（操作せず観測のみ）",
+    ),
     seed: str | None = typer.Option(None, "--seed", help="乱数シード。既定は yomawari.toml の run.seed"),
     no_open: bool = typer.Option(False, "--no-open", help="終了後にレポートを開かない"),
 ) -> None:
@@ -188,6 +193,8 @@ def run(
     harness = Harness(
         b, exe, plat, rules, cfg.rules_path, cfg.runs_dir, rc, cfg.sensors,
         on_status=(lambda s: live.update(_status_text(s))) if live else None,
+        fuzz_cfg=cfg.fuzz,
+        guard_buttons=cfg.guard_buttons,
     )
     if live:
         with live:

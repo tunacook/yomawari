@@ -98,6 +98,15 @@ def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
                 out.append(f"- クラッシュダンプ: `{i.evidence['dump']}`")
             if i.evidence.get("log"):
                 out += ["- ログ抜粋:", "", _fence(i.evidence["log"])]
+            if i.evidence.get("recent"):
+                out.append(f"- 直前の操作（古い順）: {' → '.join(f'`{r}`' for r in i.evidence['recent'])}")
+            st = i.evidence.get("state")
+            if st:
+                out.append(
+                    f"- そのときの画面: scene `{st.get('scene')}`、行 `{st.get('line_id')}`、"
+                    f"menu {', '.join(f'`{m}`' for m in st.get('menus') or []) or 'なし'}、"
+                    f"最前面のモーダル `{st.get('top_modal')}`"
+                )
             out += ["", "- 判定: [ ] 正しい検出　[ ] 誤検知", ""]
 
     out += ["## 実行環境", ""]

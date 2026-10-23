@@ -96,3 +96,30 @@ def test_pointer_needs_resolution():
     p = Pointer(FakeWindows(WindowInfo(1, ScreenRect(0, 0, 10, 10), True), front=1), RecordingDriver(), 1, s)
     with pytest.raises(PointerError, match="resolution"):
         p.click_at(0.5, 0.5)
+
+
+@pytest.mark.skipif(__import__("sys").platform != "darwin", reason="macOS のみ")
+def test_mac_window_info_prefers_onscreen_window(monkeypatch):
+    # Rachel の実機: 本体 640x388 のほかに、画面外の 500x500 とメニューバー大の隠れたウィンドウがある
+    import Quartz
+
+    from yomawari.platform.mac import MacPlatform
+
+    def win(x, y, w, h, onscreen):
+        d = {Quartz.kCGWindowOwnerPID: 7, Quartz.kCGWindowLayer: 0,
+             Quartz.kCGWindowBounds: {"X": x, "Y": y, "Width": w, "Height": h}}
+        if onscreen is not None:
+            d[Quartz.kCGWindowIsOnscreen] = onscreen
+        return d
+
+    infos = [win(0, 0, 3360, 30, None), win(0, 1390, 500, 500, None), win(552, 414, 640, 388, True)]
+    monkeypatch.setattr(Quartz, "CGWindowListCopyWindowInfo", lambda *a: infos)
+    info = MacPlatform().window_info(7)
+    assert info.bounds == ScreenRect(552, 414, 640, 388) and info.on_screen
+
+
+def test_parse_lsappinfo_pid():
+    from yomawari.platform.mac import parse_lsappinfo_pid
+
+    assert parse_lsappinfo_pid('"pid"=91521\n') == 91521
+    assert parse_lsappinfo_pid("") is None
