@@ -126,6 +126,17 @@ Unity ではないので、Ren'Py と同じくゲーム側・ハーネス側の�
   - 出力先：PC 版のランタイム（Electron / NW.js）で Node の `fs` が使えればファイルに書く。使えなければ `console.log` を標準出力に出す設定にして、ハーネスが標準出力を読む
 - **ハーネス**：Ren'Py と同じく、起動・ログの読み先・セーブの場所の切り替えが要る。ブラウザ版はウィンドウとプロセスの扱いが変わるので対象外
 
+### 画面の仕様の自動読み取り（DESIGN.md §9「ゲーム固有の仕様」①）
+3層の分け方（① エンジンの標準 UI から自動で読み取る、② ゲームのコードがインターフェースで伝える、③ ゲームのプロファイル）は、どのエンジンでも同じ。② と ③ はそのまま使えるが、① はエンジンごとに作り直す。
+
+| エンジン | ① が読む標準 UI | 置き場所 |
+|---|---|---|
+| Unity / 宴 | uGUI / TextMeshPro の `Selectable`、`ScrollRect`、`RectMask2D` / `Mask`、`Dropdown` / `TMP_Dropdown` | パッケージ（宴は UI が uGUI なので同じ考え方で読める。どの UI が開いているかの判定だけ宴向けに作る） |
+| Ren'Py | screen 言語の `textbutton` / `imagebutton`（`sensitive` が押せるかどうか）、`viewport`（スクロール）、`vbox` / `hbox` | ゲームのスクリプト（`.rpy`） |
+| ティラノスクリプト | DOM の `glink` などのボタン要素、`disabled`、スクロールする要素（`scrollHeight` > `clientHeight`） | プラグイン（JavaScript） |
+
+どのエンジンでも、出すイベントの形（`menu` の `buttons: [{name, rect, type, locked}]`、`scroll` など）を DESIGN.md §3 に合わせれば、ハーネス側は変えなくてよい。
+
 ### Unity 以外を扱うときにハーネスで変えるところ
 - `launcher.py`：実行ファイルの解決と起動引数（`-yomawari -logFile` は Unity 専用）
 - `sensors/logtail.py`：読むファイル。`[YOMAWARI]` 行の形式は同じにすれば、パースはそのまま使える

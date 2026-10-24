@@ -26,7 +26,8 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 | 実行環境 | 主にM3 Mac（Apple Silicon）。Windowsは後日、同じハーネスをWindows機に置く |
 | 負荷 | ローカル負荷はかけてよい |
 | 通知 | 不要。完了後にMarkdownを開くだけ |
-| AI | 判定と制御は原則コード（ルールベース）。AIはローカルモデル（Ollama）を補助的に使う |
+| AI | 判定と制御は原則コード（ルールベース）。AIはローカルモデル（Ollama）を補助的に使う。画面を見てゲームの進め方を把握することは AI に期待しない |
+| ゲーム固有の仕様 | 標準部品から自動で読み取る → ゲームのコードがインターフェースで伝える → テストのやり方をゲームのプロファイルに事前に書く、の3層で定義する（§9「ゲーム固有の仕様」） |
 | 言語 | Python 3.11+、arm64ネイティブ、環境管理は uv |
 
 ### やらないこと（現時点）
@@ -35,6 +36,8 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 - スマホ等への通知
 - ゲームパッド入力（`InputDriver` の差し替え口だけ用意）
 - シナリオ本文の内容の正しさの判定
+- 画面を見てゲームの進め方を AI に把握させること（進め方の知識は、ゲームのプロファイルに事前に書く）
+- 謎解きや選択の正解をプロファイルに書くこと（まだ試していない操作からの総当たりで進め、見つけた正解は §9「経験の蓄積」でハーネスが覚える）
 
 ---
 
@@ -107,7 +110,7 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 | `line_done` | `line_id` | 文字送り完了。操作の待ち合わせ |
 | `choices` | `items: [{id, text, rect, locked}]` | クリック候補。並びか矩形が変わったときにも出し直す |
 | `choices_done` | `id`, `index` | 選択確定。`index` は直前の `choices` の中での順番（不明なら -1） |
-| `menu` | `name`, `modal`, `buttons: [{name, rect}]` | メニュー表示とクリック候補。押せるボタンの並びか矩形が変わったときにも出し直す |
+| `menu` | `name`, `modal`, `buttons: [{name, rect, type, locked}]`, `scroll` | メニュー表示とクリック候補。押せるボタンの並びか矩形が変わったときにも出し直す。`rect` はスクロール領域と画面で切り取った見えている部分で、見えていないボタンは出さない。`type` は `button` / `toggle` / `dropdown` / `slider` / `input` / `other`。`locked` は §9「ゲーム固有の仕様」② のインターフェースが押せないと答えたもの。`scroll` はスクロール領域ごとの `{rect, up, down, left, right}`（その方向にまだ項目があるか）。開いたドロップダウンのリスト（標準の `Dropdown` / `TMP_Dropdown` のもの）は、`name` が `<ドロップダウンの name>.List` のモーダルな `menu` として出す |
 | `menu_close` | `name` | 応答確認 |
 | `transition` | `phase: start/end`, `name` | 操作待ち、進行不能判定 |
 | `resolution` | `w`, `h`, `mode` | 起動直後と変化時（`Update` で監視）。描画領域の位置と Retina 倍率の計算（§8）、解像度テスト |
@@ -186,7 +189,8 @@ yomawari/
 │   │   ├─ ops.py        # 操作の種類と、状態から候補を作る（UI 上の通常の操作・イレギュラー操作）
 │   │   ├─ ops_os.py     # OS上の操作カタログ（フェーズ3）
 │   │   ├─ guard.py      # [guard.buttons] の区分
-│   │   └─ decider.py    # Decider: random（状態×操作の試行回数）/ local(Ollama) / jev(将来)
+│   │   ├─ decider.py    # Decider: random（状態×操作の試行回数）/ local(Ollama) / jev(将来)
+│   │   └─ experience.py # 経験の蓄積（集計ファイルの読み書き）と体験レポート
 │   ├─ detect/
 │   │   ├─ engine.py     # rules.yaml を読んで評価
 │   │   └─ visual.py     # 黒画面・静止・SSIM 等の画像特徴量
@@ -218,6 +222,7 @@ yomawari minimize <issue-id>
 yomawari report <run-id>
 yomawari builds list | add NAME PATH | edit NAME | check NAME
 yomawari inspect [--build NAME] [--seconds 60] [--click MENU/BUTTON ...]   # 画面の menu とボタン名を見る。押して入力を確かめる
+yomawari experience report [--build NAME] [--out PATH]   # 経験の蓄積から体験レポート（Markdown）を出す（§9「経験の蓄積」）
 yomawari doctor
 yomawari schedule install --at 01:00 | uninstall
 yomawari restore
@@ -449,6 +454,112 @@ class Decider(Protocol):
 - 応答確認には、同じ状態で前に反応があった操作だけを使う。空のセーブスロット、ロックされた回想、押せないロールバックなど、普段から反応しないボタンで S-01 を出さないため（Rachel の実機で、バックログの RollbackButton で誤検知した）。そういう操作がまだなければ、その回は応答確認をしない（止まっていれば S-02 が拾う）
 - 応答確認を待っている間に別のイレギュラー操作が入ったときは判定しない
 
+### ゲーム固有の仕様
+ゲームごとの画面の仕様（押せない条件、スクロール、ドロップダウンなど）は、その情報をだれが知っているかで3つの層に分けて定義する。上の層で足りるものは下の層に書かない。
+
+3層の分け方はエンジンに依存しない。ハーネスが受け取るのは §3 の形式のイベントだけで、どのエンジンが出したかは区別しない。エンジンごとに作るのは ① を担うゲーム側の部分で、yomawari の対象（§1）は Unity 製のゲームなので、いま実装するのは Unity 版（UPM パッケージ）だけにする。ほかのエンジンの考え方は `docs/game-integration.md` §6（未検証）に置く。
+
+| 層 | 置くもの | 定義する場所 | 例（Rachel） |
+|---|---|---|---|
+| ① エンジンの標準 UI から自動で読み取る | エンジンの標準 UI 部品から分かること（Unity では uGUI / TextMeshPro の標準部品と、それを継承した部品） | エンジンごとのゲーム側の実装。Unity ではパッケージ（ゲームごとの作業なし） | スクロール領域（`ScrollRect` / `RectMask2D` / `Mask`）による切り取り、その先にまだ項目があるか、ボタンの種類、開いたドロップダウンのリスト |
+| ② ゲームの状態 | ゲームのコードしか知らないこと | ゲームのコード（パッケージのインターフェースを実装） | `MemoryListGridSlot` は劇中でアンロックされるまで押せない |
+| ③ テストのやり方 | どう遊び、何を許容するか | ゲームのプロファイル（ゲームのリポジトリでコミットする設定ファイル） | 押し方を変えるボタン、反応がなくても正常な画面、スクロールの手段、画面ごとの重み |
+
+#### ① エンジンの標準 UI から自動で読み取る
+以下は Unity 版（UPM パッケージ）の内容。Unity 版で扱えるのは、Unity の標準部品（uGUI と TextMeshPro）と、それを継承した部品だけ。自作の部品、UI Toolkit、標準部品を継承していないアセットの UI は対象外で、② か ③ で補う（下の表）。Rachel で通るからといって、ほかのゲームで通るとは限らない。
+
+| 対象 | ① で読み取る部品 | ① で拾えないとき |
+|---|---|---|
+| スクロールで隠れた項目 | `ScrollRect`、`RectMask2D`、`Mask` | ③ の `scroll`（方向キー・ドラッグ・ホイールなど、先を表示する手段）と、画面の外のボタンを押さないための矩形の切り取りは ① の範囲でだけ効く |
+| ボタンの種類 | `Button`、`Toggle`、`Dropdown` / `TMP_Dropdown`、`Slider`、`InputField` / `TMP_InputField` | `other` になる。押しても並びが変わらないものは ③ の `no_response_ok` に書く |
+| 開いたドロップダウンのリスト | `Dropdown` / `TMP_Dropdown` の `IsExpanded` と、それが作る Dropdown List | ③ の `no_response_ok` で誤検知だけを防ぐ。リストの中まで操作したいなら、② に「いま開いているポップアップと項目」を伝えるインターフェースを足す |
+
+- ボタンの矩形を、祖先の `RectMask2D` / `Mask` の矩形と画面で切り取る。中心が見えていないボタンは出さない（スクロールで隠れた項目を押して、別の要素に当たるのを防ぐ）
+- `ScrollRect` ごとに、どの方向にまだ項目があるかを `scroll` で出す。ハーネスは、見えている候補を押し尽くしたら（またはまだ試していない方向があれば）、その領域の上でホイールかドラッグをしてスクロールする
+- ボタンの種類（`type`）を出す。押しても `menu` の並びが変わらない種類（`toggle` / `dropdown` / `slider` / `input`）は、S-05 の対象から種類で外す（名前の正規表現での推測をやめる）
+- `Dropdown` / `TMP_Dropdown`（とそれを継承した部品）が開いている（`IsExpanded`）間は、リストの項目を `<ドロップダウンの name>.List` のモーダルな `menu` として出す。ハーネスは項目を選ぶか、リストの外を押して閉じる。リストが開いたことを「反応あり」とみなす
+
+#### ② ゲームの状態をインターフェースで伝える
+外からは分からない状態だけを、ゲームがパッケージのインターフェースを実装して伝える。ゲーム側の作業はインターフェースの実装だけにし、ハーネスのことを知らなくてよいようにする。
+
+```csharp
+namespace Yomawari
+{
+    // Selectable と同じ GameObject のコンポーネントに実装する
+    public interface IYomawariButtonState
+    {
+        // true のあいだ、ボタンは押せない（押しても何も起きないのが仕様）
+        bool YomawariLocked { get; }
+    }
+}
+```
+
+- `locked` のボタンは、通常の操作の候補に入れない。イレギュラー操作としてだけ押す（押しても壊れないことを確かめる）。S-05 の対象にしない
+- 足りなくなったら、同じ考え方でインターフェースを足す（例: 画面ごとの「今は操作を受け付けない」）
+
+#### ③ ゲームのプロファイル
+テストのやり方は、ゲームのリポジトリに置く `yomawari.profile.toml` に書いて、チームで共有する。`yomawari.toml`（マシンごと、コミットしない）からは参照だけをする。
+
+```toml
+# yomawari.toml
+[builds.mac_dev]
+path = "~/Builds/Rachel_Dev/Rachel.app"
+profile = "~/work/Rachel/yomawari.profile.toml"
+```
+
+```toml
+# Rachel/yomawari.profile.toml
+[guard.buttons]                         # §9 ガード
+expect_exit = ["TitleUI/QuitButton", "RClickMenuUI/ToExit"]
+external = ["TitleUI/WebSiteButton"]
+irregular_only = ["RClickMenuUI/ToTitle", "SettingsUI/ResolutionDropdown"]
+deny = []
+
+[screens.MemoryListUI]                  # menu の name ごと
+scroll = ["key:down", "key:up", "drag"] # ① の scroll で足りないときの、先を表示する手段
+no_response_ok = ["MemoryListGridSlot"] # 押して反応がなくても正常（S-05 の対象外）。② を実装できないときの代わり
+weight = 0.5                            # この画面のボタンの重みに掛ける
+
+[rules.L-01]                            # rules.yaml のパラメータのうち、ゲーム固有のもの
+ignore_patterns = ["<既知で無害なエラーの正規表現>"]
+```
+
+- 読む順: `rules.yaml` / コードの既定値 → プロファイル → `yomawari.toml`（あとのものが上書き。配列は足し合わせる）
+- `rules.yaml` には、どのゲームにも共通の判定基準だけを残す。今 `rules.yaml` にある S-05 の `ignore_patterns` の既定値（`Toggle` などの名前）は、① の `type` に置き換えて消す
+- プロファイルに書くのは「どう遊ぶか・何を許容するか」まで。謎解きや選択の正解は書かない（§1「やらないこと」）
+
+### 経験の蓄積
+進め方の正解は人が書かず、ハーネスがランを重ねて覚える（AI は使わない。回数を数えるだけ）。1回目のランは総当たりで遅いが、2回目からは分かっている道を速く進める。記録は、ゲームの開発者がプレイ体験を見直す材料としても読めるようにする。
+
+#### 記録するもの
+| 記録 | ハーネスの使い道 | 開発者に分かること |
+|---|---|---|
+| 状態（`state_key`）× 操作ごとの、押した回数・反応があった回数・進行につながった回数（押してから `progress_window_sec` 以内に新しい `line` / `scene` / `choices` が来た） | 進行につながった操作を優先する | 押せそうに見えて反応しないボタンが多い画面 |
+| 選択肢ごとの行き先（次の `scene`、タイトルに戻った、終了した） | まだ選んでいない選択肢を先に選び、そのあとは先に進む選択肢を優先する | 分岐の割合、バッドエンドに入りやすい箇所 |
+| `@LEVEL` のような選択画面（ボタンのある menu）で、進行につながるまでの試行回数と、選んだボタンの内訳 | 正解だったボタンを優先する | 謎解きの難しさ、間違えやすい選択肢 |
+| 画面（menu）に入ってから抜けるまでの操作の数と時間 | — | 抜け方が見つけにくい画面（ボタンが多いなど） |
+| scene ごとの、ランの開始からの到達時間と操作の数 | — | 長い章、止まりやすい箇所 |
+| 本文送りに反応しなかった行と、待たされた時間 | — | 送れない演出、テンポの悪い箇所 |
+
+- ゲームを UI 名・ボタン名・`line_id` で識別する。記録には、どのビルド（`boot` の `version` / `build_guid`）で得たものかを付ける。UI を変えたあとも、古いビルドの記録と区別できるように
+- Decider の重み: まだ試していない操作を先に試す（今の試行回数の重み）。試したあとは、進行につながった操作に `progress_bonus` を掛ける。fuzz モードでは掛けない（いつもの道に偏らないように）
+- 選択肢の行き先は、選んだあとに最初に来た `scene`（タイトルや終了も含む）で記録する
+
+#### 保存場所と見せ方
+- 集計ファイル（機械向け）: `runs/_experience/<ゲーム>.json`。`<ゲーム>` はプロファイルがあればそのファイル名の親ディレクトリ名、なければ `boot` の製品名。ランをまたいで足し合わせる。ハーネスはラン開始時に読み、ラン終了時に書く
+- 体験レポート（人向け、Markdown）: `yomawari experience report` で、集計ファイルから画面ごと・scene ごと・選択肢ごとにまとめて出す。既定の出力先は `runs/_experience/<ゲーム>_report.md`
+- 毎回の `report.md` には、そのランで新しく分かったこと（初めて進行につながった選択画面の操作、初めて到達した scene など）だけを載せる
+- 区切りのよいところ（マイルストーンなど）で、体験レポートだけをゲームのリポジトリにコミットして開発者と共有する（例: `Rachel/docs/yomawari/experience.md`）。集計ファイルはランのたびに変わるので、コミットしない
+- 体験レポートの冒頭に、次の注意を必ず書く: 「これは自動の総当たりの記録で、プレイヤーの行動データではない。ハーネスは見た目を見ずに、試していない操作から押している。『抜け方が見つけにくい』は『ボタンが多くて総当たりに時間がかかる』という意味で、見た目で分かるかどうかは測っていない。人が見直す場所の手がかりとして使う」
+
+#### 設定
+```toml
+[experience]
+enabled = true
+progress_window_sec = 3       # 押してからこの時間内に line / scene / choices が来たら「進行につながった」
+progress_bonus = 5            # random モードで、進行につながった操作の重みに掛ける
+```
+
 ### 猶予期間
 操作の種類ごとに、直後の画面系・進行系ルールの判定を止める時間を `rules.yaml` で設定（例: リサイズ2秒）。
 
@@ -574,7 +685,7 @@ runs/
 ## 14. 実装フェーズ
 
 1. **骨組み**: `pyproject.toml`、CLI（`run`/`builds`/`doctor`）、`yomawari.toml` と対話登録、ランチャ（`.app` 解決）、Player.log tail、`boot`/`heartbeat` の受信、C-01〜03・H-01・L-01、最小限の `report.md`、セーブ退避と復元
-2. **ファジング**: イベントバス・状態トラッカー、`InputDriver`（マウス・キーボード）、座標変換、UI操作カタログ、`random` Decider、ガード、応答確認、S系ルール、`rules.yaml` エンジン
+2. **ファジング**: イベントバス・状態トラッカー、`InputDriver`（マウス・キーボード）、座標変換、UI操作カタログ、`random` Decider、ガード、応答確認、S系ルール、`rules.yaml` エンジン。続けて、ゲーム固有の仕様の3層（パッケージの自動読み取り、`IYomawariButtonState`、ゲームのプロファイル）と、経験の蓄積・体験レポート
 3. **画面とOS操作**: `mss` キャプチャとリングバッファ、V-01〜05、OS操作カタログ、F系・R系・A系ルール
 4. **再現**: `events.jsonl` からの `replay`、`minimize`、前回比較、重複排除・統合
 5. **画像判定**: Ollama Judge、V-06、誤検知除去、要目視欄、再現手順の文章化
