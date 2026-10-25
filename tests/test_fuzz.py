@@ -31,6 +31,10 @@ TITLE = {
     "QuitButton": [0.1, 0.8, 0.3, 0.9],
 }
 RETURN = {"ReturnButton": [0.8, 0.85, 0.95, 0.95]}
+# 回想一覧のような画面。押しても反応しないスロットが縦に並び、6つ目より下は描画領域の外。
+# 下へスクロール（上へドラッグ・ホイール下・下キー）すると先が出る。閉じるのは Esc だけ
+LIST_TITLE = {"ListButton": [0.1, 0.5, 0.3, 0.6]}
+LIST_SLOTS = 12
 CFG = {
     **FUZZ_DEFAULTS,
     "op_interval_sec": 0.01,
@@ -61,6 +65,9 @@ class SimGame:
         self.done = False
         self.stuck = False
         self.clicked = []
+        self.offset = 0.0
+        self.scrolled = 0
+        self.list_closed = 0
 
     def boot(self):
         self.emit("boot", version="sim")
@@ -71,8 +78,38 @@ class SimGame:
         self.screen = "title"
         self.emit("menu", name="TitleUI", modal=False, buttons=[{"name": k, "rect": r} for k, r in self.title.items()])
 
+    def _show_list(self):
+        slots = [{"name": "Slot", "rect": [0.2, 0.1 + 0.2 * i - self.offset, 0.8, 0.25 + 0.2 * i - self.offset]}
+                 for i in range(LIST_SLOTS)]
+        self.emit("menu", name="ListUI", modal=True, buttons=slots)
+
+    def scroll_list(self, step):
+        if self.screen != "list":
+            return
+        self.scrolled += 1
+        self.offset = min(max(self.offset + 0.2 * step, 0), 0.2 * (LIST_SLOTS - 4))
+        self._show_list()
+
+    def key(self, name):
+        if self.screen != "list":
+            return
+        if name == "esc":
+            self.screen = "title"
+            self.list_closed += 1
+            self.emit("menu_close", name="ListUI")
+        elif name in ("down", "up"):
+            self.scroll_list(1 if name == "down" else -1)
+
+    def wheel(self, amount):
+        self.scroll_list(-1 if amount < 0 else 1)
+
+    def drag(self, dy):
+        self.scroll_list(1 if dy < 0 else -1)
+
     def click(self, nx, ny, button, clicks):
         if button != "left":
+            return
+        if self.screen == "list":
             return
         if self.screen == "reading":
             if clicks >= 5 and "stuck_after_rapid" in self.bugs:
@@ -90,6 +127,10 @@ class SimGame:
             self.screen = "reading"
             self.emit("scene", name="main/s1")
             self._advance()
+        elif hit == "ListButton":
+            self.screen = "list"
+            self.offset = 0.0
+            self._show_list()
         elif hit == "SettingsButton" and "dead_settings" not in self.bugs:
             self.screen = "settings"
             self.emit("menu", name="SettingsUI", modal=True, buttons=[{"name": k, "rect": r} for k, r in RETURN.items()])
@@ -117,8 +158,12 @@ class SimDriver:
     def move(self, x, y): ...
     def click(self, x, y, button="left", clicks=1):
         self.loop.call_soon_threadsafe(self.game.click, x / BOUNDS.w, y / BOUNDS.h, button, clicks)
-    def scroll(self, x, y, amount): ...
-    def key(self, name): ...
+    def scroll(self, x, y, amount):
+        self.loop.call_soon_threadsafe(self.game.wheel, amount)
+    def drag(self, x0, y0, x1, y1):
+        self.loop.call_soon_threadsafe(self.game.drag, (y1 - y0) / BOUNDS.h)
+    def key(self, name):
+        self.loop.call_soon_threadsafe(self.game.key, name)
     def hotkey(self, *names): ...
 
 
@@ -407,3 +452,58 @@ def test_decider_puts_no_response_ops_later():
     assert d.weight("k", dead) == pytest.approx(d.weight("k", alive) * 0.04)
     d.feedback("k", dead, responded=True)  # 反応があれば戻す
     assert d.weight("k", dead) == d.weight("k", alive)
+
+
+def test_list_screen_scrolls_and_leaves():
+    # 押しても反応しないスロットばかりのモーダルでも、スクロールして先を出し、Esc で抜ける
+    game, run, issues, events, _ = run_sim("random", 2.0, title=LIST_TITLE)
+    assert game.scrolled > 0
+    assert game.list_closed > 0
+    results = [e.data for e in events if e.kind == "op_result"]
+    assert any(r["kind"] in ("drag", "wheel_down", "key") and r["responded"] for r in results)
+    # 描画領域の外のスロットは押さない
+    clicks = [e.data["pos"] for e in events if e.kind == "op" and e.data["kind"] == "click"]
+    assert clicks and all(0 <= x <= BOUNDS.w and 0 <= y <= BOUNDS.h for x, y in clicks)
+
+
+def _list_state(offset=0.0):
+    st = GameState()
+    st.feed(Event("game", "menu", {"name": "ListUI", "modal": True, "buttons": [
+        {"name": "Slot", "rect": [0.2, 0.1 + 0.2 * i - offset, 0.8, 0.25 + 0.2 * i - offset]} for i in range(LIST_SLOTS)
+    ]}, 0))
+    return st
+
+
+def test_offscreen_buttons_are_not_targets_and_scrolling_changes_signature():
+    st = _list_state()
+    assert [t.label for t in st.targets()] == ["ListUI/Slot"] + [f"ListUI/Slot#{i}" for i in range(1, 5)]
+    scrolled = _list_state(0.4)
+    assert [t.label for t in scrolled.targets()][0] == "ListUI/Slot#2"  # 番号はスクロールしても変わらない
+    assert st.signature() != scrolled.signature()
+    assert st.top_modal().area == (0.2, 0.1, 0.8, 1.0)  # 描画領域で切り取る
+
+
+def test_modal_candidates_have_move_and_leave_groups():
+    ops = normal_candidates(_list_state(), Guard({}), FUZZ_DEFAULTS["weights"], allow_exit=False)
+    groups = {op.group for op in ops}
+    assert groups == {"button", "move", "leave"}
+    labels = {op.label for op in ops}
+    assert {"drag up", "key down", "key enter", "key esc", "right_click", "wheel_down 3"} <= labels
+    assert all(op.point is not None for op in ops if op.kind == "drag")
+
+
+def test_decider_does_not_bury_leave_under_many_buttons():
+    st = GameState()
+    st.feed(Event("game", "menu", {"name": "ListUI", "modal": True, "buttons": [
+        {"name": "Slot", "rect": [0.0, i / 60, 0.1, (i + 0.5) / 60]} for i in range(50)
+    ]}, 0))
+    ops = normal_candidates(st, Guard({}), FUZZ_DEFAULTS["weights"], allow_exit=False)
+    d = RandomDecider(random.Random(0), 0.2)
+    picked = []
+    for _ in range(30):
+        op = d.choose("modal:ListUI", ops)
+        d.feedback("modal:ListUI", op, responded=False)
+        picked.append(op.group)
+    # click 5 : move 2 : leave 1 なので、30回のうち抜ける操作は数回は出る（ボタン1つあたりで分けると 1/50 未満）
+    assert picked.count("leave") >= 2, picked
+    assert picked.count("move") >= 4, picked

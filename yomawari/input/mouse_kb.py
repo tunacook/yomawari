@@ -26,6 +26,13 @@ class PyAutoGuiDriver:
     def scroll(self, x: float, y: float, amount: int) -> None:
         self._g.scroll(amount, x=x, y=y)
 
+    def drag(self, x0: float, y0: float, x1: float, y1: float) -> None:
+        # 一瞬で動かすと、ScrollRect がドラッグではなくクリックとして扱うことがある
+        self._g.moveTo(x0, y0)
+        self._g.mouseDown()
+        self._g.moveTo(x1, y1, duration=0.3)
+        self._g.mouseUp()
+
     def key(self, name: str) -> None:
         self._g.press(name)
 

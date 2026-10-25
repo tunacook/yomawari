@@ -60,6 +60,8 @@ class Pointer:
         current = self.state.find(target.key, target.nth)
         if current is None:
             raise PointerError(f"{target.key} は押す直前に画面から消えました")
+        if not current.visible:
+            raise PointerError(f"{target.label} は押す直前に描画領域の外へ出ました")
         return self.click_at((current.rect[0] + current.rect[2]) / 2, (current.rect[1] + current.rect[3]) / 2,
                              button, clicks)
 
@@ -77,6 +79,15 @@ class Pointer:
         self.ensure_front()
         self.driver.scroll(x, y, amount)
         return (x, y)
+
+    def drag(self, nx0: float, ny0: float, nx1: float, ny1: float) -> tuple[float, float]:
+        """描画領域の正規化座標 (nx0, ny0) から (nx1, ny1) までドラッグし、始点の画面座標を返す。"""
+        area = self.area()
+        x0, y0 = area.to_screen(nx0, ny0)
+        x1, y1 = area.to_screen(nx1, ny1)
+        self.ensure_front()
+        self.driver.drag(x0, y0, x1, y1)
+        return (x0, y0)
 
     def key(self, name: str, times: int = 1) -> None:
         self.area()  # ウィンドウが出ていなければ押さない

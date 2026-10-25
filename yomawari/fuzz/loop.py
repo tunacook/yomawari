@@ -30,6 +30,8 @@ from .ops import Op, escape_candidates, irregular_candidates, normal_candidates,
 
 # イレギュラー操作を差し込むきっかけにするゲームのイベント
 TRIGGERS = {"transition", "line", "choices", "save", "load", "scene"}
+# drag の向き → 描画領域の正規化座標での移動の向き（上へドラッグすると、下にある項目が出てくる）
+DRAG = {"up": (0.0, -1.0), "down": (0.0, 1.0), "left": (-1.0, 0.0), "right": (1.0, 0.0)}
 
 
 @dataclass
@@ -279,10 +281,15 @@ class FuzzSession:
             return p.click_at(ax, ay, clicks=int(op.arg or 1))
         if k == "right_click":
             return p.click_at(ax, ay, button="right")
+        px, py = op.point or (ax, ay)
         if k == "wheel_up":
-            return p.scroll_at(ax, ay, int(op.arg or 1))
+            return p.scroll_at(px, py, int(op.arg or 1))
         if k == "wheel_down":
-            return p.scroll_at(ax, ay, -int(op.arg or 1))
+            return p.scroll_at(px, py, -int(op.arg or 1))
+        if k == "drag":
+            dx, dy = DRAG[str(op.arg)]
+            d = float(self.cfg["drag_distance"])
+            return p.drag(px, py, px + dx * d, py + dy * d)
         if k == "key":
             p.key(str(op.arg))
             return None
