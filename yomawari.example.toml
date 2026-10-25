@@ -56,12 +56,15 @@ stuck_modal_sec = 5           # ボタンのないモーダルがこの時間残
 external_wait_sec = 3         # external のボタンを押してから前面を確かめるまで
 exit_min_interval_sec = 1800  # expect_exit のボタンを押す間隔の下限
 no_response_factor = 0.2      # 押して反応がなかった操作の重みに、反応がなかった回数だけ掛ける（同じ状態で後回しにする）
+drag_distance = 0.3           # モーダルな画面でドラッグする距離（描画領域の幅・高さに対する割合）
 
 [fuzz.weights]                # 通常の操作の重み
 advance = 20
 right_click = 1
 wheel_up = 1
-click = 5
+click = 5                     # ボタン・選択肢を押す（ボタンがいくつあっても、まとめてこの重み。まだ押していないものから選ぶ）
+move = 2                      # モーダルな画面を動かす（ドラッグ・ホイール・方向キー・Enter）
+leave = 1                     # モーダルな画面を抜ける（Esc・右クリック）
 
 [decider]
 kind = "random"              # random（local / jev はフェーズ7）

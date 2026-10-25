@@ -45,7 +45,8 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "external_wait_sec": 3.0,
     "exit_min_interval_sec": 1800.0,
     "no_response_factor": 0.2,
-    "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5},
+    "drag_distance": 0.3,
+    "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")
 

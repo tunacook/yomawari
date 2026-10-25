@@ -2,6 +2,11 @@
 
 通常の操作（本文送り、ボタン、選択肢など）と、イレギュラー操作（連打、フェード中の右クリックなど）を分けて作る。
 どのボタンを候補に入れるかは Guard が決める。重みは yomawari.toml の [fuzz.weights]。
+
+ボタンのあるモーダルな画面では、ボタンを押す操作のほかに、画面を動かす操作（ドラッグ・ホイール・方向キー）と、
+画面を抜ける操作（Esc・右クリック）も候補に入れる。スクロールしないと出てこない項目や、キー操作で選ぶ画面、
+閉じるボタンがボタンの山に埋もれた画面で止まらないように。3つは group で分け、Decider はまずグループを
+重みで選ぶ（ボタンがいくつあっても、動かす・抜ける操作を一定の割合で試す）。
 """
 
 from __future__ import annotations
@@ -16,7 +21,8 @@ from .guard import Guard
 #   advance       描画領域の advance_point を1回クリック（本文送り）
 #   click         target を1回クリック
 #   right_click   advance_point を右クリック
-#   wheel_up / wheel_down  advance_point でホイール
+#   wheel_up / wheel_down  point（なければ advance_point）でホイール
+#   drag          point から arg の向き（up / down / left / right）へドラッグ
 #   key           arg のキーを押す
 #   rapid_click   advance_point を arg 回連打
 #   rapid_key     arg のキーを rapid_count 回連打
@@ -33,6 +39,8 @@ class Op:
     irregular: bool = False
     weight: float = 1.0
     novelty: bool = False  # True なら Decider が試行回数で重みを下げる
+    group: str | None = None  # Decider がまとめて選ぶ単位（button / move / leave）。None なら操作ごと
+    point: tuple[float, float] | None = None  # ホイール・ドラッグの位置（描画領域の正規化座標）
 
     @property
     def label(self) -> str:
@@ -66,17 +74,21 @@ def normal_candidates(state: GameState, guard: Guard, weights: dict[str, float],
         return []
     targets = state.targets()
     ops: list[Op] = []
+    click = float(weights["click"])
     for t in targets:
         kind = guard.kind_of(t.key)
         if kind is None:
-            ops.append(Op("click", t, weight=float(weights["click"]), novelty=True))
+            ops.append(Op("click", t, weight=click, novelty=True, group="button"))
         elif kind == "expect_exit" and allow_exit:
-            ops.append(Op("expect_exit", t, weight=float(weights["click"]), novelty=True))
+            ops.append(Op("expect_exit", t, weight=click, novelty=True, group="button"))
         elif kind == "external" and guard.external_available(t.key):
-            ops.append(Op("external", t, weight=float(weights["click"]), novelty=True))
+            ops.append(Op("external", t, weight=click, novelty=True, group="button"))
+    top = state.top_modal()
+    if top is not None and top.buttons:
+        ops.extend(modal_candidates(top.area, weights))
     if targets:
         return ops
-    if state.top_modal() is not None:
+    if top is not None:
         # ボタンのないモーダル（暗転の幕など）。抜け出す操作は loop が時間を見て足す
         return []
     return [
@@ -84,6 +96,20 @@ def normal_candidates(state: GameState, guard: Guard, weights: dict[str, float],
         Op("right_click", weight=float(weights["right_click"])),
         Op("wheel_up", arg=1, weight=float(weights["wheel_up"])),
     ]
+
+
+def modal_candidates(area: tuple[float, float, float, float] | None, weights: dict[str, float]) -> list[Op]:
+    """ボタンのあるモーダルな画面で、ボタンを押す以外に試す操作（動かす・抜ける）。"""
+    x0, y0, x1, y1 = area or (0.0, 0.0, 1.0, 1.0)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    move, leave = float(weights["move"]), float(weights["leave"])
+    ops = [Op("drag", arg=d, weight=move, novelty=True, group="move", point=(cx, cy))
+           for d in ("up", "down", "left", "right")]
+    ops += [Op(k, arg=3, weight=move, novelty=True, group="move", point=(cx, cy)) for k in ("wheel_down", "wheel_up")]
+    ops += [Op("key", arg=k, weight=move, novelty=True, group="move") for k in ("down", "up", "right", "left", "enter")]
+    ops += [Op("key", arg="esc", weight=leave, novelty=True, group="leave"),
+            Op("right_click", weight=leave, novelty=True, group="leave")]
+    return ops
 
 
 def escape_candidates() -> list[Op]:

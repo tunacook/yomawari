@@ -53,6 +53,12 @@ class Target:
             return f"{self.menu}/{self.text}"
         return f"{self.key}#{self.nth}" if self.nth else self.key
 
+    @property
+    def visible(self) -> bool:
+        """中心が描画領域の中にあるか。スクロールで隠れた項目は、ゲームが矩形を画面の外のまま出してくることがある。"""
+        cx, cy = (self.rect[0] + self.rect[2]) / 2, (self.rect[1] + self.rect[3]) / 2
+        return 0 <= cx <= 1 and 0 <= cy <= 1
+
 
 @dataclass
 class Menu:
@@ -60,6 +66,21 @@ class Menu:
     modal: bool
     buttons: list[Target]
     order: int  # 表示された順番（大きいほど新しい）
+
+    @property
+    def visible_buttons(self) -> list[Target]:
+        return [b for b in self.buttons if b.visible]
+
+    @property
+    def area(self) -> Rect | None:
+        """ボタン全体を囲む矩形を描画領域で切り取ったもの。スクロールの操作をこの上でする。"""
+        if not self.buttons:
+            return None
+        x0 = max(0.0, min(b.rect[0] for b in self.buttons))
+        y0 = max(0.0, min(b.rect[1] for b in self.buttons))
+        x1 = min(1.0, max(b.rect[2] for b in self.buttons))
+        y1 = min(1.0, max(b.rect[3] for b in self.buttons))
+        return (x0, y0, x1, y1) if x1 > x0 and y1 > y0 else None
 
 
 @dataclass
@@ -168,13 +189,13 @@ class GameState:
         return max(modals, key=lambda m: m.order) if modals else None
 
     def targets(self) -> list[Target]:
-        """いま押せるもの。モーダルな menu があれば、いちばん新しいモーダルのボタンだけ。"""
+        """いま押せるもの。モーダルな menu があれば、いちばん新しいモーダルのボタンだけ。画面の外のボタンは除く。"""
         top = self.top_modal()
         if top is not None:
-            return list(top.buttons)
-        out = list(self.choices)
+            return top.visible_buttons
+        out = [c for c in self.choices if c.visible]
         for m in sorted(self.menus.values(), key=lambda m: -m.order):
-            out.extend(m.buttons)
+            out.extend(m.visible_buttons)
         return out
 
     def find(self, key: str, nth: int = 0) -> Target | None:
@@ -191,13 +212,14 @@ class GameState:
     def signature(self) -> tuple[Any, ...]:
         """画面の状態の要約。操作のあとにこれが変われば「反応があった」とみなす。
 
-        ボタンの矩形は含めない（マウスを載せただけで変わることがあるため）。
+        ボタンの矩形は含めない（マウスを載せただけで変わることがあるため）。見えているボタンの並びは含める
+        （スクロールすると変わる）。
         """
         return (
             self.scene,
             self.line["line_id"] if self.line else None,
             self.line_done,
-            tuple(sorted((m.name, m.modal, tuple(b.label for b in m.buttons)) for m in self.menus.values())),
+            tuple(sorted((m.name, m.modal, tuple(b.label for b in m.visible_buttons)) for m in self.menus.values())),
             tuple(c.key for c in self.choices),
             self.busy,
         )
