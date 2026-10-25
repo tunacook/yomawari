@@ -37,8 +37,34 @@ allow_fullscreen_switch = true
 [exclude]
 dark_labels = ["ch1_blackout"]   # 意図的な暗転・長い静止演出（フェーズ3〜）
 
+[guard.buttons]               # 押したあとの扱い（DESIGN.md §9）。"<menu>/<ボタン>" は yomawari inspect で調べる
+expect_exit = []              # 押すと終了するボタン。終了コード 0 で終わるかを確かめ、再起動して続ける
+external = []                 # ブラウザなどを開くボタン。1回のランで1回だけ押す
+irregular_only = []           # タイトルへ戻る、解像度・言語の変更など。fuzz のイレギュラー操作のときだけ押す
+deny = []                     # 押さない（課金、データの送信など）
+# 例: expect_exit = ["TitleUI/QuitButton", "RClickMenuUI/ToExit"]
+
+[fuzz]
+op_interval_sec = 0.5         # 通常の操作の間隔
+settle_sec = 0.5              # 画面が変わってから次の操作までに待つ時間
+advance_point = [0.5, 0.5]    # 本文送り・右クリック・ホイールの位置（描画領域の正規化座標）
+trigger_prob = 0.3            # fuzz: きっかけのイベントでイレギュラー操作を差し込む確率
+trigger_delay_max_sec = 0.5   # きっかけから差し込むまでの遅延の上限
+irregular_prob = 0.05         # fuzz: 通常の操作の代わりにイレギュラー操作をする確率
+rapid_count = 10              # 連打の回数
+stuck_modal_sec = 5           # ボタンのないモーダルがこの時間残ったら、Esc・右クリックで抜けようとする
+external_wait_sec = 3         # external のボタンを押してから前面を確かめるまで
+exit_min_interval_sec = 1800  # expect_exit のボタンを押す間隔の下限
+no_response_factor = 0.2      # 押して反応がなかった操作の重みに、反応がなかった回数だけ掛ける（同じ状態で後回しにする）
+
+[fuzz.weights]                # 通常の操作の重み
+advance = 20
+right_click = 1
+wheel_up = 1
+click = 5
+
 [decider]
-kind = "random"              # random | local | jev（フェーズ2〜）
+kind = "random"              # random（local / jev はフェーズ7）
 model = ""
 
 [judge]

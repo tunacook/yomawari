@@ -1,6 +1,7 @@
 """ラン・ライフサイクル: 準備 → 起動 → 監視 → （クラッシュ時は再起動して継続）→ 終了処理 → 後処理。
 
 フェーズ1ではハーネス本体と同じプロセス内で動かす。別プロセス化はフェーズ6で行う。
+fuzz / random モードでは、起動ごとに FuzzSession（fuzz/loop.py）を動かしてゲームを操作する。aging は観測のみ。
 """
 
 from __future__ import annotations
@@ -21,8 +22,13 @@ from typing import Any
 from . import __version__, launcher
 from .bus import EventBus
 from .config import BuildConfig
-from .detect.engine import Engine, Rule
+from .detect.engine import Engine, Rule, RuleError
 from .events import Event, Issue, now_wall
+from .fuzz.decider import RandomDecider
+from .fuzz.guard import Guard
+from .fuzz.loop import FuzzRun, FuzzSession
+from .input.base import InputDriver
+from .input.pointer import Pointer
 from .platform import Platform
 from .post.report import RunSummary, write_report
 from .savestate import SaveState, resolve_target
@@ -75,6 +81,9 @@ class Harness:
         run_cfg: dict[str, Any],
         sensor_cfg: dict[str, Any],
         on_status: StatusCallback | None = None,
+        fuzz_cfg: dict[str, Any] | None = None,
+        guard_buttons: dict[str, list[str]] | None = None,
+        driver_factory: Callable[[], InputDriver] | None = None,
     ) -> None:
         self.build = build
         self.exe = exe
@@ -85,6 +94,9 @@ class Harness:
         self.run_cfg = run_cfg
         self.sensor_cfg = sensor_cfg
         self.on_status = on_status
+        self.fuzz_cfg = fuzz_cfg or {}
+        self.guard_buttons = guard_buttons or {}
+        self.driver_factory = driver_factory
         self.engine = Engine(rules)
         self.state = GameState()
         self.issues: list[Issue] = []
@@ -92,7 +104,12 @@ class Harness:
         self.launches = 0
         self.restarts = 0
         self._stopping = False
+        self._expect_exit = False
         self._restart_req: asyncio.Event | None = None
+        self._fuzz: FuzzRun | None = None
+        self._session_fuzz: FuzzSession | None = None
+        self._driver: InputDriver | None = None
+        self._fuzz_task: asyncio.Task[None] | None = None
         self._crash_seen: set[Path] = set()
         self._bus: EventBus | None = None
         self._started = 0.0
@@ -109,8 +126,20 @@ class Harness:
             return
         self.state.feed(ev)
         self._handle_issues(self.engine.feed(ev))
-        if ev.kind == "proc_exit" and not ev.data["by_harness"] and self._restart_req is not None:
-            self._restart_req.set()
+        if self._session_fuzz is not None:
+            self._session_fuzz.on_event(ev)
+        if ev.kind == "external":
+            d = ev.data
+            self.notes.append(
+                f"外部を開く操作 {d['target']}（起動 #{ev.launch}）: 前面のアプリが"
+                f"{'切り替わった' if d['front_changed'] else '切り替わらなかった'}。ゲームを前面に"
+                f"{'戻せた' if d['back'] else '戻せなかった'}（開いた先の中身は人が確認する）"
+            )
+        elif ev.kind == "op_stopped":
+            self.notes.append(f"操作を止めました（起動 #{ev.launch}、{ev.data['label']}）: {ev.data['error']}。以降は観測のみ")
+        if ev.kind == "proc_exit" and self._restart_req is not None:
+            if not ev.data["by_harness"] or self._expect_exit:
+                self._restart_req.set()
 
     def _handle_issues(self, issues: list[Issue]) -> None:
         for i in issues:
@@ -156,15 +185,22 @@ class Harness:
                 "counts": counts,
                 "last": f"{last.rule_id} {last.detail}" if last else "",
                 "scene": self.state.scene,
+                "ops": (self._fuzz.stats["normal"] + self._fuzz.stats["irregular"]) if self._fuzz else None,
             }
         )
 
     # --- 1回の起動 ---
 
+    def _on_expect_exit(self, expecting: bool) -> None:
+        # 終了を期待するボタンを押す。プロセスの終了はハーネスの終了操作として扱う（C-01 にしない）。
+        # ハーネス自身の停止（_stopping）とは分けて持つ（押すのに失敗して取り消すときに、停止中の印まで消さないように）
+        self._expect_exit = expecting
+
     async def _session(self, launch: int, deadline: float, run_dir: Path) -> str:
-        """ゲームを1回起動して監視する。戻り値は "restart" か "deadline"。"""
+        """ゲームを1回起動して監視する。戻り値は "restart"、"relaunch"（終了を期待する操作で終わった）か "deadline"。"""
         log_path = run_dir / ("player.log" if launch == 0 else f"player.{launch}.log")
         self._stopping = False
+        self._expect_exit = False
         self._restart_req = asyncio.Event()
         stop = asyncio.Event()
         since = time.time() - 1.0
@@ -188,7 +224,7 @@ class Harness:
             asyncio.create_task(
                 watch_process(
                     proc, self._publish, launch, stop, float(s["process_poll_sec"]),
-                    lambda: self._stopping,
+                    lambda: self._stopping or self._expect_exit,
                 )
             ),
             asyncio.create_task(
@@ -199,19 +235,25 @@ class Harness:
             ),
             asyncio.create_task(self._ticker(launch, stop)),
         ]
+        if self._fuzz is not None and self._driver is not None:
+            pointer = Pointer(self.platform, self._driver, proc.pid, self.state)
+            self._session_fuzz = FuzzSession(self._fuzz, self.state, pointer, self._publish, launch, self._on_expect_exit)
+            self._fuzz_task = asyncio.create_task(self._session_fuzz.loop(stop))
+            tasks.append(self._fuzz_task)
         reason = "deadline"
         cancelled = False
         try:
             remaining = max(0.0, deadline - time.monotonic())
             try:
                 await asyncio.wait_for(self._restart_req.wait(), timeout=remaining)
-                reason = "restart"
+                reason = "relaunch" if self._expect_exit and proc.poll() is not None else "restart"
             except TimeoutError:
                 pass
         except asyncio.CancelledError:
             cancelled = True
             raise
         finally:
+            self._session_fuzz = None
             await self._end_session(proc, stop, tasks, wait_dump=not cancelled and reason == "restart")
         return reason
 
@@ -222,6 +264,10 @@ class Harness:
         tasks: list[asyncio.Task[None]],
         wait_dump: bool,
     ) -> None:
+        if self._fuzz_task is not None:
+            # ゲームを止める前に操作をやめる（止めている最中に押さないように）
+            self._fuzz_task.cancel()
+            self._fuzz_task = None
         if proc.poll() is None:
             self._stopping = True
             await asyncio.to_thread(launcher.stop, proc, float(self.run_cfg["quit_timeout_sec"]))
@@ -241,7 +287,21 @@ class Harness:
         started_wall = now_wall()
         seed = str(random.randrange(2**31)) if opts.seed == "auto" else opts.seed
         if opts.mode != "aging":
-            self.notes.append(f"モード {opts.mode} の操作はフェーズ2以降で実装予定。今回は観測のみ（aging 相当）")
+            if "S-01" not in self.rules:
+                raise RuleError(f"モード {opts.mode} には rules.yaml の S-01（応答を待つ時間）が必要です")
+            self._fuzz = FuzzRun(
+                mode=opts.mode,
+                decider=RandomDecider(random.Random(seed), float(self.fuzz_cfg["no_response_factor"])),
+                guard=Guard(self.guard_buttons),
+                rng=random.Random(f"{seed}:trigger"),
+                cfg=self.fuzz_cfg,
+                response_timeout=float(self.rules["S-01"].param("timeout_sec")),
+            )
+            if self.driver_factory is None:
+                from .input.mouse_kb import PyAutoGuiDriver
+
+                self.driver_factory = PyAutoGuiDriver
+            self._driver = self.driver_factory()
         if self.engine.unimplemented:
             self.notes.append(f"未実装のため評価していないルール: {', '.join(self.engine.unimplemented)}")
 
@@ -264,8 +324,12 @@ class Harness:
             max_restarts = int(self.run_cfg["max_restarts"])
             while time.monotonic() < deadline:
                 reason = await self._session(launch, deadline, run_dir)
-                if reason != "restart":
+                if reason == "deadline":
                     break
+                if reason == "relaunch":
+                    # 終了を期待する操作で終わった。再起動の上限には数えない
+                    launch += 1
+                    continue
                 if self.restarts >= max_restarts:
                     self.notes.append(f"再起動回数が上限（{max_restarts}）に達したため打ち切りました")
                     break
@@ -281,6 +345,8 @@ class Harness:
                     self.notes += saves.restore()
                 except Exception as e:  # 復元の失敗は必ずレポートに残す
                     self.notes.append(f"セーブ・設定の復元に失敗しました: {e!r}（yomawari restore で再試行できます）")
+            if self._fuzz is not None:
+                self.notes.append(self._fuzz.summary())
             self._status(time.monotonic(), force=True)
             self._bus.close()
             summary = RunSummary(

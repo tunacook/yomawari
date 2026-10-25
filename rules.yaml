@@ -33,6 +33,16 @@ rules:
     params:
       timeout_sec: 30
 
+  - id: C-04
+    severity: major
+    title: 終了操作のあともプロセスが残る
+    description: >-
+      [guard.buttons] の expect_exit のボタン（タイトルの「終了」など）を押してから、一定時間たってもプロセスが終了しない。
+      確認ダイアログが出るゲームでは、ダイアログの「はい」を expect_exit に書く
+    on_detect: restart
+    params:
+      timeout_sec: 10
+
   - id: H-01
     severity: critical
     title: ハング（ハートビート途絶）
@@ -51,3 +61,44 @@ rules:
       types: [Error, Exception, Assert]
       # 誤検知になる既知のメッセージ（正規表現）。ゲームごとに追記する
       ignore_patterns: []
+
+  - id: S-01
+    severity: critical
+    title: 応答確認に反応しない
+    description: >-
+      イレギュラー操作のあと、次の通常の操作（本文送り・ボタン）で画面の状態が変わらない（ハートビートは生存）。
+      画面の状態は scene・行ID・menu とボタンの並び・選択肢・暗転中かどうかで比べる（ボタンの矩形は比べない）
+    on_detect: restart
+    params:
+      timeout_sec: 5
+      # ハートビートがこの秒数以内に来ていれば「生存」とみなす（途絶えていれば H-01 の担当）
+      heartbeat_alive_sec: 3
+
+  - id: S-02
+    severity: critical
+    title: 本文が進まない
+    description: 本文を送るクリックを続けても line / choices / scene が来ない
+    on_detect: restart
+    params:
+      clicks: 20
+      heartbeat_alive_sec: 3
+
+  - id: S-03
+    severity: critical
+    title: 暗転・遷移が終わらない
+    description: transition の開始から一定時間たっても終了が来ない
+    on_detect: restart
+    params:
+      timeout_sec: 10
+
+  - id: S-05
+    severity: major
+    title: ボタンを押しても反応しない
+    description: >-
+      menu のボタン（矩形の中心）を押しても画面の状態が変わらない回が、同じボタンで続く。
+      押しても menu の並びが変わらないもの（トグル、ドロップダウンなど）は ignore_patterns で除く
+    params:
+      consecutive: 3
+      heartbeat_alive_sec: 3
+      # "<menu>/<ボタン>" に対する正規表現。ゲームごとに追記する
+      ignore_patterns: ["Toggle", "Dropdown", "Slider"]

@@ -26,7 +26,8 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 | 実行環境 | 主にM3 Mac（Apple Silicon）。Windowsは後日、同じハーネスをWindows機に置く |
 | 負荷 | ローカル負荷はかけてよい |
 | 通知 | 不要。完了後にMarkdownを開くだけ |
-| AI | 判定と制御は原則コード（ルールベース）。AIはローカルモデル（Ollama）を補助的に使う |
+| AI | 判定と制御は原則コード（ルールベース）。AIはローカルモデル（Ollama）を補助的に使う。画面を見てゲームの進め方を把握することは AI に期待しない |
+| ゲーム固有の仕様 | 標準部品から自動で読み取る → ゲームのコードがインターフェースで伝える → テストのやり方をゲームのプロファイルに事前に書く、の3層で定義する（§9「ゲーム固有の仕様」） |
 | 言語 | Python 3.11+、arm64ネイティブ、環境管理は uv |
 
 ### やらないこと（現時点）
@@ -35,6 +36,8 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 - スマホ等への通知
 - ゲームパッド入力（`InputDriver` の差し替え口だけ用意）
 - シナリオ本文の内容の正しさの判定
+- 画面を見てゲームの進め方を AI に把握させること（進め方の知識は、ゲームのプロファイルに事前に書く）
+- 謎解きや選択の正解をプロファイルに書くこと（まだ試していない操作からの総当たりで進め、見つけた正解は §9「経験の蓄積」でハーネスが覚える）
 
 ---
 
@@ -107,7 +110,7 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 | `line_done` | `line_id` | 文字送り完了。操作の待ち合わせ |
 | `choices` | `items: [{id, text, rect, locked}]` | クリック候補。並びか矩形が変わったときにも出し直す |
 | `choices_done` | `id`, `index` | 選択確定。`index` は直前の `choices` の中での順番（不明なら -1） |
-| `menu` | `name`, `modal`, `buttons: [{name, rect}]` | メニュー表示とクリック候補。押せるボタンの並びか矩形が変わったときにも出し直す |
+| `menu` | `name`, `modal`, `buttons: [{name, rect, type, role, locked}]`, `scroll` | メニュー表示とクリック候補。押せるボタンの並びか矩形が変わったときにも出し直す。`rect` はスクロール領域と画面で切り取った見えている部分で、見えていないボタンは出さない。`type` は `button` / `toggle` / `dropdown` / `slider` / `input` / `other`。`role` はボタンの役割（`exit` / `external` / `to_title` / `system_setting` / `new_game` / `deny`。§9 ガード）で、分からなければ出さない。`locked` は §9「ゲーム固有の仕様」② のインターフェースが押せないと答えたもの。`scroll` はスクロール領域ごとの `{rect, up, down, left, right}`（その方向にまだ項目があるか）。開いたドロップダウンのリスト（標準の `Dropdown` / `TMP_Dropdown` のもの）は、`name` が `<ドロップダウンの name>.List` のモーダルな `menu` として出す |
 | `menu_close` | `name` | 応答確認 |
 | `transition` | `phase: start/end`, `name` | 操作待ち、進行不能判定 |
 | `resolution` | `w`, `h`, `mode` | 起動直後と変化時（`Update` で監視）。描画領域の位置と Retina 倍率の計算（§8）、解像度テスト |
@@ -182,12 +185,12 @@ yomawari/
 │   │   ├─ mouse_kb.py   # pyautogui 実装
 │   │   └─ pointer.py    # 状態の rect を画面座標に直して押す（前面化、押す直前の確認）
 │   ├─ fuzz/
-│   │   ├─ loop.py       # トリガー → 操作 → 応答確認
-│   │   ├─ ops_ui.py     # UI上のイレギュラー操作カタログ
-│   │   ├─ ops_os.py     # OS上の操作カタログ
-│   │   ├─ guard.py      # 禁止操作、押す直前の存在確認
-│   │   ├─ coverage.py   # 状態×操作の試行回数
-│   │   └─ deciders.py   # Decider: random / local(Ollama) / jev(将来)
+│   │   ├─ loop.py       # トリガー → 操作 → 反応の確認（op / op_result イベントを出す）
+│   │   ├─ ops.py        # 操作の種類と、状態から候補を作る（UI 上の通常の操作・イレギュラー操作）
+│   │   ├─ ops_os.py     # OS上の操作カタログ（フェーズ3）
+│   │   ├─ guard.py      # [guard.buttons] の区分
+│   │   ├─ decider.py    # Decider: random（状態×操作の試行回数）/ local(Ollama) / jev(将来)
+│   │   └─ experience.py # 経験の蓄積（集計ファイルの読み書き）と体験レポート
 │   ├─ detect/
 │   │   ├─ engine.py     # rules.yaml を読んで評価
 │   │   └─ visual.py     # 黒画面・静止・SSIM 等の画像特徴量
@@ -202,6 +205,7 @@ yomawari/
 │   └─ com.tunacook.yomawari/   # ゲーム側の UPM パッケージ（§3）
 ├─ rules.yaml
 ├─ yomawari.example.toml
+├─ examples/profiles/   # ゲームのプロファイルの記述例（エンジンごと）
 ├─ tests/
 └─ pyproject.toml
 ```
@@ -212,12 +216,14 @@ yomawari/
 
 ### コマンド
 ```bash
-yomawari run [--build NAME | --build-path PATH] [--hours 8] [--mode fuzz|aging|random] [--seed N] [--no-open]
+yomawari run [--build NAME | --build-path PATH] [--hours 8] [--mode fuzz|random|aging] [--seed N] [--no-open]
+#   fuzz: 通常の操作 + イレギュラー操作 / random: 通常の操作のみ / aging: 操作せず観測のみ
 yomawari replay <issue-id>
 yomawari minimize <issue-id>
 yomawari report <run-id>
 yomawari builds list | add NAME PATH | edit NAME | check NAME
 yomawari inspect [--build NAME] [--seconds 60] [--click MENU/BUTTON ...]   # 画面の menu とボタン名を見る。押して入力を確かめる
+yomawari experience report [--build NAME] [--out PATH]   # 経験の蓄積から体験レポート（Markdown）を出す（§9「経験の蓄積」）
 yomawari doctor
 yomawari schedule install --at 01:00 | uninstall
 yomawari restore
@@ -288,8 +294,27 @@ dark_labels = ["ch1_blackout"]   # 意図的な暗転・長い静止演出
 [guard.buttons]               # §9 ガード。"<menu の name>/<ボタンの name>"
 expect_exit = ["TitleUI/QuitButton", "RClickMenuUI/ToExit"]
 external = ["TitleUI/WebSiteButton"]
-irregular_only = ["RClickMenuUI/ToTitle", "TitleUI/NewGameButton", "ExSettingsUI/ResolutionDropdown"]
+irregular_only = ["RClickMenuUI/ToTitle", "ExSettingsUI/ResolutionDropdown"]
 deny = []
+
+[fuzz]                        # §9 ファジング
+op_interval_sec = 0.5         # 通常の操作の間隔
+settle_sec = 0.5              # 画面が変わってから次の操作までに待つ時間
+advance_point = [0.5, 0.5]    # 本文送り・右クリック・ホイールの位置（描画領域の正規化座標）
+trigger_prob = 0.3            # fuzz: きっかけのイベントでイレギュラー操作を差し込む確率
+trigger_delay_max_sec = 0.5   # きっかけから差し込むまでの遅延の上限（0〜この値でランダム）
+irregular_prob = 0.05         # fuzz: 通常の操作の代わりにイレギュラー操作をする確率（時間ベース）
+rapid_count = 10              # 連打の回数
+stuck_modal_sec = 5           # ボタンのないモーダルがこの時間残ったら、Esc・右クリックで抜けようとする
+external_wait_sec = 3         # external のボタンを押してから前面を確かめるまで
+exit_min_interval_sec = 1800  # expect_exit のボタンを押す間隔の下限（ラン開始からも数える）
+no_response_factor = 0.2      # 押して反応がなかった操作の重みに、反応がなかった回数だけ掛ける
+
+[fuzz.weights]                # 通常の操作の重み
+advance = 20
+right_click = 1
+wheel_up = 1
+click = 5                     # ボタン・選択肢1つあたり（まだ押していないものほど選ばれやすい）
 
 [decider]
 kind = "random"              # random | local | jev
@@ -345,6 +370,8 @@ model = "<画像対応モデル名:タグ>"
 - Retina: キャプチャはピクセル、入力はポイント単位（2倍差）に注意
 - 描画領域の求め方: OS から取れるのはウィンドウの外枠（タイトルバー込み、ポイント）だけなので、ゲームの `resolution`（描画領域のピクセル数）と組み合わせる。倍率 = `w` / 外枠の幅、描画領域の高さ = `h` / 倍率、描画領域は外枠の下端に揃える。辻褄が合わなければ押さない
 - 押す前に、ゲームが前面でなければ前面にする。押す直前に、押す要素が最新の状態に残っているか確かめる
+- macOS の前面のアプリは `lsappinfo front` で調べる。`NSWorkspace.frontmostApplication` は、イベントループを回していないプロセス（このハーネス）では起動時の値のまま更新されない。前面化は `NSRunningApplication.activateWithOptions_` で足りる（System Events の AppleScript は不要）
+- ウィンドウは、画面に出ているものを優先していちばん大きいものを選ぶ。Unity のゲームは画面外に隠れたウィンドウ（500x500 など）を持つことがあり、大きさだけで選ぶと取り違える
 
 ---
 
@@ -355,6 +382,32 @@ model = "<画像対応モデル名:タグ>"
 2. トリガー発火 → イレギュラー操作を1つ差し込む
 3. 応答確認（決まった操作に決まったイベントが返るか）
 4. 異常なら証跡回収、必要なら再起動して継続
+
+### モード
+| `--mode` | 通常の操作 | イレギュラー操作 | 使いどころ |
+|---|---|---|---|
+| `fuzz`（既定） | する | する | 夜間の通常のラン |
+| `random` | する | しない | 通常のプレイで先まで進むか、ボタンが反応するか |
+| `aging` | しない | しない | 放置（タイトルや本文のまま長時間置く） |
+
+### 状態ごとの通常の操作（フェーズ2の実装）
+状態トラッカー（`state.py`）の内容から、次のように候補を作る（`fuzz/ops.py`）。
+
+| 状態 | 候補 |
+|---|---|
+| 暗転・セーブ・ロードの途中（`busy`） | なし（待つ） |
+| ボタンのある menu か選択肢がある | そのボタン・選択肢（モーダルがあれば最前面のモーダルのボタンだけ）。ガードの区分に従う |
+| ボタンのないモーダル（暗転の幕など） | なし。`stuck_modal_sec` 残ったら Esc・右クリック・本文送りで抜けようとする |
+| それ以外（本文を読んでいる） | 本文送り（`advance_point` をクリック）、右クリック、ホイール上 |
+
+- 画面の状態が変わったら `settle_sec` 待ってから操作する
+- 操作のあとは、画面の状態（`GameState.signature()`: scene、行ID、本文の表示が終わったか、menu とボタンの並び、選択肢、暗転中か）が変わるまで、S-01 の `timeout_sec` まで待つ。変われば「反応あり」。ボタンの矩形は比べない（マウスを載せただけで変わるため）
+- 同じ名前のボタンが複数あるとき（セーブスロットなど）は、出てきた順に `#1`、`#2` … を付けて区別する（`[guard.buttons]` は名前だけで書く）
+- 操作は `op`、結果は `op_result`、押せなかったときは `op_error` として `events.jsonl` に残す
+- pyautogui の FailSafe（人がマウスを画面の隅に動かした）などで止まったら、以降はそのランを観測だけで続ける
+
+### イレギュラー操作（フェーズ2の実装）
+連打（クリック `rapid_count` 回、Enter・Space）、右クリック、Esc、ホイール（上下3段）、ボタンのダブルクリック、`irregular_only` のボタン。暗転・セーブの途中でも差し込む。きっかけは `transition`・`save`・`load` の開始、`line`、`choices`、`scene`（`trigger_prob` の確率で、0〜`trigger_delay_max_sec` 後）と、通常の操作の代わりに `irregular_prob` の確率。下の「UI上のイレギュラー操作」の残り（選択肢の2択ほぼ同時クリック、スキップ・オートの切り替えなど）は、ゲームごとのボタン名に頼らない形にできるものから足す
 
 ### トリガー
 ログイベント（`transition` 開始、`choices` 表示、`save` 開始、`line` 表示直後など）の受信から0〜500msのランダム遅延で操作を差し込む。時間ベースのランダム差し込みも併用。
@@ -372,12 +425,24 @@ model = "<画像対応モデル名:タグ>"
 class Decider(Protocol):
     def choose(self, state: dict, candidates: list[Op]) -> list[tuple[Op, float]]: ...
 ```
-- 初期実装は `random`: 「状態×操作」の試行回数を記録し、未試行を優先する重み付きランダム
+- 初期実装は `random`: 「状態×操作」の試行回数を記録し、未試行を優先する重み付きランダム（重み = `[fuzz.weights]` ÷ (1 + 試行回数) × `no_response_factor` ^ 反応がなかった回数。本文送りなど何度もする操作は減らさない）。状態はボタンのある menu の組み合わせで分け、本文の位置は含めない。試行回数は再起動しても引き継ぐ
 - `local`: Ollama の小さいテキストモデル（JSONスキーマで出力を固定）
 - `jev`: 将来の選択肢（TypeSafe Jev。「普通のプレイヤーがやりそうな操作」の確率が低いものを優先する使い方）
 
 ### ガード
-ボタンは「押さない」ではなく、ハーネスが押したことを分かったうえで結果を確かめる操作として扱う。ボタンは `yomawari.toml` の `[guard.buttons]` に `"<menu の name>/<ボタンの name>"` で書く（名前は `menu` イベントの値）。
+ボタンは「押さない」ではなく、ハーネスが押したことを分かったうえで結果を確かめる操作として扱う。どの区分で扱うかは、ボタンの名前ではなく役割（`menu` の `role`）で決める。役割は、ゲーム側が §9「ゲーム固有の仕様」の ① か ② で出す。プロファイルにゲームの中の名前を並べずに済むようにするため（UI を作り直しても効き続け、エンジンが違っても同じ書き方になる）。
+
+| `role` | 意味 | 既定の区分 |
+|---|---|---|
+| `exit` | 押すとゲームが終了する。確認ダイアログが出るなら、ダイアログの「はい」の側 | `expect_exit` |
+| `external` | ブラウザなど、ゲームの外のアプリを開く | `external` |
+| `to_title` | タイトルへ戻る | `irregular_only` |
+| `system_setting` | 画面モード・解像度・言語・画質など、ゲームの外側の設定を変える | `irregular_only` |
+| `new_game` | 最初から始める。本編に入る道なので通常の操作のまま | （指定なし） |
+| `deny` | 課金、データの送信など、マシンの外に影響が出る | `deny` |
+
+- 役割と区分の対応はハーネスの既定値で、プロファイルの `[guard.roles]` で変えられる（値は区分の名前。通常の操作にするなら `"normal"`）
+- `role` を出せないボタン（ゲームのコードに手を入れられないビルドを試すときなど）だけ、`[guard.buttons]` に `"<menu の name>/<ボタンの name>"` で書く（名前は `menu` イベントの値）。名前で書いたものは役割より優先する
 
 | 区分 | 扱い | 確かめること |
 |---|---|---|
@@ -387,12 +452,146 @@ class Decider(Protocol):
 | `irregular_only` | イレギュラー操作として差し込むときだけ押す（タイトルへ戻る、ニューゲーム、解像度・画面モード・言語の変更など） | 応答確認 |
 | `deny` | 押さない。マシンの外に影響が出るもの（課金、データの送信など）だけに使う | — |
 
+- `expect_exit` は、`exit_min_interval_sec` に1回まで押す。終了したら再起動するが、`max_restarts` には数えない。確認ダイアログが出るゲームでは、ダイアログの「はい」を `expect_exit` に書き、元のボタンは指定しない
+- `external` の結果（前面のアプリが切り替わったか、ゲームを前面に戻せたか）は、レポートの「ハーネスの記録」に書く
+- タイトルの「ニューゲーム」は本編に入る唯一の道なので、`irregular_only` にしない（`random` で本編に進めなくなる）
+
 - セーブの削除や上書きは指定しなくてよい（ラン前に退避し、ラン後に戻すため）
 - 押す直前に、押す位置の要素が最新の状態に含まれているか確認
 - 同一状態で同じ操作を繰り返そうとしたら次点へ
 
 ### 応答確認
 イレギュラー操作の後に毎回、決まった操作（例: メニューを開く→`menu`、閉じる→`menu_close`、クリック→`line`/`line_done`）をして、一定時間内にイベントが返るか確認。
+
+フェーズ2の実装: イレギュラー操作の次の通常の操作を応答確認として扱い、画面の状態が変わらなければ S-01。ゲームごとのボタン名に頼らずに済むため。
+- 応答確認には、同じ状態で前に反応があった操作だけを使う。空のセーブスロット、ロックされた回想、押せないロールバックなど、普段から反応しないボタンで S-01 を出さないため（Rachel の実機で、バックログの RollbackButton で誤検知した）。そういう操作がまだなければ、その回は応答確認をしない（止まっていれば S-02 が拾う）
+- 応答確認を待っている間に別のイレギュラー操作が入ったときは判定しない
+
+### ゲーム固有の仕様
+ゲームごとの画面の仕様（押せない条件、スクロール、ドロップダウンなど）は、その情報をだれが知っているかで3つの層に分けて定義する。上の層で足りるものは下の層に書かない。
+
+3層の分け方はエンジンに依存しない。ハーネスが受け取るのは §3 の形式のイベントだけで、どのエンジンが出したかは区別しない。エンジンごとに作るのは ① を担うゲーム側の部分で、yomawari の対象（§1）は Unity 製のゲームなので、いま実装するのは Unity 版（UPM パッケージ）だけにする。ほかのエンジンの考え方は `docs/game-integration.md` §6（未検証）に置く。
+
+| 層 | 置くもの | 定義する場所 | 例（Rachel） |
+|---|---|---|---|
+| ① エンジンの標準 UI から自動で読み取る | エンジンの標準 UI 部品から分かること（Unity では uGUI / TextMeshPro の標準部品と、それを継承した部品） | エンジンごとのゲーム側の実装。Unity ではパッケージ（ゲームごとの作業なし） | スクロール領域（`ScrollRect` / `RectMask2D` / `Mask`）による切り取り、その先にまだ項目があるか、ボタンの種類、開いたドロップダウンのリスト |
+| ② ゲームの状態 | ゲームのコードしか知らないこと | ゲームのコード（パッケージのインターフェースやコンポーネント） | `MemoryListGridSlot` は劇中でアンロックされるまで押せない。自作の `ToExit` は押すと終了する（`role`） |
+| ③ テストのやり方 | どう遊び、何を許容するか | ゲームのプロファイル（ゲームのリポジトリでコミットする設定ファイル） | 役割ごとの押し方を既定値から変えるもの、画面ごとの重み、既知で無害なエラー |
+
+#### ① エンジンの標準 UI から自動で読み取る
+以下は Unity 版（UPM パッケージ）の内容。Unity 版で扱えるのは、Unity の標準部品（uGUI と TextMeshPro）と、それを継承した部品だけ。自作の部品、UI Toolkit、標準部品を継承していないアセットの UI は対象外で、② か ③ で補う（下の表）。Rachel で通るからといって、ほかのゲームで通るとは限らない。
+
+| 対象 | ① で読み取る部品 | ① で拾えないとき |
+|---|---|---|
+| スクロールで隠れた項目 | `ScrollRect`、`RectMask2D`、`Mask` | ③ の `scroll`（方向キー・ドラッグ・ホイールなど、先を表示する手段）と、画面の外のボタンを押さないための矩形の切り取りは ① の範囲でだけ効く |
+| ボタンの種類 | `Button`、`Toggle`、`Dropdown` / `TMP_Dropdown`、`Slider`、`InputField` / `TMP_InputField` | `other` になる。押しても並びが変わらないものは ③ の `no_response_ok` に書く |
+| 開いたドロップダウンのリスト | `Dropdown` / `TMP_Dropdown` の `IsExpanded` と、それが作る Dropdown List | ③ の `no_response_ok` で誤検知だけを防ぐ。リストの中まで操作したいなら、② に「いま開いているポップアップと項目」を伝えるインターフェースを足す |
+
+- ボタンの矩形を、祖先の `RectMask2D` / `Mask` の矩形と画面で切り取る。中心が見えていないボタンは出さない（スクロールで隠れた項目を押して、別の要素に当たるのを防ぐ）
+- `ScrollRect` ごとに、どの方向にまだ項目があるかを `scroll` で出す。ハーネスは、見えている候補を押し尽くしたら（またはまだ試していない方向があれば）、その領域の上でホイールかドラッグをしてスクロールする
+- ボタンの種類（`type`）を出す。押しても `menu` の並びが変わらない種類（`toggle` / `dropdown` / `slider` / `input`）は、S-05 の対象から種類で外す（名前の正規表現での推測をやめる）
+- `Dropdown` / `TMP_Dropdown`（とそれを継承した部品）が開いている（`IsExpanded`）間は、リストの項目を `<ドロップダウンの name>.List` のモーダルな `menu` として出す。ハーネスは項目を選ぶか、リストの外を押して閉じる。リストが開いたことを「反応あり」とみなす
+- Naninovel の標準のボタン（タイトル画面の終了、コントロールパネルのタイトルへ戻るなど）は、パッケージの Naninovel 用の部分で `role` を出す（クラス名は実装するときに確かめる）。自作のボタンは ② で伝える
+
+#### ② ゲームの状態をインターフェースで伝える
+外からは分からない状態だけを、ゲームがパッケージのインターフェースを実装して伝える。ゲーム側の作業はインターフェースの実装だけにし、ハーネスのことを知らなくてよいようにする。
+
+```csharp
+namespace Yomawari
+{
+    // Selectable と同じ GameObject のコンポーネントに実装する
+    public interface IYomawariButtonState
+    {
+        // true のあいだ、ボタンは押せない（押しても何も起きないのが仕様）
+        bool YomawariLocked { get; }
+    }
+}
+```
+
+- `locked` のボタンは、通常の操作の候補に入れない。イレギュラー操作としてだけ押す（押しても壊れないことを確かめる）。S-05 の対象にしない
+- 足りなくなったら、同じ考え方でインターフェースを足す（例: 画面ごとの「今は操作を受け付けない」）
+
+ボタンの役割（`role`）は、① で分からないときに、ボタンにコンポーネントを付けて伝える。Unity の標準部品は「押すと何が起きるか」を持たないので、自作のボタン（Rachel の `ToExit` など）や、解像度を変える `Dropdown` には ② が要る。
+
+```csharp
+namespace Yomawari
+{
+    public enum YomawariRole { None, Exit, External, ToTitle, SystemSetting, NewGame, Deny }
+
+    // Selectable と同じ GameObject に付け、Inspector で役割を選ぶ（コードは書かない）
+    public sealed class YomawariButtonRole : MonoBehaviour
+    {
+        public YomawariRole role;
+    }
+}
+```
+
+- 名前（`[guard.buttons]`）ではなくここで伝えると、UI の名前や階層を変えても効き続ける。プレハブに付けるので、同じボタンを使う画面すべてに効く
+
+#### ③ ゲームのプロファイル
+テストのやり方は、ゲームのリポジトリに置く `yomawari.profile.toml` に書いて、チームで共有する。`yomawari.toml`（マシンごと、コミットしない）からは参照だけをする。
+
+```toml
+# yomawari.toml
+[builds.mac_dev]
+path = "~/Builds/Rachel_Dev/Rachel.app"
+profile = "~/work/Rachel/yomawari.profile.toml"
+```
+
+```toml
+# Rachel/yomawari.profile.toml
+[guard.roles]                           # 役割ごとの区分を、既定値から変えるときだけ書く
+# to_title = "normal"                   # 例: タイトルへ戻るのも通常の操作にする
+
+[guard.buttons]                         # role を出せないボタンだけ、名前で書く（最後の手段）
+# expect_exit = ["TitleUI/QuitButton"]
+
+[screens.MemoryListUI]                  # menu の name ごと
+weight = 0.5                            # この画面のボタンの重みに掛ける
+# scroll = ["key:down", "drag"]         # ① の scroll で足りないときの、先を表示する手段
+# no_response_ok = ["MemoryListGridSlot"]  # 押して反応がなくても正常。② を実装できないときの代わり
+
+[rules.L-01]                            # rules.yaml のパラメータのうち、ゲーム固有のもの
+ignore_patterns = ["<既知で無害なエラーの正規表現>"]
+```
+
+- プロファイルには、ゲームの中の名前（UI・ボタン・GameObject の名前）をなるべく書かない。ボタンの押せる・押せない・役割は ① と ② で伝え、プロファイルにはテストの方針（役割ごとの押し方、画面ごとの重み、許容するもの）だけを書く。名前を書くのは `[screens.<menu>]` と、最後の手段の `[guard.buttons]` / `no_response_ok` / `scroll` だけ
+- エンジンごとの記述例（Unity + Naninovel、ティラノスクリプト、Ren'Py）は `examples/profiles/` に置く
+- 読む順: `rules.yaml` / コードの既定値 → プロファイル → `yomawari.toml`（あとのものが上書き。配列は足し合わせる）
+- `rules.yaml` には、どのゲームにも共通の判定基準だけを残す。今 `rules.yaml` にある S-05 の `ignore_patterns` の既定値（`Toggle` などの名前）は、① の `type` に置き換えて消す
+- プロファイルに書くのは「どう遊ぶか・何を許容するか」まで。謎解きや選択の正解は書かない（§1「やらないこと」）
+
+### 経験の蓄積
+進め方の正解は人が書かず、ハーネスがランを重ねて覚える（AI は使わない。回数を数えるだけ）。1回目のランは総当たりで遅いが、2回目からは分かっている道を速く進める。記録は、ゲームの開発者がプレイ体験を見直す材料としても読めるようにする。
+
+#### 記録するもの
+| 記録 | ハーネスの使い道 | 開発者に分かること |
+|---|---|---|
+| 状態（`state_key`）× 操作ごとの、押した回数・反応があった回数・進行につながった回数（押してから `progress_window_sec` 以内に新しい `line` / `scene` / `choices` が来た） | 進行につながった操作を優先する | 押せそうに見えて反応しないボタンが多い画面 |
+| 選択肢ごとの行き先（次の `scene`、タイトルに戻った、終了した） | まだ選んでいない選択肢を先に選び、そのあとは先に進む選択肢を優先する | 分岐の割合、バッドエンドに入りやすい箇所 |
+| `@LEVEL` のような選択画面（ボタンのある menu）で、進行につながるまでの試行回数と、選んだボタンの内訳 | 正解だったボタンを優先する | 謎解きの難しさ、間違えやすい選択肢 |
+| 画面（menu）に入ってから抜けるまでの操作の数と時間 | — | 抜け方が見つけにくい画面（ボタンが多いなど） |
+| scene ごとの、ランの開始からの到達時間と操作の数 | — | 長い章、止まりやすい箇所 |
+| 本文送りに反応しなかった行と、待たされた時間 | — | 送れない演出、テンポの悪い箇所 |
+
+- ゲームを UI 名・ボタン名・`line_id` で識別する。記録には、どのビルド（`boot` の `version` / `build_guid`）で得たものかを付ける。UI を変えたあとも、古いビルドの記録と区別できるように
+- Decider の重み: まだ試していない操作を先に試す（今の試行回数の重み）。試したあとは、進行につながった操作に `progress_bonus` を掛ける。fuzz モードでは掛けない（いつもの道に偏らないように）
+- 選択肢の行き先は、選んだあとに最初に来た `scene`（タイトルや終了も含む）で記録する
+
+#### 保存場所と見せ方
+- 集計ファイル（機械向け）: `runs/_experience/<ゲーム>.json`。`<ゲーム>` はプロファイルがあればそのファイル名の親ディレクトリ名、なければ `boot` の製品名。ランをまたいで足し合わせる。ハーネスはラン開始時に読み、ラン終了時に書く
+- 体験レポート（人向け、Markdown）: `yomawari experience report` で、集計ファイルから画面ごと・scene ごと・選択肢ごとにまとめて出す。既定の出力先は `runs/_experience/<ゲーム>_report.md`
+- 毎回の `report.md` には、そのランで新しく分かったこと（初めて進行につながった選択画面の操作、初めて到達した scene など）だけを載せる
+- 区切りのよいところ（マイルストーンなど）で、体験レポートだけをゲームのリポジトリにコミットして開発者と共有する（例: `Rachel/docs/yomawari/experience.md`）。集計ファイルはランのたびに変わるので、コミットしない
+- 体験レポートの冒頭に、次の注意を必ず書く: 「これは自動の総当たりの記録で、プレイヤーの行動データではない。ハーネスは見た目を見ずに、試していない操作から押している。『抜け方が見つけにくい』は『ボタンが多くて総当たりに時間がかかる』という意味で、見た目で分かるかどうかは測っていない。人が見直す場所の手がかりとして使う」
+
+#### 設定
+```toml
+[experience]
+enabled = true
+progress_window_sec = 3       # 押してからこの時間内に line / scene / choices が来たら「進行につながった」
+progress_bonus = 5            # random モードで、進行につながった操作の重みに掛ける
+```
 
 ### 猶予期間
 操作の種類ごとに、直後の画面系・進行系ルールの判定を止める時間を `rules.yaml` で設定（例: リサイズ2秒）。
@@ -422,8 +621,8 @@ class Decider(Protocol):
 | S-01 | 応答確認のイベントが5秒以内に来ない（ハートビートは生存） | Critical |
 | S-02 | 本文表示中に20回クリックしても `line`/`choices`/`scene` が来ない | Critical |
 | S-03 | `transition` 開始から10秒で終了が来ない | Critical |
-| S-04 | 同じ行IDの並びが繰り返されるだけ（K回以上） | Major |
-| S-05 | ログの矩形中心をクリックしても反応が3回連続でない | Major |
+| S-04 | 同じ行IDの並びが繰り返されるだけ（K回以上）。タイトルに戻って最初から読み直すのと区別する方法を決めてから実装する | Major |
+| S-05 | ログの矩形中心をクリックしても反応がない回が、同じボタンで3回続く（トグル・ドロップダウンなど押しても並びが変わらないものは除く） | Major |
 | L-01 | `log_error` イベント（Error / Exception / Assert） | Major（直後にS系ならCriticalに統合） |
 | L-02 | TextMeshProの未収録文字警告 | Minor |
 | L-03 | リソース読み込み失敗 | Major |
@@ -519,7 +718,7 @@ runs/
 ## 14. 実装フェーズ
 
 1. **骨組み**: `pyproject.toml`、CLI（`run`/`builds`/`doctor`）、`yomawari.toml` と対話登録、ランチャ（`.app` 解決）、Player.log tail、`boot`/`heartbeat` の受信、C-01〜03・H-01・L-01、最小限の `report.md`、セーブ退避と復元
-2. **ファジング**: イベントバス・状態トラッカー、`InputDriver`（マウス・キーボード）、座標変換、UI操作カタログ、`random` Decider、ガード、応答確認、S系ルール、`rules.yaml` エンジン
+2. **ファジング**: イベントバス・状態トラッカー、`InputDriver`（マウス・キーボード）、座標変換、UI操作カタログ、`random` Decider、ガード、応答確認、S系ルール、`rules.yaml` エンジン。続けて、ゲーム固有の仕様の3層（パッケージの自動読み取り、`IYomawariButtonState`、ゲームのプロファイル）と、経験の蓄積・体験レポート
 3. **画面とOS操作**: `mss` キャプチャとリングバッファ、V-01〜05、OS操作カタログ、F系・R系・A系ルール
 4. **再現**: `events.jsonl` からの `replay`、`minimize`、前回比較、重複排除・統合
 5. **画像判定**: Ollama Judge、V-06、誤検知除去、要目視欄、再現手順の文章化

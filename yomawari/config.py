@@ -32,6 +32,23 @@ SENSOR_DEFAULTS: dict[str, Any] = {
     "tick_sec": 0.5,
 }
 
+# [fuzz] の既定値（DESIGN.md §9）。yomawari.example.toml と揃える
+FUZZ_DEFAULTS: dict[str, Any] = {
+    "op_interval_sec": 0.5,
+    "settle_sec": 0.5,
+    "advance_point": [0.5, 0.5],
+    "trigger_prob": 0.3,
+    "trigger_delay_max_sec": 0.5,
+    "irregular_prob": 0.05,
+    "rapid_count": 10,
+    "stuck_modal_sec": 5.0,
+    "external_wait_sec": 3.0,
+    "exit_min_interval_sec": 1800.0,
+    "no_response_factor": 0.2,
+    "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5},
+}
+GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")
+
 
 class ConfigError(ValueError):
     pass
@@ -117,6 +134,27 @@ class Config:
     @property
     def sensors(self) -> dict[str, Any]:
         return self.section("sensors", SENSOR_DEFAULTS)
+
+    @property
+    def fuzz(self) -> dict[str, Any]:
+        out = self.section("fuzz", FUZZ_DEFAULTS)
+        out["weights"] = {**FUZZ_DEFAULTS["weights"], **dict(out["weights"])}
+        return out
+
+    @property
+    def guard_buttons(self) -> dict[str, list[str]]:
+        """[guard.buttons] の区分 → "<menu>/<ボタン>" の一覧。"""
+        raw = self.doc.get("guard", {}).get("buttons", {})
+        out: dict[str, list[str]] = {}
+        for k in GUARD_KINDS:
+            v = raw.get(k, [])
+            if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+                raise ConfigError(f"guard.buttons.{k} は文字列の配列にしてください")
+            out[k] = [str(x) for x in v]
+        unknown = set(raw.keys()) - set(GUARD_KINDS)
+        if unknown:
+            raise ConfigError(f"guard.buttons に不明な区分があります: {', '.join(sorted(unknown))}")
+        return out
 
     @property
     def judge(self) -> dict[str, Any]:

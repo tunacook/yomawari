@@ -1,0 +1,29 @@
+# Unity + Naninovel のゲームのプロファイルの例（Rachel を想定）
+# 仕様: DESIGN.md §9「ゲーム固有の仕様」③。考え方は examples/profiles/README.md
+#
+# ① の Unity 版と ② は未実装。以下は、実装したあとの書き方。
+# ゲーム側で伝えるもの（プロファイルには書かない）:
+#   - 押すと終了する自作のボタン（TitleUI の QuitButton、右クリックメニューの ToExit）
+#     → ボタンのプレハブに YomawariButtonRole を付けて role = Exit
+#   - Web サイトを開くボタン → role = External
+#   - 右クリックメニューの「タイトルへ」 → role = ToTitle
+#   - 言語・画面モード・解像度・画質の Dropdown → role = SystemSetting
+#   - 劇中でアンロックされるまで押せない回想のスロット → IYomawariButtonState を実装
+#   - 回想一覧の ScrollRect → ① が scroll として自動で出す
+
+[guard.roles]
+# 役割ごとの区分を、既定値（DESIGN.md §9 ガード）から変えるときだけ書く。
+# to_title = "normal"           # 例: タイトルへ戻るのも通常の操作として押す
+
+[guard.buttons]
+# role を出せないボタンだけ、"<menu の name>/<ボタンの name>" で書く（最後の手段）。
+# 例: ゲームのコードに手を入れられないビルドを試すとき
+# expect_exit = ["TitleUI/QuitButton", "RClickMenuUI/ToExit"]
+
+[screens.MemoryListUI]
+# 回想一覧。ボタンが多く、総当たりに時間がかかるので、ほかの画面より押されにくくする
+weight = 0.5
+
+[rules.L-01]
+# 既知で無害なエラー。直したら消す
+ignore_patterns = []
