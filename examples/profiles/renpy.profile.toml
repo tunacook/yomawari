@@ -1,0 +1,39 @@
+# Ren'Py のゲームのプロファイルの例（未検証）
+# 仕様: DESIGN.md §9「ゲーム固有の仕様」③。考え方は examples/profiles/README.md
+#
+# 前提: ゲーム側に yomawari のスクリプト（.rpy）が入っていて、menu イベントを出している。
+# スクリプトもハーネス側の対応（起動・ログの読み先）もまだない。docs/game-integration.md §6
+#
+# Ren'Py は、ボタンの動作が action のオブジェクトとして画面に残るので、ほとんどを ① で読み取れる。
+# ゲーム側で伝えるもの（プロファイルには書かない）:
+#   ① スクリプトが screen のボタンの action から読み取る
+#     - Quit(confirm=False) → role = exit
+#       Quit(confirm=True) は確認画面（screen confirm）を出すだけなので role を付けない。
+#       確認画面の「はい」の action（yes_action）が Quit なので、そちらが exit になる
+#     - OpenURL(...) → role = external
+#     - MainMenu() → role = to_title
+#     - Preference("display", ...)、Language(...) → role = system_setting
+#     - Start() → role = new_game
+#     - sensitive でないボタン（action の get_sensitive() が False。
+#       Gallery のロック中のボタンも含む）→ locked
+#     - viewport / vpgrid の yadjustment → scroll
+#   ② 自作の Action（renpy.Action を継承したクラス）で役割が分からないものは、
+#     クラスに yomawari_role = "exit" のような属性を足す
+#
+# menu の name は screen の名前（"main_menu" / "preferences" / "load" / "confirm" / "history" など）。
+# ボタンの name は、id があればその値、なければ textbutton の文字列。
+
+[guard.roles]
+# 役割ごとの区分を、既定値から変えるときだけ書く。
+
+[guard.buttons]
+# role を出せないボタンだけ、"<menu の name>/<ボタンの name>" で書く（最後の手段）。
+# deny = ["main_menu/Patreon"]
+
+[screens.gallery]
+# ギャラリー。ボタンが多いので、ほかの画面より押されにくくする
+weight = 0.5
+
+[rules.L-01]
+# 既知で無害なエラー（traceback.txt / errors.txt の内容）。直したら消す
+ignore_patterns = []

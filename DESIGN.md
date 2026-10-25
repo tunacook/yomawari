@@ -110,7 +110,7 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 | `line_done` | `line_id` | 文字送り完了。操作の待ち合わせ |
 | `choices` | `items: [{id, text, rect, locked}]` | クリック候補。並びか矩形が変わったときにも出し直す |
 | `choices_done` | `id`, `index` | 選択確定。`index` は直前の `choices` の中での順番（不明なら -1） |
-| `menu` | `name`, `modal`, `buttons: [{name, rect, type, locked}]`, `scroll` | メニュー表示とクリック候補。押せるボタンの並びか矩形が変わったときにも出し直す。`rect` はスクロール領域と画面で切り取った見えている部分で、見えていないボタンは出さない。`type` は `button` / `toggle` / `dropdown` / `slider` / `input` / `other`。`locked` は §9「ゲーム固有の仕様」② のインターフェースが押せないと答えたもの。`scroll` はスクロール領域ごとの `{rect, up, down, left, right}`（その方向にまだ項目があるか）。開いたドロップダウンのリスト（標準の `Dropdown` / `TMP_Dropdown` のもの）は、`name` が `<ドロップダウンの name>.List` のモーダルな `menu` として出す |
+| `menu` | `name`, `modal`, `buttons: [{name, rect, type, role, locked}]`, `scroll` | メニュー表示とクリック候補。押せるボタンの並びか矩形が変わったときにも出し直す。`rect` はスクロール領域と画面で切り取った見えている部分で、見えていないボタンは出さない。`type` は `button` / `toggle` / `dropdown` / `slider` / `input` / `other`。`role` はボタンの役割（`exit` / `external` / `to_title` / `system_setting` / `new_game` / `deny`。§9 ガード）で、分からなければ出さない。`locked` は §9「ゲーム固有の仕様」② のインターフェースが押せないと答えたもの。`scroll` はスクロール領域ごとの `{rect, up, down, left, right}`（その方向にまだ項目があるか）。開いたドロップダウンのリスト（標準の `Dropdown` / `TMP_Dropdown` のもの）は、`name` が `<ドロップダウンの name>.List` のモーダルな `menu` として出す |
 | `menu_close` | `name` | 応答確認 |
 | `transition` | `phase: start/end`, `name` | 操作待ち、進行不能判定 |
 | `resolution` | `w`, `h`, `mode` | 起動直後と変化時（`Update` で監視）。描画領域の位置と Retina 倍率の計算（§8）、解像度テスト |
@@ -205,6 +205,7 @@ yomawari/
 │   └─ com.tunacook.yomawari/   # ゲーム側の UPM パッケージ（§3）
 ├─ rules.yaml
 ├─ yomawari.example.toml
+├─ examples/profiles/   # ゲームのプロファイルの記述例（エンジンごと）
 ├─ tests/
 └─ pyproject.toml
 ```
@@ -429,7 +430,19 @@ class Decider(Protocol):
 - `jev`: 将来の選択肢（TypeSafe Jev。「普通のプレイヤーがやりそうな操作」の確率が低いものを優先する使い方）
 
 ### ガード
-ボタンは「押さない」ではなく、ハーネスが押したことを分かったうえで結果を確かめる操作として扱う。ボタンは `yomawari.toml` の `[guard.buttons]` に `"<menu の name>/<ボタンの name>"` で書く（名前は `menu` イベントの値）。
+ボタンは「押さない」ではなく、ハーネスが押したことを分かったうえで結果を確かめる操作として扱う。どの区分で扱うかは、ボタンの名前ではなく役割（`menu` の `role`）で決める。役割は、ゲーム側が §9「ゲーム固有の仕様」の ① か ② で出す。プロファイルにゲームの中の名前を並べずに済むようにするため（UI を作り直しても効き続け、エンジンが違っても同じ書き方になる）。
+
+| `role` | 意味 | 既定の区分 |
+|---|---|---|
+| `exit` | 押すとゲームが終了する。確認ダイアログが出るなら、ダイアログの「はい」の側 | `expect_exit` |
+| `external` | ブラウザなど、ゲームの外のアプリを開く | `external` |
+| `to_title` | タイトルへ戻る | `irregular_only` |
+| `system_setting` | 画面モード・解像度・言語・画質など、ゲームの外側の設定を変える | `irregular_only` |
+| `new_game` | 最初から始める。本編に入る道なので通常の操作のまま | （指定なし） |
+| `deny` | 課金、データの送信など、マシンの外に影響が出る | `deny` |
+
+- 役割と区分の対応はハーネスの既定値で、プロファイルの `[guard.roles]` で変えられる（値は区分の名前。通常の操作にするなら `"normal"`）
+- `role` を出せないボタン（ゲームのコードに手を入れられないビルドを試すときなど）だけ、`[guard.buttons]` に `"<menu の name>/<ボタンの name>"` で書く（名前は `menu` イベントの値）。名前で書いたものは役割より優先する
 
 | 区分 | 扱い | 確かめること |
 |---|---|---|
@@ -462,8 +475,8 @@ class Decider(Protocol):
 | 層 | 置くもの | 定義する場所 | 例（Rachel） |
 |---|---|---|---|
 | ① エンジンの標準 UI から自動で読み取る | エンジンの標準 UI 部品から分かること（Unity では uGUI / TextMeshPro の標準部品と、それを継承した部品） | エンジンごとのゲーム側の実装。Unity ではパッケージ（ゲームごとの作業なし） | スクロール領域（`ScrollRect` / `RectMask2D` / `Mask`）による切り取り、その先にまだ項目があるか、ボタンの種類、開いたドロップダウンのリスト |
-| ② ゲームの状態 | ゲームのコードしか知らないこと | ゲームのコード（パッケージのインターフェースを実装） | `MemoryListGridSlot` は劇中でアンロックされるまで押せない |
-| ③ テストのやり方 | どう遊び、何を許容するか | ゲームのプロファイル（ゲームのリポジトリでコミットする設定ファイル） | 押し方を変えるボタン、反応がなくても正常な画面、スクロールの手段、画面ごとの重み |
+| ② ゲームの状態 | ゲームのコードしか知らないこと | ゲームのコード（パッケージのインターフェースやコンポーネント） | `MemoryListGridSlot` は劇中でアンロックされるまで押せない。自作の `ToExit` は押すと終了する（`role`） |
+| ③ テストのやり方 | どう遊び、何を許容するか | ゲームのプロファイル（ゲームのリポジトリでコミットする設定ファイル） | 役割ごとの押し方を既定値から変えるもの、画面ごとの重み、既知で無害なエラー |
 
 #### ① エンジンの標準 UI から自動で読み取る
 以下は Unity 版（UPM パッケージ）の内容。Unity 版で扱えるのは、Unity の標準部品（uGUI と TextMeshPro）と、それを継承した部品だけ。自作の部品、UI Toolkit、標準部品を継承していないアセットの UI は対象外で、② か ③ で補う（下の表）。Rachel で通るからといって、ほかのゲームで通るとは限らない。
@@ -478,6 +491,7 @@ class Decider(Protocol):
 - `ScrollRect` ごとに、どの方向にまだ項目があるかを `scroll` で出す。ハーネスは、見えている候補を押し尽くしたら（またはまだ試していない方向があれば）、その領域の上でホイールかドラッグをしてスクロールする
 - ボタンの種類（`type`）を出す。押しても `menu` の並びが変わらない種類（`toggle` / `dropdown` / `slider` / `input`）は、S-05 の対象から種類で外す（名前の正規表現での推測をやめる）
 - `Dropdown` / `TMP_Dropdown`（とそれを継承した部品）が開いている（`IsExpanded`）間は、リストの項目を `<ドロップダウンの name>.List` のモーダルな `menu` として出す。ハーネスは項目を選ぶか、リストの外を押して閉じる。リストが開いたことを「反応あり」とみなす
+- Naninovel の標準のボタン（タイトル画面の終了、コントロールパネルのタイトルへ戻るなど）は、パッケージの Naninovel 用の部分で `role` を出す（クラス名は実装するときに確かめる）。自作のボタンは ② で伝える
 
 #### ② ゲームの状態をインターフェースで伝える
 外からは分からない状態だけを、ゲームがパッケージのインターフェースを実装して伝える。ゲーム側の作業はインターフェースの実装だけにし、ハーネスのことを知らなくてよいようにする。
@@ -497,6 +511,23 @@ namespace Yomawari
 - `locked` のボタンは、通常の操作の候補に入れない。イレギュラー操作としてだけ押す（押しても壊れないことを確かめる）。S-05 の対象にしない
 - 足りなくなったら、同じ考え方でインターフェースを足す（例: 画面ごとの「今は操作を受け付けない」）
 
+ボタンの役割（`role`）は、① で分からないときに、ボタンにコンポーネントを付けて伝える。Unity の標準部品は「押すと何が起きるか」を持たないので、自作のボタン（Rachel の `ToExit` など）や、解像度を変える `Dropdown` には ② が要る。
+
+```csharp
+namespace Yomawari
+{
+    public enum YomawariRole { None, Exit, External, ToTitle, SystemSetting, NewGame, Deny }
+
+    // Selectable と同じ GameObject に付け、Inspector で役割を選ぶ（コードは書かない）
+    public sealed class YomawariButtonRole : MonoBehaviour
+    {
+        public YomawariRole role;
+    }
+}
+```
+
+- 名前（`[guard.buttons]`）ではなくここで伝えると、UI の名前や階層を変えても効き続ける。プレハブに付けるので、同じボタンを使う画面すべてに効く
+
 #### ③ ゲームのプロファイル
 テストのやり方は、ゲームのリポジトリに置く `yomawari.profile.toml` に書いて、チームで共有する。`yomawari.toml`（マシンごと、コミットしない）からは参照だけをする。
 
@@ -509,21 +540,23 @@ profile = "~/work/Rachel/yomawari.profile.toml"
 
 ```toml
 # Rachel/yomawari.profile.toml
-[guard.buttons]                         # §9 ガード
-expect_exit = ["TitleUI/QuitButton", "RClickMenuUI/ToExit"]
-external = ["TitleUI/WebSiteButton"]
-irregular_only = ["RClickMenuUI/ToTitle", "SettingsUI/ResolutionDropdown"]
-deny = []
+[guard.roles]                           # 役割ごとの区分を、既定値から変えるときだけ書く
+# to_title = "normal"                   # 例: タイトルへ戻るのも通常の操作にする
+
+[guard.buttons]                         # role を出せないボタンだけ、名前で書く（最後の手段）
+# expect_exit = ["TitleUI/QuitButton"]
 
 [screens.MemoryListUI]                  # menu の name ごと
-scroll = ["key:down", "key:up", "drag"] # ① の scroll で足りないときの、先を表示する手段
-no_response_ok = ["MemoryListGridSlot"] # 押して反応がなくても正常（S-05 の対象外）。② を実装できないときの代わり
 weight = 0.5                            # この画面のボタンの重みに掛ける
+# scroll = ["key:down", "drag"]         # ① の scroll で足りないときの、先を表示する手段
+# no_response_ok = ["MemoryListGridSlot"]  # 押して反応がなくても正常。② を実装できないときの代わり
 
 [rules.L-01]                            # rules.yaml のパラメータのうち、ゲーム固有のもの
 ignore_patterns = ["<既知で無害なエラーの正規表現>"]
 ```
 
+- プロファイルには、ゲームの中の名前（UI・ボタン・GameObject の名前）をなるべく書かない。ボタンの押せる・押せない・役割は ① と ② で伝え、プロファイルにはテストの方針（役割ごとの押し方、画面ごとの重み、許容するもの）だけを書く。名前を書くのは `[screens.<menu>]` と、最後の手段の `[guard.buttons]` / `no_response_ok` / `scroll` だけ
+- エンジンごとの記述例（Unity + Naninovel、ティラノスクリプト、Ren'Py）は `examples/profiles/` に置く
 - 読む順: `rules.yaml` / コードの既定値 → プロファイル → `yomawari.toml`（あとのものが上書き。配列は足し合わせる）
 - `rules.yaml` には、どのゲームにも共通の判定基準だけを残す。今 `rules.yaml` にある S-05 の `ignore_patterns` の既定値（`Toggle` などの名前）は、① の `type` に置き換えて消す
 - プロファイルに書くのは「どう遊ぶか・何を許容するか」まで。謎解きや選択の正解は書かない（§1「やらないこと」）

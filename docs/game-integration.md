@@ -135,7 +135,7 @@ Unity ではないので、Ren'Py と同じくゲーム側・ハーネス側の�
 | Ren'Py | screen 言語の `textbutton` / `imagebutton`（`sensitive` が押せるかどうか）、`viewport`（スクロール）、`vbox` / `hbox` | ゲームのスクリプト（`.rpy`） |
 | ティラノスクリプト | DOM の `glink` などのボタン要素、`disabled`、スクロールする要素（`scrollHeight` > `clientHeight`） | プラグイン（JavaScript） |
 
-どのエンジンでも、出すイベントの形（`menu` の `buttons: [{name, rect, type, locked}]`、`scroll` など）を DESIGN.md §3 に合わせれば、ハーネス側は変えなくてよい。
+どのエンジンでも、出すイベントの形（`menu` の `buttons: [{name, rect, type, role, locked}]`、`scroll` など）を DESIGN.md §3 に合わせれば、ハーネス側は変えなくてよい。ボタンの役割（`role`）をエンジンごとに何から読むかと、プロファイルの記述例は `examples/profiles/` に置いた。
 
 ### Unity 以外を扱うときにハーネスで変えるところ
 - `launcher.py`：実行ファイルの解決と起動引数（`-yomawari -logFile` は Unity 専用）
