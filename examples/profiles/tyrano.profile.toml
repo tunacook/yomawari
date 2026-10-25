@@ -1,0 +1,37 @@
+# ティラノスクリプトのゲームのプロファイルの例（未検証）
+# 仕様: DESIGN.md §9「ゲーム固有の仕様」③。考え方は examples/profiles/README.md
+#
+# 前提: ゲーム側に yomawari のプラグイン（JavaScript）が入っていて、menu イベントを出している。
+# プラグインもハーネス側の対応（起動・ログの読み先）もまだない。docs/game-integration.md §6
+#
+# ゲーム側で伝えるもの（プロファイルには書かない）:
+#   ① プラグインがタグから読み取る
+#     - [button role="title"] → role = to_title
+#     - [button role="fullscreen"] → role = system_setting
+#     - ボタンの飛び先のラベルが [close] を実行する → role = exit
+#     - 飛び先が [web] を実行する → role = external
+#     - スクロールする要素（scrollHeight > clientHeight）→ scroll
+#   ② ① で分からないものは、シナリオのタグに属性を足す
+#     [button graphic="title/exit.png" target="*exit" yomawari_role="exit"]
+#     [button graphic="cg/thumb01.png" target="*cg01" yomawari_locked="!sf.cg01"]
+#
+# menu の name は、プラグインが決める（例: ボタンを置いたシナリオのファイル名、
+# ティラノの標準のシステム画面なら "save" / "load" / "backlog" / "menu"）。
+
+[guard.roles]
+# 役割ごとの区分を、既定値から変えるときだけ書く。
+# ティラノの [close ask=true] は確認ダイアログを出すので、ダイアログの「はい」が
+# role = exit になるようにプラグインで扱う（ここでは何も書かない）。
+
+[guard.buttons]
+# role を出せないボタンだけ、"<menu の name>/<ボタンの name>" で書く（最後の手段）。
+# ボタンの name は [button name="..."] の値（なければ画像のファイル名）。
+# deny = ["title.ks/twitter_share"]
+
+[screens."cg.ks"]
+# CG ギャラリー。ボタンが多いので、ほかの画面より押されにくくする
+weight = 0.5
+
+[rules.L-01]
+# 既知で無害なエラー（window.onerror で拾ったもの）。直したら消す
+ignore_patterns = []
