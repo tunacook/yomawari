@@ -181,3 +181,27 @@ def test_flow_is_not_used_while_exploring_or_when_disabled():
         _feed(st, "menu", name="MemoryListUI", modal=True, buttons=LIST)
         assert _weights(s, st)["click MemoryListUI/SelectButton"] == FUZZ_DEFAULTS["weights"]["click"]
         assert run.flow.active is None
+
+
+def test_flow_ending_with_reading_completes_when_leaving_it():
+    flows = parse_flows(tomllib.loads("""
+[[flow]]
+name = "思い出を読む"
+start = { screen = "MemoryListUI", by = "harness" }
+steps = [
+  { screen = "MemoryListUI", press = "MemoryListGridSlot*" },
+  { scene = "memories/*", advance = true },
+]
+""")["flow"])
+    tracker = FlowTracker(flows)
+    st = GameState()
+    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=LIST)
+    tracker.update(st, {"MemoryListUI": "RClickMenuUI/ToMemoryList"}, 0, 10)
+    _feed(st, "menu_close", name="MemoryListUI")
+    _feed(st, "scene", name="memories/m1")
+    _feed(st, "line", line_id="memories/m1:1", text="a")
+    assert tracker.update(st, {}, 1, 10).advance
+    # 読み終えて本編に戻った
+    _feed(st, "scene", name="main/s2")
+    tracker.update(st, {}, 2, 10)
+    assert tracker.active is None and tracker.stats["思い出を読む"].completed == 1

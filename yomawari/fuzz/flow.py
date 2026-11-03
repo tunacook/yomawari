@@ -7,7 +7,8 @@
 
 手順は、いまの手順から後ろへ順に見て、最初に当てはまったものに進む（同じ画面が2回出てくる流れでも、
 読んだあとの要約では「言葉を選ぶ」のように、手順の順番で区別する）。最後の手順で押して反応があれば、流れを
-最後まで進めたとする。流れのどの画面・scene にも当てはまらない状態が flow_idle_sec 続いたら、途切れたとする。
+最後まで進めたとする。最後の手順が押す手順でない（本文を最後まで読むなど）ときは、その条件から外れたら最後まで
+進めたとする。流れのどの画面・scene にも当てはまらない状態が flow_idle_sec 続いたら、途切れたとする。
 
 条件は、画面（screen）・scene・選択肢が出ていること（choices）で書く。画面（screen）は、いま押せる画面（手前のモーダル、なければボタンの見えている画面）の名前で見る。ボタンの名前は
 "<menu>/<name>" か "<name>" で、* などのワイルドカードを使える。
@@ -194,6 +195,11 @@ class FlowTracker:
                 st.furthest = max(st.furthest, i + 1)
                 self.idle_since = None
                 return flow.steps[i]
+        last = flow.steps[-1]
+        if self.index == len(flow.steps) - 1 and not last.press and last.choose is None and last.when.screen is None:
+            # 最後の手順（本文を最後まで読むなど）の条件から外れた。押して終える手順がないので、ここで最後まで進めたとする
+            self._complete("最後の手順の条件から外れた")
+            return None
         # いまの手順より前の画面（流れの始まりの画面など）にいるなら、まだ流れの中
         if flow.start.match(state, opened_by) or any(s.when.match(state, opened_by) for s in flow.steps[: self.index]):
             self.idle_since = None
@@ -215,9 +221,14 @@ class FlowTracker:
                 return
         elif step.press and not matches(label, name, step.press):
             return
-        self.stats[flow.name].completed += 1
-        self.events.append(f"流れ「{flow.name}」を最後まで進めた（`{label}`）")
+        self._complete(f"`{label}`")
+
+    def _complete(self, how: str) -> None:
+        assert self.active is not None
+        self.stats[self.active.name].completed += 1
+        self.events.append(f"流れ「{self.active.name}」を最後まで進めた（{how}）")
         self.active = None
+        self.idle_since = None
 
     def title_returned(self) -> None:
         if self.active is not None:
