@@ -58,8 +58,9 @@ class SimGame:
     dead_settings: 設定ボタンは1回目だけ設定を開き、2回目からは押しても何も起きない
     """
 
-    def __init__(self, emit, title=TITLE, bugs=(), list_modal=True):
+    def __init__(self, emit, title=TITLE, bugs=(), list_modal=True, list_at_boot=False):
         self.emit = emit
+        self.list_at_boot = list_at_boot
         self.list_modal = list_modal
         self.title = dict(title)
         self.bugs = set(bugs)
@@ -77,6 +78,11 @@ class SimGame:
     def boot(self):
         self.emit("boot", version="sim")
         self.emit("resolution", w=2000, h=1000, mode="Windowed")
+        if self.list_at_boot:
+            # ゲームが一覧を開く（本文の途中で選ばせる画面など）。ハーネスのボタン操作では開かない
+            self.screen = "list"
+            self._show_list()
+            return
         self._show_title()
 
     def _show_title(self):
@@ -175,7 +181,8 @@ class SimDriver:
     def hotkey(self, *names): ...
 
 
-def run_sim(mode, seconds, bugs=(), title=TITLE, guard=None, cfg=CFG, seed="1", book=None, list_modal=True):
+def run_sim(mode, seconds, bugs=(), title=TITLE, guard=None, cfg=CFG, seed="1", book=None, list_modal=True,
+            list_at_boot=False):
     rules = scaled_rules(0.05)  # S-01: 0.25秒、S-03: 0.5秒
     engine = Engine(rules)
     state = GameState()
@@ -189,7 +196,7 @@ def run_sim(mode, seconds, bugs=(), title=TITLE, guard=None, cfg=CFG, seed="1", 
         if "session" in holder:
             holder["session"].on_event(ev)
 
-    game = SimGame(lambda kind, **d: publish(Event("game", kind, d, 0)), title=title, bugs=bugs, list_modal=list_modal)
+    game = SimGame(lambda kind, **d: publish(Event("game", kind, d, 0)), title=title, bugs=bugs, list_modal=list_modal, list_at_boot=list_at_boot)
     run = FuzzRun(
         mode=mode, decider=RandomDecider(random.Random(seed), cfg["no_response_factor"]), guard=Guard(guard or {}, book=book),
         rng=random.Random(seed), cfg=cfg, response_timeout=float(rules["S-01"].param("timeout_sec")),
@@ -535,6 +542,21 @@ def test_non_modal_list_is_searched_to_the_end():
     ops = [e.data["label"] for e in events if e.kind == "op"]
     moves = [o for o in ops if o.split()[0] in ("drag", "wheel_down", "wheel_up", "key")]
     assert moves[:3] and all(o in ("drag up", "wheel_down 3", "key down") for o in moves[:3])
+    # ハーネスが ListButton で開いた寄り道の画面なので、一通り見たら、ほかの向きへ動かして探し続けない
+    assert set(moves) <= {"drag up", "wheel_down 3", "key down"}
+    assert any("寄り道" in n and "TitleUI/ListButton" in n for n in run.notes)
+
+
+def test_list_opened_by_game_is_searched_in_all_directions_until_limit():
+    # ゲームが開いた一覧は、押せるものを見つけないと進めない。一通り見ても押せるものがなければ、すべての向きを試し、
+    # blind_search_limit 回で諦めて記録する
+    cfg = {**CFG, "blind_search_limit": 5}
+    game, run, issues, events, _ = run_sim("random", 8.0, cfg=cfg, list_modal=False, list_at_boot=True)
+    assert {f"ListUI/Slot#{i}" for i in range(1, LIST_SLOTS)} <= run.seen
+    ops = [e.data["label"] for e in events if e.kind == "op"]
+    assert {"drag down", "wheel_up 3", "key up"} & set(ops)  # 下以外の向きも試した
+    assert run.blind_tries["ListUI"] == 5
+    assert any("ゲームが開いた画面" in n and "見つからなかった" in n for n in run.notes)
 
 
 def _assert_searched(game, run, events):

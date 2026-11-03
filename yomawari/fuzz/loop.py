@@ -76,6 +76,10 @@ class FuzzRun:
     seen: set[str] = field(default_factory=set)  # 一度でも見えたボタンの label
     silent: set[str] = field(default_factory=set)  # 最後に押したとき反応しなかったボタンの label
     search_miss: Counter[str] = field(default_factory=Counter)  # "<menu>/<name>:<向き>" → 動かしても続けて反応しなかった回数
+    # menu → それを開いたボタンの label（ハーネスがボタンを押して開いた寄り道の画面）。ここにない menu はゲームが開いたもの
+    opened_by: dict[str, str] = field(default_factory=dict)
+    blind_tries: Counter[str] = field(default_factory=Counter)  # menu → 向きを決めずに探した回数（開き直すと 0 に戻す）
+    search_noted: set[str] = field(default_factory=set)  # 「ハーネスの記録」に書いた探し方（menu ごと）
     stopped_reason: str | None = None
 
     def summary(self) -> str:
@@ -118,6 +122,7 @@ class FuzzSession:
         self._dim: set[str] = set()
         self._explore = False  # 見えている並びがすべて暗い（画面の外を探したい）
         self._search: dict[str, list[str]] = {}  # 探す操作の label → それが向かう "<menu>/<name>:<向き>"
+        self._blind: dict[str, list[str]] = {}  # 向きを決めずに探す操作の label → その menu
         self._title_returns = state.title_returns
         self._resolution_changes = state.resolution_changes
 
@@ -236,20 +241,36 @@ class FuzzSession:
         run = self.run
         for m in searchable_menus(self.state):
             run.seen |= {b.label for b in m.visible_buttons}
-        self._search = {}
+        for name in [n for n in run.opened_by if n not in self.state.menus]:
+            del run.opened_by[name]  # 閉じた
+        self._search, self._blind = {}, {}
         found = [
             lead for lead in leads(self.state, run.seen)
             if run.search_miss[f"{lead.menu}/{lead.name}:{lead.direction}"] < int(self.cfg["search_give_up"])
         ]
         stuck = self._quiet() | run.silent
         if not found:
-            # どの向きに項目があるか分からない（画面の外の矩形が来ない、ページ送りの一覧など）。見えている並びが
-            # どれも押せそうにないときだけ、すべての向きへ動かして押せるものを探す
+            # どの向きに項目があるか分からない（画面の外の矩形が来ない、ページ送りの一覧など）、または一通り見終わった。
+            # 見えている並びがどれも押せそうにないときに、すべての向きへ動かして押せるものを探すのは、ゲームが開いた画面
+            # （本文の途中で選ばせる画面など。押せるものを見つけないと先に進めない）だけ。ハーネスがボタンで開いた寄り道の
+            # 画面（右クリックメニューから開いた回想一覧など）は、押せるものがないのが正常なこともあるので探さない
             ops = []
             for menu, _name, point in stuck_rows(self.state, stuck):
+                if menu in run.opened_by:
+                    self._note_search(menu, f"`{menu}` は `{run.opened_by[menu]}` で開いた寄り道の画面なので、見ていない項目を"
+                                            "一通り見たら、押せるものを探すのをやめた（押せるものがないのが正常なこともあるため）")
+                    continue
+                if run.blind_tries[menu] >= int(self.cfg["blind_search_limit"]):
+                    self._note_search(menu, f"`{menu}` はゲームが開いた画面で、見えている項目がどれも押せず、すべての向きへ"
+                                            f"{run.blind_tries[menu]} 回動かしても押せるものが見つからなかった（進めない可能性がある）")
+                    continue
+                self._note_search(menu, f"`{menu}` はゲームが開いた画面で、見えている項目がどれも押せないので、すべての向きへ"
+                                        "動かして押せるものを探した", final=False)
                 w = (float(self.cfg["weights"]["click"]) * run.screen_weights.get(menu, 1.0)
                      * float(self.cfg["search_factor"]) * float(self.cfg["explore_factor"]))
-                ops += blind_candidates(point, w)
+                for op in blind_candidates(point, w):
+                    ops.append(op)
+                    self._blind.setdefault(op.label, []).append(menu)
             return ops
         weights: dict[str, float] = {}
         for lead in found:
@@ -264,6 +285,14 @@ class FuzzSession:
                 if (op.kind, op.arg) in REVEAL[lead.direction]
             ]
         return ops
+
+    def _note_search(self, menu: str, text: str, final: bool = True) -> None:
+        """探し方を「ハーネスの記録」に書く。menu ごとに、始めたときと終えたときの1回ずつ。"""
+        key = f"{menu}:{'end' if final else 'start'}"
+        if key in self.run.search_noted:
+            return
+        self.run.search_noted.add(key)
+        self.run.notes.append(f"{text}（起動 #{self.launch}）")
 
     def _quiet(self) -> set[str]:
         """押しても反応しないと見込んでいるボタン（暗い、文字で空と分かる）の label。"""
@@ -356,7 +385,15 @@ class FuzzSession:
             self.run.stats["no_response"] += 1
         if op.target is not None and op.target.kind == "button":
             (self.run.silent.discard if responded else self.run.silent.add)(op.target.label)
+        if responded and op.target is not None:
+            # ボタンで開いた画面は寄り道（fuzz/search.py の探し方を変える）
+            for name in self.state.screens()[1] - screens_before[1]:
+                if name in self.state.menus:
+                    self.run.opened_by[name] = op.target.label
+                    self.run.blind_tries.pop(name, None)
         if op.group == "search":
+            for menu in self._blind.get(op.label, []):
+                self.run.blind_tries[menu] += 1
             for k in self._search.get(op.label, []):
                 if responded:
                     self.run.search_miss.pop(k, None)

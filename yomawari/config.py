@@ -60,6 +60,8 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     # [fuzz.weights] click × 画面の重み × search_factor。見えているものがすべて暗い・押しても反応しなかったときは explore_factor も掛ける
     "search_factor": 1.0,
     "search_give_up": 6,  # その向きへ動かしても続けてこの回数反応しなければ、動かせないとみなしてやめる
+    # ゲームが開いた画面で、見えているものがどれも押せないとき、向きを決めずに動かして探す回数の上限（開き直すと数え直す）
+    "blind_search_limit": 30,
     "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")
