@@ -17,11 +17,22 @@ watermark_mask = { anchor = "bottom-right", w = 220, h = 40 }   # Development Bu
 
 [run]
 hours = 8
+purpose = "stuck"            # ランの目的（--purpose で変えられる）。stuck / play / buttons / gacha / rta / aging（README「使い方」）
 seed = "auto"
 open_report = true
 keep_runs_days = 14
 max_restarts = 20            # これを超えたらランを打ち切る
 quit_timeout_sec = 10        # 終了要求から強制終了までの待ち時間
+
+# ランの目的を変える・足す（yomawari/purpose.py の組み込みの目的に重ねる）。fuzz は [fuzz] の上書き
+# [purpose.stuck]
+# focus = ["S-02", "S-03"]                 # レポートで深刻度ごとに先に並べるルール
+# [purpose.stuck.fuzz]
+# recover_ops = 8                          # 進めなくなったら、再起動の前に抜け出す操作を試す
+# [purpose.saveload]                       # 新しい目的
+# description = "セーブとロードを繰り返す"
+# mode = "random"
+# fuzz = { intent_explore = 1, weights = { right_click = 5 } }
 
 [sensors]
 log_poll_sec = 0.1           # Player.log を読みに行く間隔
@@ -93,6 +104,7 @@ intent_explore = 1            # random モードで、プレイの目的「画�
 progress_detour_factor = 0.2  # 目的が「本編を進める」のとき、寄り道を始める操作（本文中の右クリック・ホイール上・操作のボタン）の重みに掛ける
 explore_detour_factor = 3     # 目的が「画面を見て回る」のとき、寄り道を始める操作の重みに掛ける
 recover_ops = 8               # S-02 / S-03 のとき、再起動する前に抜け出す操作（Esc・右クリック・本文送り・ボタン）を試す回数
+learn = true                  # random モードで、進め方の経験（進行につながった操作を優先する）を使う。ランの目的で変える
 
 [fuzz.weights]                # 通常の操作の重み
 advance = 20

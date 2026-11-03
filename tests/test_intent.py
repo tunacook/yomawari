@@ -37,8 +37,8 @@ def _game(s, st, kind, **d):
 
 
 def test_first_play_is_progress_and_title_return_chooses_again():
-    s, st, run, events = _session(cfg={**CFG, "intent_progress": 0.0, "intent_explore": 1.0})
-    assert run.intent == "progress" and run.plays == 1  # ランの最初のプレイは、重みによらず「本編を進める」
+    s, st, run, events = _session(cfg={**CFG, "intent_progress": 1e-9, "intent_explore": 1.0})
+    assert run.intent == "progress" and run.plays == 1  # ランの最初のプレイは、重みが小さくても「本編を進める」
     _game(s, st, "menu", name="TitleUI", modal=False, buttons=[{"name": "Start", "rect": [0.1, 0.5, 0.3, 0.6]}])
     _game(s, st, "menu_close", name="TitleUI")
     _game(s, st, "line", line_id="main/s1:1", text="a")
@@ -51,6 +51,12 @@ def test_first_play_is_progress_and_title_return_chooses_again():
     # 起動が終わったら、そのプレイも記録する
     s._end_play()
     assert any("プレイ 2" in n and "画面を見て回る" in n for n in run.notes) and run.intent is None
+
+
+def test_first_play_follows_weights_when_progress_is_zero():
+    # 目的（purpose）が「本編を進める」を選ばないもの（buttons など）なら、最初のプレイから見て回る
+    _, _, run, _ = _session(cfg={**CFG, "intent_progress": 0.0, "intent_explore": 1.0})
+    assert run.intent == "explore"
 
 
 def test_fuzz_mode_has_no_intent():

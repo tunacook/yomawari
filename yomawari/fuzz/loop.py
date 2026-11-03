@@ -308,12 +308,12 @@ class FuzzSession:
     # --- プレイの目的 ---
 
     def _choose_intent(self, why: str) -> None:
-        """プレイの目的を選ぶ（random モード）。ランの最初のプレイは「本編を進める」。"""
+        """プレイの目的を選ぶ（random モード）。ランの最初のプレイは、「本編を進める」の重みが 0 でなければそれにする。"""
         run = self.run
         if run.mode != "random":
             run.intent = None
             return
-        if run.plays == 0:
+        if run.plays == 0 and float(self.cfg["intent_progress"]) > 0:
             intent = "progress"
         else:
             names = list(INTENTS)

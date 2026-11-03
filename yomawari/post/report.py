@@ -27,6 +27,9 @@ class RunSummary:
     env: dict[str, str] = field(default_factory=dict)
     harness_notes: list[str] = field(default_factory=list)
     silent_buttons: dict[str, int] = field(default_factory=dict)  # 一度も反応しなかったボタン → 押した回数
+    purpose: str | None = None  # ランの目的（yomawari/purpose.py）
+    purpose_description: str = ""
+    focus: list[str] = field(default_factory=list)  # 目的で重点的に見るルール。深刻度ごとに先に並べる
 
 
 @dataclass
@@ -68,6 +71,8 @@ def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
         f"| ビルド | {summary.build_name} (`{summary.build_path}`) |",
         f"| 開始 / 終了 | {summary.started} / {summary.ended} |",
         f"| 実行時間 | {_hms(summary.duration_sec)}{'（中断）' if summary.interrupted else ''} |",
+        *([f"| 目的 | {summary.purpose}: {summary.purpose_description} |"] if summary.purpose else []),
+        *([f"| 重点的に見るルール | {', '.join(summary.focus)} |"] if summary.focus else []),
         f"| モード / シード | {summary.mode} / {summary.seed} |",
         f"| 起動回数 / 再起動回数 | {summary.launches} / {summary.restarts} |",
         "| 深刻度別件数 | "
@@ -79,14 +84,18 @@ def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
 
     for sev in SEVERITIES:
         sev_groups = [g for g in groups if g.first.severity == sev]
+        # 目的で重点的に見るルールを先に（focus に書いた順）
+        rank = {rule: n for n, rule in enumerate(summary.focus)}
+        sev_groups.sort(key=lambda g: rank.get(g.first.rule_id, len(rank)))
         out += [f"## {SEVERITY_LABEL[sev]}", ""]
         if not sev_groups:
             out += ["なし", ""]
             continue
         for g in sev_groups:
             i = g.first
+            star = "（重点）" if i.rule_id in rank else ""
             out += [
-                f"### [{i.rule_id}] {i.title}",
+                f"### [{i.rule_id}] {i.title}{star}",
                 "",
                 f"- 内容: {i.detail}",
                 f"- 発生回数: {g.count}",
