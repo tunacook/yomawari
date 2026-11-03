@@ -648,3 +648,12 @@ def test_fully_covered_modal_is_not_top():
     # ボタンのないモーダル（暗転の幕）も手前のまま
     feed("menu", name="CurtainUI", modal=True, buttons=[])
     assert st.top_modal().name == "CurtainUI"
+
+
+def test_verify_does_not_use_move_ops():
+    # 前に反応があっても、方向キー・Enter・ドラッグは応答確認に使わない（フォーカスで結果が変わる）
+    cfg = {**CFG, "trigger_prob": 1.0, "irregular_prob": 0.3}
+    _, _, _, events, _ = run_sim("fuzz", 2.0, title=LIST_TITLE, cfg=cfg)
+    verified = [e.data for e in events if e.kind == "op_result" and e.data["verify"]]
+    assert verified
+    assert not any(d["kind"] in ("drag", "wheel_down", "wheel_up") or d["label"].startswith("key ") for d in verified)
