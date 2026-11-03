@@ -188,7 +188,7 @@ namespace Yomawari
         static string TextOf(Selectable s)
         {
             string raw = null;
-            var ui = s.GetComponentInChildren<Text>(false);
+            var ui = s.GetComponentInChildren<UnityEngine.UI.Text>(false);
             if (ui != null) raw = ui.text;
             else if (tmpText != null && tmpTextProp != null)
             {
