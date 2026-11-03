@@ -5,7 +5,7 @@
 # スクリプトもハーネス側の対応（起動・ログの読み先）もまだない。docs/game-integration.md §6
 #
 # Ren'Py は、ボタンの動作が action のオブジェクトとして画面に残るので、ほとんどを ① で読み取れる。
-# ゲーム側で伝えるもの（プロファイルには書かない）:
+# ゲームのスクリプトには何も足さない。ボタンの役割や押せない条件は、プロファイルにも書かない。
 #   ① スクリプトが screen のボタンの action から読み取る
 #     - Quit(confirm=False) → role = exit
 #       Quit(confirm=True) は確認画面（screen confirm）を出すだけなので role を付けない。
@@ -17,8 +17,7 @@
 #     - sensitive でないボタン（action の get_sensitive() が False。
 #       Gallery のロック中のボタンも含む）→ locked
 #     - viewport / vpgrid の yadjustment → scroll
-#   ② 自作の Action（renpy.Action を継承したクラス）で役割が分からないものは、
-#     クラスに yomawari_role = "exit" のような属性を足す
+#   ② ① で分からないもの（自作の Action など）は、ハーネスが押した結果から覚える
 #
 # menu の name は screen の名前（"main_menu" / "preferences" / "load" / "confirm" / "history" など）。
 # ボタンの name は、id があればその値、なければ textbutton の文字列。
@@ -27,7 +26,7 @@
 # 役割ごとの区分を、既定値から変えるときだけ書く。
 
 [guard.buttons]
-# role を出せないボタンだけ、"<menu の name>/<ボタンの name>" で書く（最後の手段）。
+# 押した結果から覚えられないもの（課金、データの送信など）だけ、"<menu の name>/<ボタンの name>" で書く。
 # deny = ["main_menu/Patreon"]
 
 [screens.gallery]
