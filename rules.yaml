@@ -107,6 +107,16 @@ rules:
       # 名前の既定値は、type を出さない古いパッケージのビルド向け。パッケージが type を出すようになったら消す
       ignore_patterns: ["Toggle", "Dropdown", "Slider"]
 
+  - id: V-07
+    severity: major
+    title: 暗いボタンが押せる
+    description: >-
+      同じ画面で同じ種類に見えるボタン（同じ名前か同じ大きさ）の並びのうち、ほかより明らかに暗い（今は押せないように見える）
+      ボタンを押したら、画面の状態が変わった。見た目と動作の食い違い（アンロック前の回想が開けるなど）。
+      暗いかどうかの基準は yomawari.toml の [fuzz] dim_ratio / dim_min_gap（DESIGN.md §9「画像による推定」）
+    params:
+      heartbeat_alive_sec: 3
+
 # ボタンの役割を、押す前にボタンの文字（menu の text）と名前（GameObject 名）から推定するキーワード（DESIGN.md §9「役割の推定と判定」）。
 # ゲームごとではなく yomawari 全体で共通に持つ（ゲームのプロファイルには書かない）。
 # - text: 英数字の語は単語として（大文字小文字を区別しない）、日本語などは部分一致で照らし合わせる

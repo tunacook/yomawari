@@ -4,6 +4,7 @@ using System.Text;
 using Naninovel;
 using Naninovel.UI;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 namespace Yomawari
@@ -11,7 +12,7 @@ namespace Yomawari
     /**
      * <summary>
      * 画面に出ている Naninovel の UI を 0.2 秒ごとに見て、変化があったときだけ出す。
-     * - menu / menu_close: IUIManager が管理する UI の表示・非表示と、その中の押せるボタン（name, rect, type, text, role, hidden）
+     * - menu / menu_close: IUIManager が管理する UI の表示・非表示と、その中の押せるボタン（name, rect, type, text, role, hidden, covered）
      *   と、スクロール領域（scroll）。DESIGN.md §3、§9「ゲーム固有の仕様」①。ゲーム側に Yomawari 用の部品は求めない（§1）
      * - transition: ISceneTransitionUI / ILoadingUI の表示（start）と非表示（end）
      * - choices: 表示中の選択肢ボタン（id, text, rect, locked）
@@ -43,6 +44,8 @@ namespace Yomawari
         readonly List<IManagedUI> closed = new();
         readonly List<Selectable> selectables = new();
         readonly List<ScrollRect> scrollRects = new();
+        readonly List<RaycastResult> hits = new();
+        PointerEventData pointer;
         string choicesSignature;
         float elapsed;
 
@@ -115,7 +118,8 @@ namespace Yomawari
             else YomawariLog.Emit("menu_close", "\"name\":" + YomawariFormat.Str(s.Name));
         }
 
-        // 押せるボタン（Selectable で interactable なもの）の [{name, rect, type, text, role, hidden}]。
+        // 押せるボタン（Selectable で interactable なもの）の [{name, rect, type, text, role, hidden, covered}]。
+        // covered は、中心をクリックしたときに EventSystem のレイキャストがほかの UI に先に当たるもの（上に重なった画面など）。
         // rect は祖先の RectMask2D / Mask と画面で切り取った見えている部分。中心が見えていないボタンは hidden にして、
         // 矩形は切り取らずに出す（ハーネスは同じ名前のボタンを出てきた順で数えるので、スクロールしても番号が変わらないように）
         string Buttons(MonoBehaviour root, out string signature)
@@ -129,6 +133,7 @@ namespace Yomawari
                 var rt = (RectTransform)s.transform;
                 if (!YomawariRect.TryGetScreen(rt, out var min, out var max)) continue;
                 var hidden = !Clip(rt, ref min, ref max);
+                var covered = !hidden && Covered(s, (min + max) / 2);
                 var role = Role(s);
                 var text = TextOf(s);
                 if (json.Length > 1) json.Append(',');
@@ -138,11 +143,27 @@ namespace Yomawari
                 if (text != null) json.Append(",\"text\":").Append(YomawariFormat.Str(text));
                 if (role != null) json.Append(",\"role\":").Append(YomawariFormat.Str(role));
                 if (hidden) json.Append(",\"hidden\":true");
+                if (covered) json.Append(",\"covered\":true");
                 json.Append('}');
-                AppendSignature(sig, s.name + "|" + text + (hidden ? "~" : ""), min, max);
+                AppendSignature(sig, s.name + "|" + text + (hidden ? "~" : "") + (covered ? "^" : ""), min, max);
             }
             signature = sig.ToString();
             return json.Append(']').ToString();
+        }
+
+        // 画面座標 center をクリックしたとき、いちばん手前に当たるのが s（かその子）でなければ true。
+        // EventSystem がない・何にも当たらないときは分からないので false
+        bool Covered(Selectable s, Vector2 center)
+        {
+            var es = EventSystem.current;
+            if (es == null) return false;
+            pointer ??= new PointerEventData(es);
+            pointer.position = center;
+            hits.Clear();
+            es.RaycastAll(pointer, hits);
+            if (hits.Count == 0) return false;
+            var top = hits[0].gameObject;
+            return top != null && !top.transform.IsChildOf(s.transform);
         }
 
         // 中心が見えていれば、矩形を祖先の RectMask2D / Mask と画面で切り取って true

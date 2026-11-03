@@ -396,6 +396,37 @@ class ButtonNoResponseDetector(Detector):
         ]
 
 
+class DimButtonRespondedDetector(Detector):
+    """V-07: ほかの同じ種類のボタンより暗い（今は押せないように見える）ボタンを押したら、画面が変わった。
+
+    暗いのに押せるのは、見た目と動作が食い違っている（アンロックされていないのに開ける、など）。
+    暗いかどうかはファジングのループが押す前に画面の明るさで決め、op_result の dim で伝える（fuzz/looks.py）。
+    """
+
+    def __init__(self, rule: Rule) -> None:
+        super().__init__(rule)
+        self.alive = float(rule.param("heartbeat_alive_sec"))
+        self.seen: set[str] = set()
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        d = ev.data
+        if ev.kind != "op_result" or d.get("kind") != "click" or not d.get("dim"):
+            return []
+        if not d.get("responded") or d.get("interfered") or not _alive(ev, self.alive):
+            return []
+        target = str(d.get("target"))
+        if target in self.seen:
+            return []
+        self.seen.add(target)
+        return [
+            self.issue(
+                f"{target} はほかの同じ種類のボタンより暗い（押せないように見える）のに、押すと画面が変わりました",
+                key=target, launch=ev.launch, t=ev.t, wall=ev.wall,
+                recent=d.get("recent"), state=d.get("state"),
+            )
+        ]
+
+
 DETECTORS: dict[str, Callable[[Rule], Detector]] = {
     "C-01": ProcessExitDetector,
     "C-02": CrashDumpDetector,
@@ -406,6 +437,7 @@ DETECTORS: dict[str, Callable[[Rule], Detector]] = {
     "S-02": AdvanceStallDetector,
     "S-03": TransitionStuckDetector,
     "S-05": ButtonNoResponseDetector,
+    "V-07": DimButtonRespondedDetector,
     "L-01": LogErrorDetector,
 }
 

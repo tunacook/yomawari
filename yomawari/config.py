@@ -47,6 +47,11 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "no_response_factor": 0.2,
     "drag_distance": 0.3,
     "role_window_sec": 5.0,
+    # 同じ名前のボタンが並ぶとき、いちばん明るいものの dim_ratio 倍より暗く、差が dim_min_gap 以上のものを「暗い」とし、
+    # 押す重みに dim_factor を掛ける（DESIGN.md §9「画像による推定」）。dim_factor = 1 で無効
+    "dim_ratio": 0.6,
+    "dim_min_gap": 0.1,
+    "dim_factor": 0.05,
     "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")

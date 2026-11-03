@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    from ..sensors.window import WindowInfo
+    from ..sensors.screen import Shot
+    from ..sensors.window import ScreenRect, WindowInfo
 
 
 @dataclass
@@ -44,6 +45,7 @@ class Platform(Protocol):
     def window_info(self, pid: int) -> WindowInfo | None: ...
     def frontmost_pid(self) -> int | None: ...
     def activate(self, pid: int) -> None: ...
+    def capture(self, rect: ScreenRect) -> Shot | None: ...  # 画面の rect（ポイント）を撮る。撮れなければ None
     def open_file(self, path: Path) -> None: ...
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 import time
 
 from ..platform import Platform
+from ..sensors.screen import Shot
 from ..sensors.window import ClientArea, client_area
 from ..state import GameState, Target
 from .base import InputDriver
@@ -61,7 +62,7 @@ class Pointer:
         if current is None:
             raise PointerError(f"{target.key} は押す直前に画面から消えました")
         if not current.visible:
-            raise PointerError(f"{target.label} は押す直前に描画領域の外へ出ました")
+            raise PointerError(f"{target.label} は押す直前に見えなくなりました（描画領域の外、スクロールで隠れた、ほかの UI に覆われた）")
         return self.click_at((current.rect[0] + current.rect[2]) / 2, (current.rect[1] + current.rect[3]) / 2,
                              button, clicks)
 
@@ -88,6 +89,12 @@ class Pointer:
         self.ensure_front()
         self.driver.drag(x0, y0, x1, y1)
         return (x0, y0)
+
+    def capture(self) -> Shot | None:
+        """描画領域を撮る（ほかのウィンドウが重ならないように、ゲームを前面にしてから）。"""
+        area = self.area()
+        self.ensure_front()
+        return self.platform.capture(area.rect)
 
     def key(self, name: str, times: int = 1) -> None:
         self.area()  # ウィンドウが出ていなければ押さない

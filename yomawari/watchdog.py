@@ -369,6 +369,7 @@ class Harness:
                 except Exception as e:  # 復元の失敗は必ずレポートに残す
                     self.notes.append(f"セーブ・設定の復元に失敗しました: {e!r}（yomawari restore で再試行できます）")
             if self._fuzz is not None:
+                self.notes += self._fuzz.notes
                 self.notes.append(self._fuzz.summary())
             self.notes += self.roles.new
             try:

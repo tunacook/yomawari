@@ -70,12 +70,13 @@ def state_key(state: GameState) -> str:
 
 def normal_candidates(
     state: GameState, guard: Guard, weights: dict[str, float], allow_exit: bool,
-    screen_weights: dict[str, float] | None = None,
+    screen_weights: dict[str, float] | None = None, dim: set[str] | None = None, dim_factor: float = 1.0,
 ) -> list[Op]:
     """通常の操作の候補。暗転などで待つべきときは空。
 
     locked のボタン（ゲームが押せないと伝えたもの）は入れない。screen_weights はプロファイルの
-    [screens.<menu>] weight で、その menu のボタンの重みに掛ける。
+    [screens.<menu>] weight で、その menu のボタンの重みに掛ける。dim（ほかの同じボタンより暗いもの。fuzz/looks.py）の
+    重みには dim_factor を掛ける。
     """
     if state.busy:
         return []
@@ -84,6 +85,8 @@ def normal_candidates(
     click = float(weights["click"])
     for t in targets:
         w = click * (screen_weights or {}).get(t.menu, 1.0)
+        if dim and t.label in dim:
+            w *= dim_factor
         kind = guard.kind_of(t)
         if kind is None:
             ops.append(Op("click", t, weight=w, novelty=True, group="button"))

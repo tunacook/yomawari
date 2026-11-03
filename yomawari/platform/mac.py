@@ -10,6 +10,7 @@ import struct
 import subprocess
 from pathlib import Path
 
+from ..sensors.screen import Shot
 from ..sensors.window import ScreenRect, WindowInfo
 from . import ExecCheck, GameIdentity
 
@@ -275,6 +276,24 @@ class MacPlatform:
             if best is None or (info.on_screen, rect.w * rect.h) > (best.on_screen, best.bounds.w * best.bounds.h):
                 best = info
         return best
+
+    def capture(self, rect: ScreenRect) -> Shot | None:
+        """画面の rect（ポイント、メインディスプレイの左上原点）を撮る。画面収録の権限がなければ None。
+
+        ピクセルは Retina の倍率ぶん大きく撮れる。並びは BGRA（32 ビット、リトルエンディアン）。
+        """
+        import Quartz
+
+        img = Quartz.CGWindowListCreateImage(
+            Quartz.CGRectMake(rect.x, rect.y, rect.w, rect.h),
+            Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID, Quartz.kCGWindowImageDefault,
+        )
+        if img is None or Quartz.CGImageGetBitsPerPixel(img) != 32:
+            return None
+        data = Quartz.CGDataProviderCopyData(Quartz.CGImageGetDataProvider(img))
+        return Shot(
+            Quartz.CGImageGetWidth(img), Quartz.CGImageGetHeight(img), Quartz.CGImageGetBytesPerRow(img), bytes(data),
+        )
 
     def frontmost_pid(self) -> int | None:
         """前面のアプリの pid。

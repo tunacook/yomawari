@@ -31,7 +31,14 @@ from ..input.pointer import Pointer, PointerError
 from ..state import GameState
 from .decider import Decider
 from .guard import Guard
-from .ops import Op, escape_candidates, irregular_candidates, normal_candidates, state_key
+from .looks import dim_buttons
+from .ops import (
+    Op,
+    escape_candidates,
+    irregular_candidates,
+    normal_candidates,
+    state_key,
+)
 
 # イレギュラー操作を差し込むきっかけにするゲームのイベント
 TRIGGERS = {"transition", "line", "choices", "save", "load", "scene"}
@@ -56,6 +63,8 @@ class FuzzRun:
     recent: deque[str] = field(default_factory=lambda: deque(maxlen=10))
     responsive: set[tuple[str, str]] = field(default_factory=set)  # (状態, 操作) のうち、反応があったもの
     last_press: tuple[str, float] | None = None  # 最後に押したボタンの "<menu>/<name>" と時刻（役割の確定に使う）
+    notes: list[str] = field(default_factory=list)  # report.md の「ハーネスの記録」に載せること
+    dim_seen: set[str] = field(default_factory=set)  # 暗いボタンがあると記録した並び（"<menu>/<name>"）
     screen_weights: dict[str, float] = field(default_factory=dict)  # プロファイルの [screens.<menu>] weight
     stopped_reason: str | None = None
 
@@ -95,6 +104,8 @@ class FuzzSession:
         self._modal_since: float | None = None
         self._trigger: asyncio.Task[None] | None = None
         self._exiting = False
+        self._looked: Any = None  # 見た目を比べたときの signature
+        self._dim: set[str] = set()
         self._title_returns = state.title_returns
         self._resolution_changes = state.resolution_changes
 
@@ -170,12 +181,18 @@ class FuzzSession:
             return
         if now - self._sig_t < float(self.cfg["settle_sec"]):
             return
+        if sig != self._looked:
+            self._looked = sig
+            await self._look()
         if self.run.mode == "fuzz" and self.run.rng.random() < float(self.cfg["irregular_prob"]):
             await self._irregular("random")
             return
 
         allow_exit = now - (self.run.last_exit_t or self.run.started) >= float(self.cfg["exit_min_interval_sec"])
-        cands = normal_candidates(self.state, self.run.guard, self.cfg["weights"], allow_exit, self.run.screen_weights)
+        cands = normal_candidates(
+            self.state, self.run.guard, self.cfg["weights"], allow_exit, self.run.screen_weights,
+            self._dim, float(self.cfg["dim_factor"]),
+        )
         top = self.state.top_modal()
         if top is not None and not top.buttons and not self.state.busy:
             self._modal_since = self._modal_since or now
@@ -199,6 +216,29 @@ class FuzzSession:
             await self._external(op)
         else:
             await self._normal(op, key, verify)
+
+    async def _look(self) -> None:
+        """画面が落ち着いたら、同じ名前のボタンの並びの明るさを比べ、暗いものを覚える（押す順番を後回しにする）。"""
+        self._dim = set()
+        targets = self.state.targets()
+        if float(self.cfg["dim_factor"]) >= 1 or len({t.key for t in targets}) == len(targets):
+            return  # 無効にしている、または同じ名前のボタンが並んでいない
+        try:
+            shot = await asyncio.to_thread(self.pointer.capture)
+        except PointerError:
+            return
+        if shot is None:
+            return  # 画面収録の権限がないなど。見た目なしで続ける
+        self._dim, groups = dim_buttons(
+            targets, shot, float(self.cfg["dim_ratio"]), float(self.cfg["dim_min_gap"]),
+        )
+        for g in groups:
+            if g.key not in self.run.dim_seen:
+                self.run.dim_seen.add(g.key)
+                self.run.notes.append(
+                    f"`{g.key}` の並び {g.total} 個のうち {g.dim} 個が、いちばん明るいものより暗いので、押す順番を後回しにした"
+                    f"（起動 #{self.launch}）"
+                )
 
     async def _normal(self, op: Op, key: str, verify: bool) -> None:
         before = self.state.signature()
@@ -228,6 +268,7 @@ class FuzzSession:
                     **op.to_json(),
                     "target": op.target.label if op.target else None,  # 同じ名前のボタンは #n で分けて数える
                     "type": op.target.type if op.target else None,
+                    "dim": bool(op.target and op.target.label in self._dim),
                     "responded": responded,
                     "waited": round(waited, 3),
                     "verify": verify,
