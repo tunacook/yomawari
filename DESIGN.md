@@ -110,7 +110,7 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 | `line_done` | `line_id` | 文字送り完了。操作の待ち合わせ |
 | `choices` | `items: [{id, text, rect, locked}]` | クリック候補。並びか矩形が変わったときにも出し直す |
 | `choices_done` | `id`, `index` | 選択確定。`index` は直前の `choices` の中での順番（不明なら -1） |
-| `menu` | `name`, `modal`, `buttons: [{name, rect, type, role, locked}]`, `scroll` | メニュー表示とクリック候補。押せるボタンの並びか矩形が変わったときにも出し直す。`rect` はスクロール領域と画面で切り取った見えている部分で、見えていないボタンは出さない。`type` は `button` / `toggle` / `dropdown` / `slider` / `input` / `other`。`role` はボタンの役割（`exit` / `external` / `to_title` / `system_setting` / `new_game` / `deny`。§9 ガード）で、分からなければ出さない。`locked` は §9「ゲーム固有の仕様」② のインターフェースが押せないと答えたもの。`scroll` はスクロール領域ごとの `{rect, up, down, left, right}`（その方向にまだ項目があるか）。開いたドロップダウンのリスト（標準の `Dropdown` / `TMP_Dropdown` のもの）は、`name` が `<ドロップダウンの name>.List` のモーダルな `menu` として出す |
+| `menu` | `name`, `modal`, `buttons: [{name, rect, type, role, locked, hidden}]`, `scroll` | メニュー表示とクリック候補。押せるボタンの並びか矩形が変わったときにも出し直す。`rect` はスクロール領域（`RectMask2D` / `Mask`）と画面で切り取った見えている部分。中心が見えていないボタンは `hidden: true` にして、矩形は切り取らずに出す（ハーネスは同じ名前のボタンを出てきた順に `#n` で数えるので、スクロールしても番号が変わらないように、隠れたボタンも並びに残す）。`role` / `locked` / `hidden` は、該当するときだけ出す。`type` は `button` / `toggle` / `dropdown` / `slider` / `input` / `other`。`role` はボタンの役割（`exit` / `external` / `to_title` / `system_setting` / `new_game` / `deny`。§9 ガード）で、分からなければ出さない。`locked` は §9「ゲーム固有の仕様」② のインターフェースが押せないと答えたもの。`scroll` はスクロール領域ごとの `{rect, up, down, left, right}`（その方向にまだ項目があるか）。開いたドロップダウンのリスト（標準の `Dropdown` / `TMP_Dropdown` のもの）は、`name` が `<ドロップダウンの name>.List` のモーダルな `menu` として出す |
 | `menu_close` | `name` | 応答確認 |
 | `transition` | `phase: start/end`, `name` | 操作待ち、進行不能判定 |
 | `resolution` | `w`, `h`, `mode` | 起動直後と変化時（`Update` で監視）。描画領域の位置と Retina 倍率の計算（§8）、解像度テスト |
@@ -492,8 +492,8 @@ class Decider(Protocol):
 | ボタンの種類 | `Button`、`Toggle`、`Dropdown` / `TMP_Dropdown`、`Slider`、`InputField` / `TMP_InputField` | `other` になる。押しても並びが変わらないものは ③ の `no_response_ok` に書く |
 | 開いたドロップダウンのリスト | `Dropdown` / `TMP_Dropdown` の `IsExpanded` と、それが作る Dropdown List | ③ の `no_response_ok` で誤検知だけを防ぐ。リストの中まで操作したいなら、② に「いま開いているポップアップと項目」を伝えるインターフェースを足す |
 
-- ボタンの矩形を、祖先の `RectMask2D` / `Mask` の矩形と画面で切り取る。中心が見えていないボタンは出さない（スクロールで隠れた項目を押して、別の要素に当たるのを防ぐ）
-- `ScrollRect` ごとに、どの方向にまだ項目があるかを `scroll` で出す。ハーネスは、見えている候補を押し尽くしたら（またはまだ試していない方向があれば）、その領域の上でホイールかドラッグをしてスクロールする
+- ボタンの矩形を、祖先の `RectMask2D` / `Mask` の矩形と画面で切り取る。中心が見えていないボタンは `hidden` にし、ハーネスは押さない（スクロールで隠れた項目を押して、別の要素に当たるのを防ぐ）
+- `ScrollRect` ごとに、どの方向にまだ項目があるかを `scroll` で出す。今のハーネスは `scroll` を使わず、モーダルな画面ではいつもドラッグ・ホイール・方向キーを試す（§9「状態ごとの通常の操作」）。`scroll` は、スクロールの向きを選ぶのに使う予定
 - ボタンの種類（`type`）を出す。押しても `menu` の並びが変わらない種類（`toggle` / `dropdown` / `slider` / `input`）は、S-05 の対象から種類で外す（名前の正規表現での推測をやめる）
 - `Dropdown` / `TMP_Dropdown`（とそれを継承した部品）が開いている（`IsExpanded`）間は、リストの項目を `<ドロップダウンの name>.List` のモーダルな `menu` として出す。ハーネスは項目を選ぶか、リストの外を押して閉じる。リストが開いたことを「反応あり」とみなす
 - Naninovel の標準のボタン（タイトル画面の終了、コントロールパネルのタイトルへ戻るなど）は、パッケージの Naninovel 用の部分で `role` を出す（クラス名は実装するときに確かめる）。自作のボタンは ② で伝える
