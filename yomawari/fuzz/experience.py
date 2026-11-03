@@ -99,6 +99,14 @@ class Experience:
                 self.new.append(f"状態 `{p.key}` で `{p.label}` を押すと先に進んだので、次から優先する")
         return out
 
+    def progressed_targets(self) -> set[str]:
+        """押して先に進んだことのあるボタンの label（"click <label>" の操作から）。前のランの分も含む。"""
+        return {
+            label.removeprefix("click ")
+            for ops in self.ops.values() for label, c in ops.items()
+            if label.startswith("click ") and c["progress"]
+        }
+
     def factor(self, key: str, label: str, bonus: float, rewind_factor: float) -> float:
         """重みに掛けるもの。進行につながった割合だけ bonus へ、巻き戻した割合だけ rewind_factor へ近づける。"""
         c = (self.ops.get(key) or {}).get(label)

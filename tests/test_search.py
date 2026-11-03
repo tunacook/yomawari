@@ -121,7 +121,7 @@ def test_session_prefers_survey_and_skips_dead_means():
     assert ops["wheel_down 3"] == pytest.approx(base)
 
 
-def test_session_separates_return_from_search_by_intent():
+def test_session_goes_straight_to_known_and_searches_otherwise():
     import random
 
     from yomawari.config import FUZZ_DEFAULTS
@@ -141,13 +141,48 @@ def test_session_separates_return_from_search_by_intent():
     windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
     s = FuzzSession(run, st, Pointer(windows, None, 1, st, activate_wait=0), lambda ev: None, 0, lambda _: None)
     run.dim_history = {"ListUI/Slot#15": False, "ListUI/Slot": True}
-    # 「本編を進める」: 分かっている項目へ戻るだけ（探す操作は混ぜない）
-    run.intent = "progress"
-    assert {op.group for op in s._search_candidates()} == {"return"}
+    # 見当をつけている（前に見て明るかった）項目が画面の外にあれば、目的によらず、まっすぐそちらへ向かう（探す操作は混ぜない）
+    for intent in ("progress", "explore"):
+        run.intent = intent
+        assert {op.group for op in s._search_candidates()} == {"return"}
     assert any("前に見て明るかった項目" in n for n in run.notes)
-    # 「画面を見て回る」: まだ見ていない項目を探すだけ
-    run.intent = "explore"
+    # 見当がなければ、まだ見ていない項目を探す
+    run.dim_history = {}
     assert {op.group for op in s._search_candidates()} == {"search"}
-    # 見ていない項目がなくなったら、戻る
-    run.seen |= {"ListUI/Slot"} | {f"ListUI/Slot#{i}" for i in range(1, 16)}
+    # 前のランで押して先に進んだ項目も、見当にする
+    run.experience.ops["modal:ListUI"] = {"click ListUI/Slot#15": {"tries": 1, "progress": 1, "rewind": 0}}
     assert {op.group for op in s._search_candidates()} == {"return"}
+
+
+def test_buttons_that_look_like_a_locked_one_are_skipped():
+    import random
+
+    from yomawari.config import FUZZ_DEFAULTS
+    from yomawari.fuzz.decider import RandomDecider
+    from yomawari.fuzz.guard import Guard
+    from yomawari.fuzz.loop import FuzzRun, FuzzSession
+    from yomawari.input.pointer import Pointer
+    from yomawari.sensors.window import ScreenRect, WindowInfo
+
+    from .test_window import FakeWindows
+
+    st = _grid(modal=True)
+    cfg = {**FUZZ_DEFAULTS, "hover_wait_sec": 0}
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                  rng=random.Random(1), cfg=cfg, response_timeout=0.1)
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
+    s = FuzzSession(run, st, Pointer(windows, None, 1, st, activate_wait=0), lambda ev: None, 0, lambda _: None)
+    # 見えている 4 個はどれも同じような暗さ（ロック中）。まだどれも押していないので、見た目では決められない
+    s._values = {"ListUI/Slot": {"ListUI/Slot": (0.2, 0.3), "ListUI/Slot#1": (0.21, 0.31),
+                                 "ListUI/Slot#4": (0.19, 0.3), "ListUI/Slot#5": (0.2, 0.29)}}
+    assert s._locked_alike() == set()
+    # 1つ押して反応がなかった → 同じ見た目のものも押せないとみなす。見えているものがどれも押せないので、探すほうを強める
+    run.silent.add("ListUI/Slot")
+    assert s._locked_alike() == {"ListUI/Slot#1", "ListUI/Slot#4", "ListUI/Slot#5"}
+    assert any("同じ見た目のもの（3 個）も押せない" in n for n in run.notes)
+    ops = {op.label: op.weight for op in s._search_candidates()}
+    assert ops["wheel_down 3"] == cfg["weights"]["click"] * cfg["search_factor"] * cfg["explore_factor"]
+    # スクロールして、反応しなかったボタンが画面の外に出ても、覚えた明るさと比べる。明るいもの（開示済み）は除く
+    run.locked_look["ListUI/Slot"] = (0.2, 0.3)
+    s._values = {"ListUI/Slot": {"ListUI/Slot#8": (0.2, 0.3), "ListUI/Slot#9": (0.7, 0.9), "ListUI/Slot#12": (0.21, 0.3)}}
+    assert s._locked_alike() == {"ListUI/Slot#8", "ListUI/Slot#12"}

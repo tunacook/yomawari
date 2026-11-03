@@ -33,7 +33,7 @@ from ..state import GameState
 from .decider import Decider
 from .experience import Experience, Press
 from .guard import Guard
-from .looks import brightest, dark, groups, inactive, measure
+from .looks import Values, alike, brightest, dark, groups, inactive, measure
 from .ops import (
     Op,
     escape_candidates,
@@ -85,6 +85,9 @@ class FuzzRun:
     search_miss: Counter[str] = field(default_factory=Counter)  # "<menu>/<name>:<向き>" → 動かしても続けて反応しなかった回数
     # menu → それを開いたボタンの label（ハーネスがボタンを押して開いた寄り道の画面）。ここにない menu はゲームが開いたもの
     opened_by: dict[str, str] = field(default_factory=dict)
+    # 並び（looks の並びのキー）→ 押しても反応しなかったボタンの明るさ。同じような明るさのボタンも押せないとみなす
+    locked_look: dict[str, tuple[float, float]] = field(default_factory=dict)
+    locked_noted: set[str] = field(default_factory=set)  # 「同じ見た目も押せないとみなした」と記録に書いた並び
     search_dead: Counter[tuple[str, str]] = field(default_factory=Counter)  # (menu, 探す操作) → 続けて反応しなかった回数
     blind_tries: Counter[str] = field(default_factory=Counter)  # menu → 向きを決めずに探した回数（開き直すと 0 に戻す）
     search_noted: set[str] = field(default_factory=set)  # 「ハーネスの記録」に書いた探し方（menu ごと）
@@ -136,6 +139,7 @@ class FuzzSession:
         self._looked: Any = None  # 見た目を比べたときの signature
         self._dim: set[str] = set()
         self._varied: set[str] = set()  # 明るさに差のあった並び（looks の並びのキー）
+        self._values: dict[str, Values] = {}  # 最後に撮った画像での、並びごとのボタンの明るさ
         # 探す・戻る操作の label → それが向かう ("<unseen|known>:<menu>/<name>:<向き>", menu)
         self._search: dict[str, list[tuple[str, str]]] = {}
         self._blind: dict[str, list[str]] = {}  # 向きを決めずに探す操作の label → その menu
@@ -429,14 +433,13 @@ class FuzzSession:
     def _choose_leads(self) -> list[Lead]:
         """画面の外へ動かす向き。まだ認識していない項目を探す（unseen）のと、すでに認識している開示済みの項目へ戻る
         （known）のは別の行動として、menu ごとにどちらか一方だけを選ぶ（両方を混ぜると、逆の向きへ動かして打ち消し合う）。
-        「本編を進める」プレイでは、分かっている進み方を先に使うので戻るほうを、それ以外では見て回るほうを先にする。"""
+        見当をつけている項目が画面の外にあれば、まっすぐそちらへ向かう。見当がないときだけ、見ていない項目を探す。"""
         run = self.run
         give_up = int(self.cfg["search_give_up"])
         unseen = [lead for lead in leads(self.state, run.seen) if run.search_miss[self._lead_key(lead)] < give_up]
         known = [lead for lead in known_leads(self.state, self._known()) if run.search_miss[self._lead_key(lead)] < give_up]
-        first, second = (known, unseen) if run.intent == "progress" else (unseen, known)
-        menus = {lead.menu for lead in first}
-        return first + [lead for lead in second if lead.menu not in menus]
+        menus = {lead.menu for lead in known}
+        return known + [lead for lead in unseen if lead.menu not in menus]
 
     @staticmethod
     def _lead_key(lead: Lead) -> str:
@@ -475,9 +478,10 @@ class FuzzSession:
         return ops
 
     def _known(self) -> set[str]:
-        """すでに認識している開示済みの項目: 前に測ったとき、並びの中で明るかった（ほかに暗いものがあった）もので、
-        押して反応がなかったのではないもの。"""
-        return {label for label, dim in self.run.dim_history.items() if dim is False} - self.run.silent
+        """すでに認識している開示済みの項目（見当をつけている項目）: このランで測ったとき並びの中で明るかった（ほかに暗い
+        ものがあった）もの、または押して先に進んだことのあるもの（前のランの経験を含む）。押して反応がなかったものは除く。"""
+        bright = {label for label, dim in self.run.dim_history.items() if dim is False}
+        return (bright | self.run.experience.progressed_targets()) - self.run.silent
 
     def _note_search(self, menu: str, text: str, final: bool = True, tag: str = "") -> None:
         """探し方を「ハーネスの記録」に書く。menu・行動（tag）ごとに、始めたときと終えたときの1回ずつ。"""
@@ -489,7 +493,35 @@ class FuzzSession:
 
     def _quiet(self) -> set[str]:
         """押しても反応しないと見込んでいるボタン（暗い、文字で空と分かる）の label。"""
-        return self._dim | inactive(self.state.targets(), self.run.inactive_words)
+        return self._dim | self._locked_alike() | inactive(self.state.targets(), self.run.inactive_words)
+
+    def _locked_alike(self) -> set[str]:
+        """押しても反応しなかったボタンと同じような明るさのボタン。人が1つ押してみて「この見た目は開示されていない」と
+        覚え、同じ見た目のものは押さずに、ほかを探しにいくように。
+
+        比べる相手は、同じ画像に写っている、反応しなかったボタン。写っていなければ、その並びで最後に反応しなかった
+        ボタンを測ったときの明るさ（同じ画面の同じ並びなので、後ろの絵はほぼ変わらない）。"""
+        run = self.run
+        ratio, gap = float(self.cfg["dim_ratio"]), float(self.cfg["dim_min_gap"])
+        out: set[str] = set()
+        for gkey, values in self._values.items():
+            refs = [v for label, v in values.items() if label in run.silent]
+            if not refs and gkey in run.locked_look:
+                refs = [run.locked_look[gkey]]
+            if not refs:
+                continue
+            alikes = {
+                label for label, v in values.items()
+                if label not in run.silent and any(alike(v, r, ratio, gap) for r in refs)
+            }
+            if alikes and gkey not in run.locked_noted:
+                run.locked_noted.add(gkey)
+                run.notes.append(
+                    f"`{gkey}` の並びで、押しても反応しなかったボタンと同じ見た目のもの（{len(alikes)} 個）も押せないと"
+                    f"みなし、押さずにほかを探した（起動 #{self.launch}）"
+                )
+            out |= alikes
+        return out
 
     def _factors(self) -> dict[str, float]:
         """ボタン（label）ごとに、押す重みに掛けるもの。"""
@@ -508,7 +540,7 @@ class FuzzSession:
         比べない（半透明の UI は後ろの絵で明るさが変わり、別のときに撮ったものとは比べられないため）。
         前は暗かったのに、ほかに暗いものが残っている並びで明るくなったボタン（新しくアンロックされたもの）は、ランで1回だけ先に押す。
         """
-        self._dim, self._varied = set(), set()
+        self._dim, self._varied, self._values = set(), set(), {}
         targets = self.state.targets()
         if float(self.cfg["dim_factor"]) >= 1 or not groups(targets):
             return  # 無効にしている、または同じ種類に見えるボタンが並んでいない
@@ -524,6 +556,7 @@ class FuzzSession:
             ref = brightest(values)
             dk = dark(values, ref, float(self.cfg["dim_ratio"]), float(self.cfg["dim_min_gap"]))
             self._dim |= dk
+            self._values[gkey] = values
             if dk:
                 self._varied.add(gkey)
             # 並びがすべて同じ明るさなら、暗い・明るいは分からないので、前の記録を残す
@@ -582,6 +615,10 @@ class FuzzSession:
             self.run.stats["no_response"] += 1
         if op.target is not None and op.target.kind == "button":
             (self.run.silent.discard if responded else self.run.silent.add)(op.target.label)
+            if not responded:
+                for gkey, values in self._values.items():
+                    if op.target.label in values:
+                        self.run.locked_look[gkey] = values[op.target.label]
         if responded and op.target is not None:
             # ボタンで開いた画面は寄り道（fuzz/search.py の探し方を変える）
             for name in self.state.screens()[1] - screens_before[1]:

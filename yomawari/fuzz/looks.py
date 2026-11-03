@@ -66,6 +66,11 @@ def dark(values: Values, ref: tuple[float, float], ratio: float, min_gap: float)
     }
 
 
+def alike(a: tuple[float, float], b: tuple[float, float], ratio: float, min_gap: float) -> bool:
+    """同じような明るさ: どちらも、もう一方と比べて暗い（dark）とはならない。"""
+    return not dark({"a": a}, b, ratio, min_gap) and not dark({"b": b}, a, ratio, min_gap)
+
+
 def brightest(values: Values) -> tuple[float, float]:
     return max(v[0] for v in values.values()), max(v[1] for v in values.values())
 
