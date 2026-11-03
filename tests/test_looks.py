@@ -228,3 +228,39 @@ def test_op_result_tells_screen_changed():
     # タイトルのボタン（設定・ニューゲーム）と設定の戻るボタンは、どれも画面を切り替える
     assert [d for d in res if d["responded"]] and all(d["screen_changed"] for d in res if d["responded"])
     assert all(not d["screen_changed"] for d in res if not d["responded"])
+
+
+def test_s05_skips_quiet_buttons():
+    from yomawari.detect.engine import Engine
+
+    from .conftest import scaled_rules
+
+    engine = Engine(scaled_rules(1.0))
+    base = {"kind": "click", "target": "SaveLoadUI/Slot#7", "type": "button", "interfered": False,
+            "heartbeat_age": 0.5}
+    engine.feed(Event("harness", "op_result", {**base, "responded": True}, 0))  # セーブ画面: 空きにセーブできた
+    out = []
+    for _ in range(4):  # ロード画面: 「8. Empty」は押しても何も起きない
+        out += engine.feed(Event("harness", "op_result", {**base, "responded": False, "quiet": True}, 0))
+    assert out == []
+
+
+def test_quiet_buttons_wait_shorter():
+    from yomawari.fuzz.ops import Op
+
+    cfg = {**CFG, "quiet_wait_sec": 0.05}
+    st = GameState()
+    st.feed(Event("game", "resolution", {"w": 2000, "h": 1000}, 0))
+    st.feed(Event("game", "menu", {"name": "SaveLoadUI", "modal": True, "buttons": [
+        {"name": "Slot", "rect": [0.1, 0.1 + 0.2 * i, 0.3, 0.25 + 0.2 * i], "text": f"{i + 1}. Empty"}
+        for i in range(3)]}, 0))
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                  rng=random.Random(1), cfg=cfg, response_timeout=5.0, inactive_words=["Empty"])
+    events = []
+    s = FuzzSession(run, st, Pointer(windows, _Mouse(), 1, st, activate_wait=0), events.append, 0, lambda _: None)
+    s.pointer.driver.click = lambda *a, **k: None
+    t = st.targets()[0]
+    asyncio.run(s._normal(Op("click", t), "modal:SaveLoadUI", False))
+    res = [e.data for e in events if e.kind == "op_result"][0]
+    assert res["quiet"] and not res["responded"] and res["waited"] < 1.0

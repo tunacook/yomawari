@@ -223,11 +223,15 @@ class FuzzSession:
         else:
             await self._normal(op, key, verify)
 
+    def _quiet(self) -> set[str]:
+        """押しても反応しないと見込んでいるボタン（暗い、文字で空と分かる）の label。"""
+        return self._dim | inactive(self.state.targets(), self.run.inactive_words)
+
     def _factors(self) -> dict[str, float]:
         """ボタン（label）ごとに、押す重みに掛けるもの。"""
         out: dict[str, float] = {}
         low = float(self.cfg["dim_factor"])
-        for label in self._dim | inactive(self.state.targets(), self.run.inactive_words):
+        for label in self._quiet():
             out[label] = low
         for label in self.run.newly_bright:
             out[label] = float(self.cfg["new_bright_factor"])
@@ -283,10 +287,14 @@ class FuzzSession:
     async def _normal(self, op: Op, key: str, verify: bool) -> None:
         before = self.state.signature()
         screens_before = self.state.screens()
+        # 反応しないと見込んでいるボタンは、何も起きないことを確かめるだけなので、待つ時間を短くする
+        quiet = op.target is not None and op.target.label in self._quiet()
         started = time.monotonic()
         if not await self._do(op):
             return
         timeout = self.run.response_timeout
+        if quiet:
+            timeout = min(timeout, float(self.cfg["quiet_wait_sec"]))
         while time.monotonic() - started < timeout:
             if self.state.signature() != before:
                 break
@@ -313,6 +321,7 @@ class FuzzSession:
                     "type": op.target.type if op.target else None,
                     "dim": bool(op.target and op.target.label in self._dim),
                     "screen_changed": screen_changed,
+                    "quiet": quiet,
                     "responded": responded,
                     "waited": round(waited, 3),
                     "verify": verify,

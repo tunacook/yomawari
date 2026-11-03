@@ -54,7 +54,8 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "dim_factor": 0.05,
     "new_bright_factor": 20.0,  # 前に見たときは暗かったのに明るくなったボタン（新しくアンロックされたもの）の重みに掛ける
     "explore_factor": 3.0,  # 見えている並びがすべて暗いとき、モーダルな画面で動かす操作（スクロールなど）の重みに掛ける
-    "hover_wait_sec": 0.3,  # 明るさを測る前に、カーソルをボタンのない場所へ動かしてから待つ時間（ホバーの演出が戻るまで）
+    "hover_wait_sec": 0.3,
+    "quiet_wait_sec": 1.0,  # 暗い・空のボタン（反応しないと見込んでいるもの）を押したあと、反応を待つ時間  # 明るさを測る前に、カーソルをボタンのない場所へ動かしてから待つ時間（ホバーの演出が戻るまで）
     "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")
