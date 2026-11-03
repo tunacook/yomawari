@@ -96,7 +96,10 @@ class RoleEntry:
 
 
 class RoleBook:
-    """ボタン（"<menu>/<name>"）ごとの役割。推定は押す前、確定と取り消しは押したあと。"""
+    """ボタン（Target.label。同じ名前が並ぶときは "<menu>/<name>#<n>"）ごとの役割。推定は押す前、確定と取り消しは押したあと。
+
+    同じ名前のボタン（スロットなど）を名前でまとめて覚えると、1つで観測したことが並び全体に効いてしまうので、1つずつ覚える。
+    """
 
     def __init__(self, hints: RoleHints | None = None, path: Path | None = None, build: str | None = None) -> None:
         self.hints = hints or RoleHints()
@@ -131,7 +134,7 @@ class RoleBook:
 
     def role_of(self, target: Target) -> str | None:
         """確定 > ① エンジンの標準部品（menu の role）> 推定、の順。取り消した推定は使わない。"""
-        e = self.entries.get(target.key)
+        e = self.entries.get(target.label)
         if e is not None and e.status == "confirmed":
             return e.role
         if target.role:
@@ -141,12 +144,12 @@ class RoleBook:
             if guess is None:
                 return None
             role, why = guess
-            e = self.entries[target.key] = RoleEntry(role, "estimated", why, self.build)
-            self.new.append(f"`{target.key}` は{why}から `{role}` と推定した")
+            e = self.entries[target.label] = RoleEntry(role, "estimated", why, self.build)
+            self.new.append(f"`{target.label}` は{why}から `{role}` と推定した")
         return e.role if e.status == "estimated" else None
 
     def is_estimate(self, target: Target) -> bool:
-        e = self.entries.get(target.key)
+        e = self.entries.get(target.label)
         return target.role is None and e is not None and e.status == "estimated"
 
     def confirm(self, key: str, role: str, observed: str) -> bool:

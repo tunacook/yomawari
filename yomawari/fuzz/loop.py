@@ -31,7 +31,7 @@ from ..input.pointer import Pointer, PointerError
 from ..state import GameState
 from .decider import Decider
 from .guard import Guard
-from .looks import dim_buttons
+from .looks import brightest, dark, groups, inactive, measure
 from .ops import (
     Op,
     escape_candidates,
@@ -62,9 +62,14 @@ class FuzzRun:
     labels: set[str] = field(default_factory=set)
     recent: deque[str] = field(default_factory=lambda: deque(maxlen=10))
     responsive: set[tuple[str, str]] = field(default_factory=set)  # (状態, 操作) のうち、反応があったもの
-    last_press: tuple[str, float] | None = None  # 最後に押したボタンの "<menu>/<name>" と時刻（役割の確定に使う）
+    last_press: tuple[str, float] | None = None  # 最後に押したボタンの label と時刻（役割の確定に使う）
     notes: list[str] = field(default_factory=list)  # report.md の「ハーネスの記録」に載せること
-    dim_seen: set[str] = field(default_factory=set)  # 暗いボタンがあると記録した並び（"<menu>/<name>"）
+    inactive_words: list[str] = field(default_factory=list)  # rules.yaml の inactive_hints.text
+    # 見た目（fuzz/looks.py）。ランのあいだ覚えておく
+    dim_seen: set[str] = field(default_factory=set)  # 暗いボタンがあると記録した並び
+    bright_ref: dict[str, tuple[float, float]] = field(default_factory=dict)  # 並び → これまででいちばん明るいもの
+    dim_history: dict[str, bool] = field(default_factory=dict)  # ボタン（label）→ 前に測ったとき暗かったか
+    newly_bright: set[str] = field(default_factory=set)  # 前は暗かったのに明るくなり、まだ押していないボタン
     screen_weights: dict[str, float] = field(default_factory=dict)  # プロファイルの [screens.<menu>] weight
     stopped_reason: str | None = None
 
@@ -106,6 +111,7 @@ class FuzzSession:
         self._exiting = False
         self._looked: Any = None  # 見た目を比べたときの signature
         self._dim: set[str] = set()
+        self._explore = False  # 見えている並びがすべて暗い（画面の外を探したい）
         self._title_returns = state.title_returns
         self._resolution_changes = state.resolution_changes
 
@@ -191,7 +197,7 @@ class FuzzSession:
         allow_exit = now - (self.run.last_exit_t or self.run.started) >= float(self.cfg["exit_min_interval_sec"])
         cands = normal_candidates(
             self.state, self.run.guard, self.cfg["weights"], allow_exit, self.run.screen_weights,
-            self._dim, float(self.cfg["dim_factor"]),
+            self._factors(), float(self.cfg["explore_factor"]) if self._explore else 1.0,
         )
         top = self.state.top_modal()
         if top is not None and not top.buttons and not self.state.busy:
@@ -217,28 +223,62 @@ class FuzzSession:
         else:
             await self._normal(op, key, verify)
 
+    def _factors(self) -> dict[str, float]:
+        """ボタン（label）ごとに、押す重みに掛けるもの。"""
+        out: dict[str, float] = {}
+        low = float(self.cfg["dim_factor"])
+        for label in self._dim | inactive(self.state.targets(), self.run.inactive_words):
+            out[label] = low
+        for label in self.run.newly_bright:
+            out[label] = float(self.cfg["new_bright_factor"])
+        return out
+
     async def _look(self) -> None:
-        """画面が落ち着いたら、同じ名前のボタンの並びの明るさを比べ、暗いものを覚える（押す順番を後回しにする）。"""
-        self._dim = set()
+        """画面が落ち着いたら、同じ種類に見えるボタンの並びの明るさを比べ、暗いものを覚える（押す順番を後回しにする）。
+
+        前は暗かったのに明るくなったボタン（新しくアンロックされたもの）は、先に押す。見えている並びがすべて暗いときは、
+        画面の外に明るいものがないかを探すため、動かす操作（スクロールなど）を増やす。
+        """
+        self._dim, self._explore = set(), False
         targets = self.state.targets()
-        if float(self.cfg["dim_factor"]) >= 1 or len({t.key for t in targets}) == len(targets):
-            return  # 無効にしている、または同じ名前のボタンが並んでいない
+        if float(self.cfg["dim_factor"]) >= 1 or not groups(targets):
+            return  # 無効にしている、または同じ種類に見えるボタンが並んでいない
         try:
-            shot = await asyncio.to_thread(self.pointer.capture)
+            shot = await asyncio.to_thread(self.pointer.capture, float(self.cfg["hover_wait_sec"]))
         except PointerError:
             return
         if shot is None:
             return  # 画面収録の権限がないなど。見た目なしで続ける
-        self._dim, groups = dim_buttons(
-            targets, shot, float(self.cfg["dim_ratio"]), float(self.cfg["dim_min_gap"]),
-        )
-        for g in groups:
-            if g.key not in self.run.dim_seen:
-                self.run.dim_seen.add(g.key)
-                self.run.notes.append(
-                    f"`{g.key}` の並び {g.total} 個のうち {g.dim} 個が、いちばん明るいものより暗いので、押す順番を後回しにした"
+        run = self.run
+        record: dict[str, Any] = {}
+        for gkey, values in measure(targets, shot).items():
+            top = brightest(values)
+            ref = run.bright_ref.get(gkey, (0.0, 0.0))
+            ref = (max(ref[0], top[0]), max(ref[1], top[1]))
+            run.bright_ref[gkey] = ref
+            dk = dark(values, ref, float(self.cfg["dim_ratio"]), float(self.cfg["dim_min_gap"]))
+            self._dim |= dk
+            if dk and len(dk) == len(values):
+                self._explore = True
+            for label in values:
+                now = label in dk
+                if run.dim_history.get(label) and not now and label not in run.newly_bright:
+                    run.newly_bright.add(label)
+                    run.notes.append(f"`{label}` は前に見たときは暗かったのに明るくなったので、先に押す（起動 #{self.launch}）")
+                run.dim_history[label] = now
+            if dk and gkey not in run.dim_seen:
+                run.dim_seen.add(gkey)
+                run.notes.append(
+                    f"`{gkey}` の並びで、いちばん明るいものより暗いボタン（{len(dk)}/{len(values)} 個）を後回しにした"
                     f"（起動 #{self.launch}）"
                 )
+            record[gkey] = {
+                "ref": [round(ref[0], 3), round(ref[1], 3)],
+                "buttons": {k: [round(v[0], 3), round(v[1], 3), k in dk] for k, v in values.items()},
+            }
+        if record:
+            # 明るさの判定をあとから確かめられるように残す（events.jsonl）
+            self.publish(Event("harness", "looks", {"groups": record, "explore": self._explore}, self.launch))
 
     async def _normal(self, op: Op, key: str, verify: bool) -> None:
         before = self.state.signature()
@@ -254,7 +294,7 @@ class FuzzSession:
         waited = time.monotonic() - started
         responded = self.state.signature() != before
         if not responded and op.target is not None and op.target.kind == "button":
-            await self._check_front(op.target.key)
+            await self._check_front(op.target.label)
         # 別の画面に切り替わったか（ボタンのある menu・モーダルが開いた／閉じた、scene が変わった）。V-07 が使う
         screen_changed = responded and self.state.screens() != screens_before
         self.run.stats["normal"] += 1
@@ -336,13 +376,13 @@ class FuzzSession:
             self.run.last_exit_t = time.monotonic()
             await asyncio.sleep(float(self.cfg["role_window_sec"]))
             # ここまで来たら終わっていない（終われば、このセッションごと止められる）
-            self.run.guard.book.cancel(op.target.key, f"{self.cfg['role_window_sec']:g} 秒たってもゲームが終わらなかった")
+            self.run.guard.book.cancel(op.target.label, f"{self.cfg['role_window_sec']:g} 秒たってもゲームが終わらなかった")
         self.on_expect_exit(False)
         self._exiting = False
 
     async def _external(self, op: Op) -> None:
         assert op.target is not None
-        self.run.guard.use_external(op.target.key)
+        self.run.guard.use_external(op.target.label)
         if not await self._do(op):
             return
         self.run.stats["external"] += 1
@@ -350,14 +390,14 @@ class FuzzSession:
         front = await asyncio.to_thread(self.pointer.platform.frontmost_pid)
         changed = front is not None and front != self.pointer.pid
         if changed:
-            self.run.guard.book.confirm(op.target.key, "external", "前面のアプリがゲーム以外に切り替わった")
+            self.run.guard.book.confirm(op.target.label, "external", "前面のアプリがゲーム以外に切り替わった")
         try:
             await asyncio.to_thread(self.pointer.ensure_front)
             back = True
         except PointerError:
             back = False
         self.publish(
-            Event("harness", "external", {"target": op.target.key, "front_changed": changed, "back": back}, self.launch)
+            Event("harness", "external", {"target": op.target.label, "front_changed": changed, "back": back}, self.launch)
         )
         self._verify_next = True
 
@@ -377,8 +417,9 @@ class FuzzSession:
         self.run.recent.append(op.label)
         if op.target is not None:
             self.run.labels.add(op.target.label)
+            self.run.newly_bright.discard(op.target.label)
             if op.target.kind == "button":
-                self.run.last_press = (op.target.key, time.monotonic())
+                self.run.last_press = (op.target.label, time.monotonic())
         self.publish(Event("harness", "op", {**op.to_json(), "trigger": trigger, "pos": pos}, self.launch))
         return True
 

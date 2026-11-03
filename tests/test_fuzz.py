@@ -43,6 +43,7 @@ CFG = {
     "stuck_modal_sec": 0.2,
     "external_wait_sec": 0.05,
     "exit_min_interval_sec": 3600,
+    "hover_wait_sec": 0,
 }
 
 

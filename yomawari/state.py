@@ -172,13 +172,15 @@ class GameState:
                 ))
                 seen[bname] = seen.get(bname, 0) + 1
         prev = self.menus.get(name)
+        if self.title_menu is None and buttons:
+            # 最初はボタンなし（フェードイン中で押せない）で出て、あとからボタン付きで出し直すことがあるので、
+            # 新しく出たときに限らず、最初にボタンを持った menu をタイトルとする
+            self.title_menu = name
+        elif prev is None and name == self.title_menu and self._played_since_title:
+            self.title_returns += 1
+            self._played_since_title = False
         if prev is None:
             self._order += 1
-            if self.title_menu is None and buttons:
-                self.title_menu = name
-            elif name == self.title_menu and self._played_since_title:
-                self.title_returns += 1
-                self._played_since_title = False
         self.menus[name] = Menu(name, bool(d.get("modal")), buttons, prev.order if prev else self._order)
 
     def _on_menu_close(self, d: dict[str, Any], t: float) -> None:

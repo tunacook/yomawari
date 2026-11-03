@@ -3,15 +3,20 @@
 ゲームのボタンは、表示はしたまま、明るさで「今は押せない」ことを表すことが多い（回想一覧のまだ開いていない
 スロット、セーブがないときの「つづきから」など）。人がそれを見て察するのと同じく、同じ画面（menu）の中で
 同じ種類に見えるボタン（同じ名前か、同じ大きさ）が min_group 個以上並ぶとき、画面の明るさを比べて、
-いちばん明るいものより明らかに暗いものを「暗い」とする。
+いちばん明るいものより明らかに暗いものを「暗い」とする。比べる相手には、スクロールする前に見た同じ並びの
+いちばん明るいものも含める（見えている分がすべて暗いときにも、暗いと分かるように）。
 
 暗いボタンは押す順番を後回しにするだけで、押さなくはしない。押せないのが仕様かどうかは、押した結果で分かる。
+文字で「空」と分かるボタン（"Empty" など。rules.yaml の inactive_hints）も、同じく後回しにする。
 """
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
-from dataclasses import dataclass
+from pathlib import Path
+
+import yaml
 
 from ..sensors.screen import Shot, brightness
 from ..state import Target
@@ -19,17 +24,11 @@ from ..state import Target
 # 同じ大きさとみなす、幅・高さの差（描画領域に対する割合）
 _SIZE_STEP = 0.01
 
-
-@dataclass(frozen=True)
-class DimGroup:
-    """暗いボタンがあった並び（記録用）。"""
-
-    key: str  # 同じ名前なら "<menu>/<name>"、同じ大きさなら "<menu>/（同じ大きさのボタン）"
-    total: int
-    dim: int
+Values = dict[str, tuple[float, float]]  # label → (平均の明るさ, 明るい部分の明るさ)
 
 
-def _groups(targets: list[Target], min_group: int) -> dict[str, list[Target]]:
+def groups(targets: list[Target], min_group: int = 3) -> dict[str, list[Target]]:
+    """同じ種類に見えるボタンの並び。キーは同じ名前なら "<menu>/<name>"、同じ大きさなら "<menu>/（WxH のボタン）"。"""
     by_name: dict[str, list[Target]] = defaultdict(list)
     by_size: dict[tuple[str, int, int], list[Target]] = defaultdict(list)
     for t in targets:
@@ -47,28 +46,52 @@ def _groups(targets: list[Target], min_group: int) -> dict[str, list[Target]]:
     return out
 
 
-def dim_buttons(
-    targets: list[Target], shot: Shot, ratio: float, min_gap: float, min_group: int = 3,
-) -> tuple[set[str], list[DimGroup]]:
-    """暗いボタンの label の集合と、暗いものがあった並び。
-
-    暗い = 平均の明るさか、明るい部分の明るさのどちらかが、同じ並びでいちばん明るいものの ratio 倍より暗く、
-    差が min_gap 以上。
-    """
-    dim: set[str] = set()
-    found: list[DimGroup] = []
-    for key, ts in _groups(targets, min_group).items():
+def measure(targets: list[Target], shot: Shot, min_group: int = 3) -> dict[str, Values]:
+    """並びごとに、ボタンの明るさを測る。測れたボタンが min_group 個に満たない並びは除く。"""
+    out: dict[str, Values] = {}
+    for key, ts in groups(targets, min_group).items():
         values = {t.label: v for t in ts if (v := brightness(shot, t.rect)) is not None}
-        if len(values) < min_group:
-            continue
-        top_mean = max(v[0] for v in values.values())
-        top_peak = max(v[1] for v in values.values())
-        dark = {
-            label for label, (mean, peak) in values.items()
-            if (mean < top_mean * ratio and top_mean - mean >= min_gap)
-            or (peak < top_peak * ratio and top_peak - peak >= min_gap)
-        }
-        if dark:
-            dim |= dark
-            found.append(DimGroup(key, len(values), len(dark)))
-    return dim, found
+        if len(values) >= min_group:
+            out[key] = values
+    return out
+
+
+def dark(values: Values, ref: tuple[float, float], ratio: float, min_gap: float) -> set[str]:
+    """暗いボタン: 平均か明るい部分のどちらかが、ref（並びでいちばん明るいもの）の ratio 倍より暗く、差が min_gap 以上。"""
+    top_mean, top_peak = ref
+    return {
+        label for label, (mean, peak) in values.items()
+        if (mean < top_mean * ratio and top_mean - mean >= min_gap)
+        or (peak < top_peak * ratio and top_peak - peak >= min_gap)
+    }
+
+
+def brightest(values: Values) -> tuple[float, float]:
+    return max(v[0] for v in values.values()), max(v[1] for v in values.values())
+
+
+# --- 文字で「空」と分かるボタン ---
+
+
+def load_inactive_words(path: Path) -> list[str]:
+    """rules.yaml の inactive_hints.text（空のスロットなどを表す語）。"""
+    doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    words = ((doc.get("inactive_hints") or {}).get("text")) or []
+    return [str(w) for w in words if w]
+
+
+def inactive(targets: list[Target], words: list[str]) -> set[str]:
+    """文字が「空」を表す語を含むボタンの label。英数字の語は単語として照らし合わせる（大文字小文字は区別しない）。"""
+    if not words:
+        return set()
+    out = set()
+    for t in targets:
+        if t.kind == "button" and t.text and any(_match(w, t.text) for w in words):
+            out.add(t.label)
+    return out
+
+
+def _match(word: str, text: str) -> bool:
+    if word.isascii():
+        return re.search(rf"(?<![A-Za-z0-9]){re.escape(word)}(?![A-Za-z0-9])", text, re.IGNORECASE) is not None
+    return word in text

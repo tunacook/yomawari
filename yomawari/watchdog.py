@@ -27,6 +27,7 @@ from .events import Event, Issue, now_wall
 from .fuzz.decider import RandomDecider
 from .fuzz.guard import Guard
 from .fuzz.loop import FuzzRun, FuzzSession
+from .fuzz.looks import load_inactive_words
 from .fuzz.roles import RoleBook
 from .input.base import InputDriver
 from .input.pointer import Pointer
@@ -319,6 +320,7 @@ class Harness:
                 cfg=self.fuzz_cfg,
                 response_timeout=float(self.rules["S-01"].param("timeout_sec")),
                 screen_weights=self.spec.screen_weights,
+                inactive_words=load_inactive_words(self.rules_path),
             )
             if self.driver_factory is None:
                 from .input.mouse_kb import PyAutoGuiDriver

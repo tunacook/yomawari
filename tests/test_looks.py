@@ -8,7 +8,7 @@ from yomawari.events import Event
 from yomawari.fuzz.decider import RandomDecider
 from yomawari.fuzz.guard import Guard
 from yomawari.fuzz.loop import FuzzRun, FuzzSession
-from yomawari.fuzz.looks import dim_buttons
+from yomawari.fuzz.looks import brightest, dark, inactive, load_inactive_words, measure
 from yomawari.fuzz.ops import normal_candidates
 from yomawari.input.pointer import Pointer
 from yomawari.sensors.screen import Shot, brightness
@@ -18,7 +18,7 @@ from yomawari.state import GameState, Target
 from .test_window import FakeWindows
 
 W = H = 100
-CFG = {**FUZZ_DEFAULTS, "settle_sec": 0}
+CFG = {**FUZZ_DEFAULTS, "settle_sec": 0, "hover_wait_sec": 0}
 
 
 def _shot(fills, bg=0):
@@ -47,13 +47,19 @@ def test_brightness_mean_and_peak():
     assert brightness(_shot([]), (1.2, 1.2, 1.5, 1.5)) is None
 
 
+def _dim(targets, shot, ratio=0.6, gap=0.1):
+    out = set()
+    for values in measure(targets, shot).values():
+        out |= dark(values, brightest(values), ratio, gap)
+    return out
+
+
 def test_dark_slots_are_dim_among_same_name():
     slots = [_slot(i) for i in range(4)]
     # 回想一覧: サムネイルを明るさ 0.2 にしたロック中のスロット（Rachel と同じ）と、そのままのスロット
     shot = _shot([(slots[0].rect, 230), (slots[1].rect, 46), (slots[2].rect, 46), (slots[3].rect, 46)])
-    dim, groups = dim_buttons(slots, shot, ratio=0.6, min_gap=0.1)
-    assert dim == {s.label for s in slots[1:]}
-    assert [(g.key, g.total, g.dim) for g in groups] == [("MemoryListUI/Slot", 4, 3)]
+    assert list(measure(slots, shot)) == ["MemoryListUI/Slot"]
+    assert _dim(slots, shot) == {s.label for s in slots[1:]}
 
 
 def test_grey_text_buttons_are_dim_among_same_size():
@@ -62,43 +68,99 @@ def test_grey_text_buttons_are_dim_among_same_size():
     btns = [_slot(i, menu="TitleUI", name=n, nth=0) for i, n in enumerate(names)]
     text = lambda r: (r[0], r[1], r[2], r[1] + 0.05)
     shot = _shot([(text(b.rect), 90 if b.name == "Continue" else 240) for b in btns], bg=20)
-    dim, groups = dim_buttons(btns, shot, ratio=0.6, min_gap=0.1)
-    assert dim == {"TitleUI/Continue"}
-    assert groups[0].key.startswith("TitleUI/（")
+    assert _dim(btns, shot) == {"TitleUI/Continue"}
+    assert next(iter(measure(btns, shot))).startswith("TitleUI/（")
 
 
 def test_even_buttons_and_small_groups_are_not_dim():
     slots = [_slot(i) for i in range(4)]
     shot = _shot([(s.rect, 200 - 10 * i) for i, s in enumerate(slots)])  # 少しずつ違うだけ
-    assert dim_buttons(slots, shot, 0.6, 0.1)[0] == set()
+    assert _dim(slots, shot) == set()
     two = slots[:2]
     shot = _shot([(two[0].rect, 230), (two[1].rect, 30)])
-    assert dim_buttons(two, shot, 0.6, 0.1)[0] == set()  # 2つだけでは比べない
+    assert measure(two, shot) == {}  # 2つだけでは比べない
 
 
-def test_dim_buttons_are_tried_later_and_noted():
+def test_inactive_words_from_rules():
+    from .conftest import RULES_PATH
+
+    words = load_inactive_words(RULES_PATH)
+    ts = [Target("button", "SaveLoadUI", "Slot", (0, 0, 0.1, 0.1), "1. Empty", nth=0),
+          Target("button", "SaveLoadUI", "Slot", (0, 0, 0.1, 0.1), "2. 2026/11/03 14:00", nth=1),
+          Target("button", "SaveLoadUI", "Slot", (0, 0, 0.1, 0.1), "3. 空き", nth=2),
+          Target("button", "SaveLoadUI", "Ret", (0, 0, 0.1, 0.1), "EmptyTrash")]
+    assert inactive(ts, words) == {"SaveLoadUI/Slot", "SaveLoadUI/Slot#2"}
+
+
+class _Mouse:
+    def __init__(self):
+        self.moves = []
+
+    def move(self, x, y):
+        self.moves.append((x, y))
+
+
+def _show(st, slots, hidden=()):
+    st.feed(Event("game", "menu", {"name": "MemoryListUI", "modal": True, "buttons": [
+        {"name": "Slot", "rect": list(x.rect), "text": f"00{i}", "hidden": i in hidden} for i, x in enumerate(slots)]}, 0))
+
+
+def _list_session(slots, shot):
     st = GameState()
     st.feed(Event("game", "resolution", {"w": 2000, "h": 1000}, 0))
-    slots = [_slot(i) for i in range(4)]
-    st.feed(Event("game", "menu", {"name": "MemoryListUI", "modal": True, "buttons": [
-        {"name": "Slot", "rect": list(s.rect)} for s in slots]}, 0))
-    shot = _shot([(slots[2].rect, 230)] + [(s.rect, 46) for i, s in enumerate(slots) if i != 2])
+    _show(st, slots)
     windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1, shot=shot)
     run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
                   rng=random.Random(1), cfg=CFG, response_timeout=0.1)
-    s = FuzzSession(run, st, Pointer(windows, None, 1, st, activate_wait=0), lambda e: None, 0, lambda _: None)
+    mouse = _Mouse()
+    events = []
+    s = FuzzSession(run, st, Pointer(windows, mouse, 1, st, activate_wait=0), events.append, 0, lambda _: None)
+    return s, st, run, windows, mouse, events
+
+
+def test_dim_buttons_are_tried_later_and_noted():
+    slots = [_slot(i) for i in range(4)]
+    shot = _shot([(slots[2].rect, 230)] + [(s.rect, 46) for i, s in enumerate(slots) if i != 2])
+    s, st, run, windows, mouse, events = _list_session(slots, shot)
     asyncio.run(s._look())
-    assert s._dim == {"MemoryListUI/Slot#1", "MemoryListUI/Slot", "MemoryListUI/Slot#3"}
-    ops = normal_candidates(st, run.guard, CFG["weights"], False, None, s._dim, CFG["dim_factor"])
+    assert s._dim == {"MemoryListUI/Slot", "MemoryListUI/Slot#1", "MemoryListUI/Slot#3"} and not s._explore
+    # 撮る前に、カーソルをボタンのない場所（右上の隅）へ逃がした
+    assert mouse.moves == [(995.0, 2.5)]
+    ops = normal_candidates(st, run.guard, CFG["weights"], False, None, s._factors())
     w = {op.target.label: op.weight for op in ops if op.target}
     assert w["MemoryListUI/Slot#2"] == CFG["weights"]["click"]
     assert w["MemoryListUI/Slot#1"] == CFG["weights"]["click"] * CFG["dim_factor"]
-    assert len(run.notes) == 1 and "4 個のうち 3 個" in run.notes[0]
+    assert len(run.notes) == 1 and "3/4 個" in run.notes[0]
+    looks = [e for e in events if e.kind == "looks"]
+    assert looks and looks[0].data["groups"]["MemoryListUI/Slot"]["buttons"]["MemoryListUI/Slot#2"][2] is False
     asyncio.run(s._look())
     assert len(run.notes) == 1  # 同じ並びは1回だけ記録する
     windows.shot = None  # 画面収録の権限がないなど
     asyncio.run(s._look())
     assert s._dim == set()
+
+
+def test_all_dark_after_scroll_explores_and_newly_bright_goes_first():
+    slots = [_slot(i) for i in range(4)]
+    s, st, run, windows, mouse, events = _list_session(slots, _shot([(slots[0].rect, 230)] +
+                                                                    [(x.rect, 46) for x in slots[1:]]))
+    asyncio.run(s._look())
+    # スクロールして、明るい Slot が隠れ、見えている分がすべて暗くなった。前に見た明るいものと比べるので、暗いと分かる
+    _show(st, slots, hidden={0})
+    windows.shot = _shot([(x.rect, 46) for x in slots])
+    asyncio.run(s._look())
+    assert s._dim == {x.label for x in slots[1:]} and s._explore
+    ops = normal_candidates(st, run.guard, CFG["weights"], False, None, s._factors(),
+                            CFG["explore_factor"] if s._explore else 1.0)
+    moves = [op for op in ops if op.group == "move"]
+    assert moves and all(op.weight == CFG["weights"]["move"] * CFG["explore_factor"] for op in moves)
+    # 思い出を手に入れたあとに戻ると、暗かった #3 が明るい。先に押す
+    _show(st, slots)
+    windows.shot = _shot([(slots[0].rect, 230), (slots[3].rect, 230)] + [(x.rect, 46) for x in slots[1:3]])
+    asyncio.run(s._look())
+    assert run.newly_bright == {"MemoryListUI/Slot#3"}
+    assert s._factors()["MemoryListUI/Slot#3"] == CFG["new_bright_factor"]
+    assert any("明るくなった" in n for n in run.notes)
 
 
 def test_covered_buttons_are_not_targets():
