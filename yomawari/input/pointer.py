@@ -19,6 +19,10 @@ class PointerError(Exception):
     """押せなかった理由。ゲームの不具合とは限らないので、呼び出し側で扱いを決める。"""
 
 
+class InputBlocked(PointerError):
+    """OS がゲームへの入力を受け付けない（画面がロックされている、ゲームを前面にできない）。人が画面を戻すまで続く。"""
+
+
 class Pointer:
     def __init__(
         self,
@@ -49,12 +53,15 @@ class Pointer:
         return area
 
     def ensure_front(self) -> None:
+        locked = getattr(self.platform, "screen_locked", None)
+        if locked is not None and locked():
+            raise InputBlocked("画面がロックされています")
         if self.platform.frontmost_pid() == self.pid:
             return
         self.platform.activate(self.pid)
         time.sleep(self.activate_wait)
         if self.platform.frontmost_pid() != self.pid:
-            raise PointerError("ゲームを前面にできません")
+            raise InputBlocked("ゲームを前面にできません")
 
     def click(self, target: Target, button: str = "left", clicks: int = 1) -> tuple[float, float]:
         """target を押し、押した画面座標を返す。押す直前に、target が最新の状態にまだあるか確かめる。"""

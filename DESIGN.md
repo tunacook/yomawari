@@ -324,6 +324,8 @@ dim_factor = 0.05             # 暗いボタン・文字で空と分かるボタ
 new_bright_factor = 20        # 前に見たときは暗かったのに明るくなったボタン（新しくアンロックされたもの）の重みに掛ける
 explore_factor = 3            # 見えている並びがどれも押せそうにない、または明るさに差がなくどれを押せばよいか分からないとき、画面の外を探す操作の重みに掛ける（押して確かめる前に一覧を見て回る）
 hover_wait_sec = 0.3          # 明るさを測る前に、カーソルをボタンのない場所へ動かしてから待つ時間
+blocked_wait_sec = 5          # 画面のロックなどで OS が入力を受け付けないとき、次に試すまで待つ時間
+blocked_note_sec = 30         # これより長く入力を受け付けなかったときだけ「ハーネスの記録」に書く
 quiet_wait_sec = 1            # 暗い・空のボタン、押しても一度も反応しなかったボタン（反応しないと見込んでいるもの）を押したあと、反応を待つ時間
 search_factor = 1             # まだ見ていないボタンが画面の外にある向きへ動かす操作の重み（click × 画面の重み × これ）
 return_factor = 3             # 前に見て明るかった（開示済みと分かっている）ボタンが画面の外にあるとき、そこへ戻る操作の重み（click × 画面の重み × これ）
@@ -377,7 +379,8 @@ role_min_confidence = 0.7    # ボタンの見た目からの役割の推定（�
 - ハーネス本体とゲームの起動・再起動（ハーネス自体の異常もレポートに記録）
 - 時間予算、同一箇所での連続クラッシュ時の打ち切り
 - 終了時のセーブ・設定の復元。異常終了した場合は次回起動時に未復元を検出して復元
-- `caffeinate -dimsu` の下で動く
+- `caffeinate -dimsu -w <ハーネスの pid>` を起動して、ランのあいだ画面とシステムのスリープを防ぐ（`platform` の `keep_awake`）
+- 画面のロック中（`platform` の `screen_locked`）とゲームを前面にできないときは、OS が入力を受け付けない。操作を試す間隔を `blocked_wait_sec` あけ、`blocked_note_sec` 以上続いた時間を「ハーネスの記録」に書く。`events.jsonl` には `input_blocked` / `input_resumed` を1回ずつ出す
 
 保存場所（macOS、ビルド）:
 - セーブ: `~/Library/Application Support/<バンドルID>/`（`Info.plist` の `CFBundleIdentifier`。例: `com.Company.Product`）
