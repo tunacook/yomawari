@@ -482,12 +482,23 @@ def test_decider_puts_no_response_ops_later():
 
 
 def test_list_screen_scrolls_and_leaves():
-    # 押しても反応しないスロットばかりのモーダルでも、スクロールして先を出し、Esc で抜ける
-    game, run, issues, events, _ = run_sim("random", 2.0, title=LIST_TITLE)
-    assert game.scrolled > 0
+    # 押しても反応しないスロットばかりのモーダルでも、スクロールして先を出し、Esc で抜ける。見た目に差がないので、
+    # 押して確かめるより先に一覧を最後まで見て回り、見終えてから抜ける
+    game, run, issues, events, _ = run_sim("random", 8.0, title=LIST_TITLE)
+    assert {"ListUI/Slot"} | {f"ListUI/Slot#{i}" for i in range(1, LIST_SLOTS)} <= run.seen
     assert game.list_closed > 0
     results = [e.data for e in events if e.kind == "op_result"]
     assert any(r["kind"] in ("drag", "wheel_down", "key") and r["responded"] for r in results)
+    # 見ていない項目のある向きが分かっている間（最後の項目が見えるまで）は、向きを決めずに動かす操作（逆向きの
+    # ドラッグなど）を混ぜない
+    def last_visible(e):
+        if not (e.source == "game" and e.kind == "menu" and e.data["name"] == "ListUI"):
+            return False
+        r = e.data["buttons"][-1]["rect"]
+        return 0 <= (r[1] + r[3]) / 2 <= 1
+    end = next(i for i, e in enumerate(events) if last_visible(e))
+    before = [e.data["label"] for e in events[:end] if e.kind == "op"]
+    assert not {"drag down", "wheel_up 3", "key up"} & set(before), before
     # 描画領域の外のスロットは押さない
     clicks = [e.data["pos"] for e in events if e.kind == "op" and e.data["kind"] == "click"]
     assert clicks and all(0 <= x <= BOUNDS.w and 0 <= y <= BOUNDS.h for x, y in clicks)

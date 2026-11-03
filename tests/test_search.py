@@ -1,7 +1,7 @@
 """画面の外を探す（fuzz/search.py）。"""
 
 from yomawari.events import Event
-from yomawari.fuzz.search import blind_candidates, leads, search_candidates, stuck_rows
+from yomawari.fuzz.search import blind_candidates, known_leads, leads, search_candidates, stuck_rows
 from yomawari.state import GameState
 
 
@@ -49,6 +49,18 @@ def test_nothing_to_search_when_all_seen():
     assert leads(st, seen) == []
 
 
+def test_known_leads_go_back_to_bright_button():
+    # 明るかった（開示済みと分かっている）項目が画面の外にあれば、そちらへ戻る。見ていない項目を探すのとは別の向き
+    st = _grid()
+    seen = {"ListUI/Slot"} | {f"ListUI/Slot#{i}" for i in range(1, 16)}
+    assert leads(st, seen) == []
+    found = known_leads(st, {"ListUI/Slot#15"})
+    assert [(lead.direction, lead.unseen, lead.kind) for lead in found] == [("down", 1, "known"), ("right", 1, "known")]
+    assert {lead.kind for lead in leads(st, set())} == {"unseen"}
+    # 見えている項目に明るかったものがあれば、それを押せばよいので戻らない
+    assert known_leads(st, {"ListUI/Slot#15", "ListUI/Slot#1"}) == []
+
+
 def test_search_candidates_are_not_novelty_and_dedupe():
     st = _grid()
     found = leads(st, set())
@@ -73,3 +85,69 @@ def test_blind_search_only_when_all_visible_are_stuck():
     ops = blind_candidates(rows[0][2], 1.0)
     assert {op.label for op in ops} >= {"wheel_down 3", "wheel_up 3", "drag up", "drag left", "key right"}
     assert all(op.novelty and op.group == "search" for op in ops)
+
+
+def test_session_prefers_survey_and_skips_dead_means():
+    import random
+
+    import pytest
+
+    from yomawari.config import FUZZ_DEFAULTS
+    from yomawari.fuzz.decider import RandomDecider
+    from yomawari.fuzz.guard import Guard
+    from yomawari.fuzz.loop import FuzzRun, FuzzSession
+    from yomawari.input.pointer import Pointer
+    from yomawari.sensors.window import ScreenRect, WindowInfo
+
+    from .test_window import FakeWindows
+
+    st = _grid(modal=True)
+    cfg = {**FUZZ_DEFAULTS, "hover_wait_sec": 0}
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                  rng=random.Random(1), cfg=cfg, response_timeout=0.1)
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
+    s = FuzzSession(run, st, Pointer(windows, None, 1, st, activate_wait=0), lambda ev: None, 0, lambda _: None)
+    base = cfg["weights"]["click"] * cfg["search_factor"]
+    # 見た目に差がない（明るさを比べられていない）並びは、押して確かめるより先に見て回る
+    ops = {op.label: op.weight for op in s._search_candidates()}
+    assert ops["wheel_down 3"] == pytest.approx(base * cfg["explore_factor"])
+    # この画面で動かしても反応しなかった手段（方向キー）は後回しにする
+    run.search_dead[("ListUI", "key down")] = 2
+    ops = {op.label: op.weight for op in s._search_candidates()}
+    assert ops["key down"] == pytest.approx(base * cfg["explore_factor"] * cfg["no_response_factor"] ** 2)
+    # 明るさに差のある並びでは、明るいものを押せばよいので、見て回るほうを強めない
+    s._varied = {"ListUI/Slot"}
+    ops = {op.label: op.weight for op in s._search_candidates()}
+    assert ops["wheel_down 3"] == pytest.approx(base)
+
+
+def test_session_separates_return_from_search_by_intent():
+    import random
+
+    from yomawari.config import FUZZ_DEFAULTS
+    from yomawari.fuzz.decider import RandomDecider
+    from yomawari.fuzz.guard import Guard
+    from yomawari.fuzz.loop import FuzzRun, FuzzSession
+    from yomawari.input.pointer import Pointer
+    from yomawari.sensors.window import ScreenRect, WindowInfo
+
+    from .test_window import FakeWindows
+
+    # 下の右端に、前に見て明るかった項目がある。まだ見ていない項目も下と右にある
+    st = _grid(modal=True)
+    cfg = {**FUZZ_DEFAULTS, "hover_wait_sec": 0}
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                  rng=random.Random(1), cfg=cfg, response_timeout=0.1)
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
+    s = FuzzSession(run, st, Pointer(windows, None, 1, st, activate_wait=0), lambda ev: None, 0, lambda _: None)
+    run.dim_history = {"ListUI/Slot#15": False, "ListUI/Slot": True}
+    # 「本編を進める」: 分かっている項目へ戻るだけ（探す操作は混ぜない）
+    run.intent = "progress"
+    assert {op.group for op in s._search_candidates()} == {"return"}
+    assert any("前に見て明るかった項目" in n for n in run.notes)
+    # 「画面を見て回る」: まだ見ていない項目を探すだけ
+    run.intent = "explore"
+    assert {op.group for op in s._search_candidates()} == {"search"}
+    # 見ていない項目がなくなったら、戻る
+    run.seen |= {"ListUI/Slot"} | {f"ListUI/Slot#{i}" for i in range(1, 16)}
+    assert {op.group for op in s._search_candidates()} == {"return"}

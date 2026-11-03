@@ -36,6 +36,7 @@ class Lead:
     unseen: int  # その向きにある、まだ見ていないボタンの数
     point: tuple[float, float]  # ホイール・ドラッグをする位置（見えているボタンの範囲の中心）
     visible: tuple[str, ...]  # 見えているボタンの label
+    kind: str = "unseen"  # unseen: まだ見ていない項目を探す / known: 前に見て明るかった（開示済みと分かっている）項目へ戻る
 
 
 def searchable_menus(state: GameState) -> list[Menu]:
@@ -46,7 +47,21 @@ def searchable_menus(state: GameState) -> list[Menu]:
 
 
 def leads(state: GameState, seen: set[str]) -> list[Lead]:
-    """menu ごと・同じ名前の並びごとに、まだ見ていないボタンがある向き。"""
+    """menu ごと・同じ名前の並びごとに、まだ見ていないボタンがある向き（まだ認識していない項目を探す）。"""
+    return _directions(state, lambda vis, b: b.label not in seen, "unseen")
+
+
+def known_leads(state: GameState, known: set[str]) -> list[Lead]:
+    """見えているボタンに known がない並びで、画面の外の known（前に見て明るかった項目）がある向き。
+
+    すでに認識している開示済みの項目へ戻る。まだ見ていない項目を探す（leads）のとは別の行動として扱う。
+    """
+    def want(vis: list[Target], b: Target) -> bool:
+        return b.label in known and not any(v.label in known for v in vis)
+    return _directions(state, want, "known")
+
+
+def _directions(state: GameState, want, kind: str) -> list[Lead]:
     out: list[Lead] = []
     for m in searchable_menus(state):
         by_name: dict[str, list[Target]] = {}
@@ -62,7 +77,7 @@ def leads(state: GameState, seen: set[str]) -> list[Lead]:
             y1 = max(b.rect[3] for b in vis)
             count: Counter[str] = Counter()
             for b in bs:
-                if b.visible or b.covered or b.label in seen:
+                if b.visible or b.covered or not want(vis, b):
                     continue
                 cx, cy = (b.rect[0] + b.rect[2]) / 2, (b.rect[1] + b.rect[3]) / 2
                 if cy > y1:
@@ -75,12 +90,12 @@ def leads(state: GameState, seen: set[str]) -> list[Lead]:
                     count["left"] += 1
             point = ((x0 + x1) / 2, (y0 + y1) / 2)
             labels = tuple(b.label for b in vis)
-            out += [Lead(m.name, name, d, n, point, labels) for d, n in sorted(count.items())]
+            out += [Lead(m.name, name, d, n, point, labels, kind) for d, n in sorted(count.items())]
     return out
 
 
-def search_candidates(found: list[Lead], weights: dict[str, float]) -> list[Op]:
-    """見ていない項目のある向きへ動かす操作。同じ操作は重みの大きいほうだけ残す。"""
+def search_candidates(found: list[Lead], weights: dict[str, float], group: str = "search") -> list[Op]:
+    """見ていない（または戻りたい）項目のある向きへ動かす操作。同じ操作は重みの大きいほうだけ残す。"""
     best: dict[tuple[str, str | int], Op] = {}
     for lead in found:
         for kind, arg in REVEAL[lead.direction]:
@@ -88,7 +103,7 @@ def search_candidates(found: list[Lead], weights: dict[str, float]) -> list[Op]:
             if w <= 0:
                 continue
             point = None if kind == "key" else lead.point
-            op = Op(kind, arg=arg, weight=w, novelty=False, group="search", point=point)
+            op = Op(kind, arg=arg, weight=w, novelty=False, group=group, point=point)
             if (kind, arg) not in best or best[(kind, arg)].weight < w:
                 best[(kind, arg)] = op
     return list(best.values())

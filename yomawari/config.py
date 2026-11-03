@@ -53,12 +53,15 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "dim_min_gap": 0.1,
     "dim_factor": 0.05,
     "new_bright_factor": 20.0,  # 前に見たときは暗かったのに明るくなったボタン（新しくアンロックされたもの）の重みに掛ける
-    "explore_factor": 3.0,  # 見えている並びがどれも押せそうにないとき、探す操作（fuzz/search.py）の重みに掛ける
+    "explore_factor": 3.0,  # 見えている並びがどれも押せそうにない・明るさに差がないとき、探す操作（fuzz/search.py）の重みに掛ける
     "hover_wait_sec": 0.3,  # 明るさを測る前に、カーソルをボタンのない場所へ動かしてから待つ時間（ホバーの演出が戻るまで）
     "quiet_wait_sec": 1.0,  # 暗い・空のボタン（反応しないと見込んでいるもの）を押したあと、反応を待つ時間
     # 同じ名前の並びで、まだ見ていないボタンが画面の外にある向きへ動かす操作（fuzz/search.py）の重み。
-    # [fuzz.weights] click × 画面の重み × search_factor。見えているものがすべて暗い・押しても反応しなかったときは explore_factor も掛ける
+    # [fuzz.weights] click × 画面の重み × search_factor。見えているものがすべて暗い・押しても反応しなかった・明るさに差がないときは explore_factor も掛ける
     "search_factor": 1.0,
+    # 前に見て明るかった（開示済みと分かっている）ボタンが画面の外にあるとき、そこへ戻る操作の重み。click × 画面の重み × return_factor。
+    # まだ見ていないボタンを探す（search_factor）のとは別の行動として扱う
+    "return_factor": 3.0,
     "search_give_up": 6,  # その向きへ動かしても続けてこの回数反応しなければ、動かせないとみなしてやめる
     # ゲームが開いた画面で、見えているものがどれも押せないとき、向きを決めずに動かして探す回数の上限（開き直すと数え直す）
     "blind_search_limit": 30,

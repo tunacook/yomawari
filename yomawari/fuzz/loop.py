@@ -41,7 +41,7 @@ from .ops import (
     normal_candidates,
     state_key,
 )
-from .search import REVEAL, blind_candidates, leads, search_candidates, searchable_menus, stuck_rows
+from .search import REVEAL, Lead, blind_candidates, known_leads, leads, search_candidates, searchable_menus, stuck_rows
 
 # プレイの目的（random モード）→ レポートでの呼び方
 INTENTS = {"progress": "本編を進める", "explore": "画面を見て回る"}
@@ -85,6 +85,7 @@ class FuzzRun:
     search_miss: Counter[str] = field(default_factory=Counter)  # "<menu>/<name>:<向き>" → 動かしても続けて反応しなかった回数
     # menu → それを開いたボタンの label（ハーネスがボタンを押して開いた寄り道の画面）。ここにない menu はゲームが開いたもの
     opened_by: dict[str, str] = field(default_factory=dict)
+    search_dead: Counter[tuple[str, str]] = field(default_factory=Counter)  # (menu, 探す操作) → 続けて反応しなかった回数
     blind_tries: Counter[str] = field(default_factory=Counter)  # menu → 向きを決めずに探した回数（開き直すと 0 に戻す）
     search_noted: set[str] = field(default_factory=set)  # 「ハーネスの記録」に書いた探し方（menu ごと）
     # 進め方の経験（fuzz/experience.py）
@@ -134,7 +135,9 @@ class FuzzSession:
         self._exiting = False
         self._looked: Any = None  # 見た目を比べたときの signature
         self._dim: set[str] = set()
-        self._search: dict[str, list[str]] = {}  # 探す操作の label → それが向かう "<menu>/<name>:<向き>"
+        self._varied: set[str] = set()  # 明るさに差のあった並び（looks の並びのキー）
+        # 探す・戻る操作の label → それが向かう ("<unseen|known>:<menu>/<name>:<向き>", menu)
+        self._search: dict[str, list[tuple[str, str]]] = {}
         self._blind: dict[str, list[str]] = {}  # 向きを決めずに探す操作の label → その menu
         self._title_returns = state.title_returns
         self._resolution_changes = state.resolution_changes
@@ -263,7 +266,11 @@ class FuzzSession:
             self._factors(),
         )
         if cands:
-            cands += self._search_candidates()
+            search = self._search_candidates()
+            if self._search:
+                # 向きの決まった探し方・戻り方があるので、向きを決めずに動かす操作は使わない（探す向きと逆に動かして打ち消す）
+                cands = [op for op in cands if op.group != "move" or op.label == "key enter"]
+            cands += search
         cands = self._apply_intent(cands)
         top = self.state.top_modal()
         if top is not None and not top.buttons and not self.state.busy:
@@ -277,7 +284,7 @@ class FuzzSession:
         if self._verify_next:
             # 画面を動かす操作（方向キー・Enter・ドラッグ・ホイール。一覧を探す操作も）は、フォーカスやスクロール位置で
             # 結果が変わるので使わない
-            known = [op for op in cands if op.group not in ("move", "search") and (key, op.label) in self.run.responsive]
+            known = [op for op in cands if op.group not in ("move", "search", "return") and (key, op.label) in self.run.responsive]
             if known:
                 cands, verify = known, True
         op = self.run.decider.choose(key, cands)
@@ -392,10 +399,7 @@ class FuzzSession:
             del run.opened_by[name]  # 閉じた
             run.opened_press.pop(name, None)
         self._search, self._blind = {}, {}
-        found = [
-            lead for lead in leads(self.state, run.seen)
-            if run.search_miss[f"{lead.menu}/{lead.name}:{lead.direction}"] < int(self.cfg["search_give_up"])
-        ]
+        found = self._choose_leads()
         stuck = self._quiet() | run.silent
         if not found:
             # どの向きに項目があるか分からない（画面の外の矩形が来ない、ページ送りの一覧など）、または一通り見終わった。
@@ -420,23 +424,64 @@ class FuzzSession:
                     ops.append(op)
                     self._blind.setdefault(op.label, []).append(menu)
             return ops
-        weights: dict[str, float] = {}
-        for lead in found:
-            w = float(self.cfg["weights"]["click"]) * run.screen_weights.get(lead.menu, 1.0) * float(self.cfg["search_factor"])
-            if all(label in stuck for label in lead.visible):
-                w *= float(self.cfg["explore_factor"])  # 見えているものに押せそうなものがない。探すほうを先にする
-            weights[f"{lead.menu}/{lead.name}"] = w
-        ops = search_candidates(found, weights)
-        for op in ops:
-            self._search[op.label] = [
-                f"{lead.menu}/{lead.name}:{lead.direction}" for lead in found
-                if (op.kind, op.arg) in REVEAL[lead.direction]
-            ]
+        return self._lead_ops(found, stuck)
+
+    def _choose_leads(self) -> list[Lead]:
+        """画面の外へ動かす向き。まだ認識していない項目を探す（unseen）のと、すでに認識している開示済みの項目へ戻る
+        （known）のは別の行動として、menu ごとにどちらか一方だけを選ぶ（両方を混ぜると、逆の向きへ動かして打ち消し合う）。
+        「本編を進める」プレイでは、分かっている進み方を先に使うので戻るほうを、それ以外では見て回るほうを先にする。"""
+        run = self.run
+        give_up = int(self.cfg["search_give_up"])
+        unseen = [lead for lead in leads(self.state, run.seen) if run.search_miss[self._lead_key(lead)] < give_up]
+        known = [lead for lead in known_leads(self.state, self._known()) if run.search_miss[self._lead_key(lead)] < give_up]
+        first, second = (known, unseen) if run.intent == "progress" else (unseen, known)
+        menus = {lead.menu for lead in first}
+        return first + [lead for lead in second if lead.menu not in menus]
+
+    @staticmethod
+    def _lead_key(lead: Lead) -> str:
+        return f"{lead.kind}:{lead.menu}/{lead.name}:{lead.direction}"
+
+    def _lead_ops(self, found: list[Lead], stuck: set[str]) -> list[Op]:
+        run = self.run
+        click = float(self.cfg["weights"]["click"])
+        low = float(self.cfg["no_response_factor"])
+        ops: list[Op] = []
+        for kind, group in (("unseen", "search"), ("known", "return")):
+            these = [lead for lead in found if lead.kind == kind]
+            weights: dict[str, float] = {}
+            for lead in these:
+                row = f"{lead.menu}/{lead.name}"
+                w = click * run.screen_weights.get(lead.menu, 1.0)
+                if kind == "known":
+                    # 前に見て明るかった項目へ戻る。見えているものに明るいものがないときだけ候補になる
+                    w *= float(self.cfg["return_factor"])
+                    self._note_search(lead.menu, f"`{lead.menu}` で、前に見て明るかった項目（開示済みと分かっている"
+                                                 "もの）が画面の外にあったので、そこへ戻った", final=False, tag="known")
+                else:
+                    w *= float(self.cfg["search_factor"])
+                    if all(label in stuck for label in lead.visible) or row not in self._varied:
+                        # 見えているものに押せそうなものがない、または見た目に差がなく、どれを押せばよいか分からない。
+                        # 人が一覧を一通り眺めてから選ぶように、押して確かめる（反応がないと待たされる）より先に見て回る
+                        w *= float(self.cfg["explore_factor"])
+                weights[row] = max(weights.get(row, 0.0), w)
+            for op in search_candidates(these, weights, group):
+                targets = [lead for lead in these if (op.kind, op.arg) in REVEAL[lead.direction]]
+                menu = targets[0].menu if targets else ""
+                # この画面で動かしても反応しなかった手段（一覧が受け付けない方向キーなど）は後回しにする
+                op = dataclasses.replace(op, weight=op.weight * low ** run.search_dead[(menu, op.label)])
+                self._search[op.label] = [(self._lead_key(lead), lead.menu) for lead in targets]
+                ops.append(op)
         return ops
 
-    def _note_search(self, menu: str, text: str, final: bool = True) -> None:
-        """探し方を「ハーネスの記録」に書く。menu ごとに、始めたときと終えたときの1回ずつ。"""
-        key = f"{menu}:{'end' if final else 'start'}"
+    def _known(self) -> set[str]:
+        """すでに認識している開示済みの項目: 前に測ったとき、並びの中で明るかった（ほかに暗いものがあった）もので、
+        押して反応がなかったのではないもの。"""
+        return {label for label, dim in self.run.dim_history.items() if dim is False} - self.run.silent
+
+    def _note_search(self, menu: str, text: str, final: bool = True, tag: str = "") -> None:
+        """探し方を「ハーネスの記録」に書く。menu・行動（tag）ごとに、始めたときと終えたときの1回ずつ。"""
+        key = f"{menu}:{tag}:{'end' if final else 'start'}"
         if key in self.run.search_noted:
             return
         self.run.search_noted.add(key)
@@ -463,7 +508,7 @@ class FuzzSession:
         比べない（半透明の UI は後ろの絵で明るさが変わり、別のときに撮ったものとは比べられないため）。
         前は暗かったのに、ほかに暗いものが残っている並びで明るくなったボタン（新しくアンロックされたもの）は、ランで1回だけ先に押す。
         """
-        self._dim = set()
+        self._dim, self._varied = set(), set()
         targets = self.state.targets()
         if float(self.cfg["dim_factor"]) >= 1 or not groups(targets):
             return  # 無効にしている、または同じ種類に見えるボタンが並んでいない
@@ -479,6 +524,8 @@ class FuzzSession:
             ref = brightest(values)
             dk = dark(values, ref, float(self.cfg["dim_ratio"]), float(self.cfg["dim_min_gap"]))
             self._dim |= dk
+            if dk:
+                self._varied.add(gkey)
             # 並びがすべて同じ明るさなら、暗い・明るいは分からないので、前の記録を残す
             for label in values if dk else ():
                 now = label in dk
@@ -542,14 +589,19 @@ class FuzzSession:
                     self.run.opened_by[name] = op.target.label
                     self.run.opened_press[name] = press
                     self.run.blind_tries.pop(name, None)
-        if op.group == "search":
+        if op.group in ("search", "return"):
             for menu in self._blind.get(op.label, []):
                 self.run.blind_tries[menu] += 1
-            for k in self._search.get(op.label, []):
+            for k, _menu in self._search.get(op.label, []):
                 if responded:
                     self.run.search_miss.pop(k, None)
                 else:
                     self.run.search_miss[k] += 1
+            for menu in {m for _k, m in self._search.get(op.label, [])}:
+                if responded:
+                    self.run.search_dead.pop((menu, op.label), None)
+                else:
+                    self.run.search_dead[(menu, op.label)] += 1
         hb_age = time.monotonic() - self.state.last_game_t if self.state.last_game_t is not None else None
         self.publish(
             Event(
