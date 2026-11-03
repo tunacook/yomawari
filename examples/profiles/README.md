@@ -4,7 +4,7 @@
 
 | ファイル | エンジン | 状態 |
 |---|---|---|
-| [unity-naninovel.profile.toml](unity-naninovel.profile.toml) | Unity + Naninovel（Rachel） | 押した結果から役割を覚える処理（②）は未実装。実装したあとの書き方 |
+| [unity-naninovel.profile.toml](unity-naninovel.profile.toml) | Unity + Naninovel（Rachel） | 役割の推定と確定（②）は未実装。実装したあとの書き方 |
 | [tyrano.profile.toml](tyrano.profile.toml) | ティラノスクリプト | 未検証（ゲーム側のプラグインもハーネス側の対応もない） |
 | [renpy.profile.toml](renpy.profile.toml) | Ren'Py | 未検証（同上） |
 
@@ -12,7 +12,7 @@
 ゲームのコードには、Yomawari の概念（インターフェース、コンポーネント、専用の属性など）を入れない（DESIGN.md §1）。プロファイルにも、ゲームの中の名前（UI・ボタン・ラベルの名前）をなるべく書かない。
 
 - ボタンの種類・スクロール・隠れているか、エンジンの標準部品の役割は、エンジンごとのパッケージ・プラグインが自動で読み取る（①）
-- 自作のボタンの役割（終了・ブラウザを開く・タイトルへ・画面の設定）や、押しても何も起きないボタンは、ハーネスが押した結果から覚える（②）
+- 自作のボタンの役割（終了・ブラウザを開く・タイトルへ・画面の設定）は、ハーネスがボタンの文字・名前・見た目から推定し、押した結果で確定する（②）。押しても何も起きないボタンは、押した結果から後回しにする
 - プロファイルに書くのは、テストの方針だけ。役割ごとの押し方を既定値から変えるもの（`[guard.roles]`）、押してはいけないボタン（`[guard.buttons]` の `deny`）、画面ごとの重み（`[screens.<menu>]`）、既知で無害なエラー（`[rules.<ID>]`）
 - 画面を動かす手段（ドラッグ・方向キーなど）は書かない。モーダルな画面では、ハーネスがいつも試す
 
@@ -27,6 +27,6 @@
 | 押せない（`locked`） | Naninovel の選択肢の `Locked`、`interactable` | `disabled` | `sensitive`（`action` の `get_sensitive()`。ギャラリーのロック中のボタンも insensitive になる） |
 | スクロールの先（`scroll`） | `ScrollRect` | `scrollHeight` > `clientHeight` の要素 | `viewport` / `vpgrid` の `yadjustment` |
 
-① で読み取れないもの（表の「—」と、自作の部品すべて）は、ハーネスが押した結果から覚える。Ren'Py は、ボタンの動作が `action` のオブジェクトとして画面に残るので、3つの中ではいちばん多くを ① で読み取れる。
+① で読み取れないもの（表の「—」と、自作の部品すべて）は、ハーネスが推定し、押した結果で確定する。Ren'Py は、ボタンの動作が `action` のオブジェクトとして画面に残るので、3つの中ではいちばん多くを ① で読み取れる。
 
 ティラノスクリプトと Ren'Py の欄は、各エンジンの仕組みから考えた方針で、確かめていない（`docs/game-integration.md` §6 と同じ扱い）。タグの属性や API の名前は、組み込むときに各エンジンの文書で確かめること。
