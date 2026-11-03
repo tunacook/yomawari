@@ -382,3 +382,18 @@ def test_behind_tolerates_small_slide():
     run.look_base = {k: (far[k], v) for k, v in zip(labels, [(0.134, 0.232), (0.13, 0.21), (0.095, 0.169), (0.076, 0.181)])}
     s._judge_behind({"MemoryListUI/Slot": dict(zip(labels, [(0.261, 0.683), (0.199, 0.752), (0.053, 0.102), (0.024, 0.124)]))}, now)
     assert st.behind == set()
+
+
+def test_repressing_a_never_answered_button_waits_short():
+    # 押しても一度も反応しなかったボタンを押し直すときは、quiet_wait_sec だけ待つ（S-05 の対象でないので）。
+    # 一度でも反応したことのあるボタンは、反応しなくなったかを確かめるので、今までどおり待つ
+    slots = [_slot(i) for i in range(3)]
+    s, st, run, *_ = _list_session(slots, _shot([(x.rect, 120) for x in slots]))
+    run.silent.add("MemoryListUI/Slot#1")
+    assert "MemoryListUI/Slot#1" in s._quiet()
+    ops = normal_candidates(st, run.guard, CFG["weights"], False, None, s._factors())
+    w = {op.target.label: op.weight for op in ops if op.target}
+    assert w["MemoryListUI/Slot#1"] == CFG["weights"]["click"] * CFG["dim_factor"]
+    run.silent.add("MemoryListUI/Slot#2")
+    run.answered.add("MemoryListUI/Slot#2")
+    assert "MemoryListUI/Slot#2" not in s._quiet()

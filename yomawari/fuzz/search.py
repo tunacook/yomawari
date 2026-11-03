@@ -128,11 +128,12 @@ def stuck_rows(state: GameState, stuck: set[str], min_group: int = 3) -> list[tu
 def blind_candidates(point: tuple[float, float], weight: float) -> list[Op]:
     """どの向きに項目があるか分からないときに、押せるものを探して試す操作（すべての向きへ動かす）。
 
-    試行回数で重みを下げ（novelty）、いろいろな向き・手段を順に試す。
+    試行回数で重みを下げ（novelty）、いろいろな向き・手段を順に試す。手段の数は向きによって違うので、向きごとの
+    重みが同じになるように手段の数で割る（手段の多い下ばかり試さないように）。
     """
     ops: list[Op] = []
     for d in ("down", "up", "right", "left"):
         for kind, arg in REVEAL[d]:
-            ops.append(Op(kind, arg=arg, weight=weight, novelty=True, group="search",
+            ops.append(Op(kind, arg=arg, weight=weight / len(REVEAL[d]), novelty=True, group="search",
                           point=None if kind == "key" else point))
     return ops

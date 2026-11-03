@@ -85,6 +85,7 @@ class FuzzRun:
     # 画面の外を探す（fuzz/search.py）。ランのあいだ覚えておく
     seen: set[str] = field(default_factory=set)  # 一度でも見えたボタンの label
     silent: set[str] = field(default_factory=set)  # 最後に押したとき反応しなかったボタンの label
+    answered: set[str] = field(default_factory=set)  # 押して反応があったことのあるボタンの label
     search_miss: Counter[str] = field(default_factory=Counter)  # "<menu>/<name>:<向き>" → 動かしても続けて反応しなかった回数
     # menu → それを開いたボタンの label（ハーネスがボタンを押して開いた寄り道の画面）。ここにない menu はゲームが開いたもの
     opened_by: dict[str, str] = field(default_factory=dict)
@@ -548,8 +549,10 @@ class FuzzSession:
         self.run.notes.append(f"{text}（起動 #{self.launch}）")
 
     def _quiet(self) -> set[str]:
-        """押しても反応しないと見込んでいるボタン（暗い、文字で空と分かる）の label。"""
-        return self._dim | self._locked_alike() | inactive(self.state.targets(), self.run.inactive_words)
+        """押しても反応しないと見込んでいるボタン（暗い、文字で空と分かる、押しても一度も反応しなかったもの・それと
+        同じ見た目のもの）の label。一度も反応しなかったボタンは S-05 の対象でないので、押し直しても待つ時間は短くてよい。"""
+        return (self._dim | self._locked_alike() | (self.run.silent - self.run.answered)
+                | inactive(self.state.targets(), self.run.inactive_words))
 
     def _judge_behind(self, measured: dict[str, Values], rects: dict[str, Rect]) -> None:
         """画面の見た目から、後ろに下がった画面を判定する。
@@ -732,6 +735,8 @@ class FuzzSession:
             self.run.stats["no_response"] += 1
         if op.target is not None and op.target.kind == "button":
             (self.run.silent.discard if responded else self.run.silent.add)(op.target.label)
+            if responded:
+                self.run.answered.add(op.target.label)
             if not responded:
                 for gkey, values in self._values.items():
                     if op.target.label in values:
