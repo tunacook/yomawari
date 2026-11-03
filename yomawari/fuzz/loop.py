@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import random
 import time
 from collections import Counter, deque
@@ -41,6 +42,11 @@ from .ops import (
     state_key,
 )
 from .search import REVEAL, blind_candidates, leads, search_candidates, searchable_menus, stuck_rows
+
+# プレイの目的（random モード）→ レポートでの呼び方
+INTENTS = {"progress": "本編を進める", "explore": "画面を見て回る"}
+# 再起動する前に、抜け出す操作を試すルール（ゲームは動いているが進まない）
+RECOVERABLE = ("S-02", "S-03")
 
 # イレギュラー操作を差し込むきっかけにするゲームのイベント
 TRIGGERS = {"transition", "line", "choices", "save", "load", "scene"}
@@ -85,6 +91,9 @@ class FuzzRun:
     experience: Experience = field(default_factory=Experience)
     presses: deque[Press] = field(default_factory=lambda: deque(maxlen=20))  # 最近押した操作
     opened_press: dict[str, Press] = field(default_factory=dict)  # 寄り道の画面 → それを開いた操作
+    # プレイの目的（random モード）。起動したとき・タイトルに戻ったときに選び直す
+    intent: str | None = None
+    plays: int = 0
     stopped_reason: str | None = None
 
     def summary(self) -> str:
@@ -129,6 +138,10 @@ class FuzzSession:
         self._blind: dict[str, list[str]] = {}  # 向きを決めずに探す操作の label → その menu
         self._title_returns = state.title_returns
         self._resolution_changes = state.resolution_changes
+        self._play_start = 0  # このプレイを始めたときに届いていた本文・scene・選択肢の数
+        # 再起動の前に抜け出す操作を試している間: {"rule", "left", "since", "ops", "on_fail"}
+        self._recovery: dict[str, Any] | None = None
+        self._choose_intent("起動した")
 
     # --- イベント（バスから同期で呼ばれる） ---
 
@@ -150,6 +163,8 @@ class FuzzSession:
             if key is not None:
                 self.run.guard.book.confirm(key, "to_title", f"タイトル画面（{self.state.title_menu}）が再び出た")
             self._credit("rewind")
+            self._end_play()
+            self._choose_intent("タイトルに戻った")
         if self.state.resolution_changes != self._resolution_changes:
             self._resolution_changes = self.state.resolution_changes
             key = self.recent_press()
@@ -216,6 +231,7 @@ class FuzzSession:
         finally:
             if self._trigger is not None:
                 self._trigger.cancel()
+            self._end_play()
 
     def _ready(self) -> bool:
         return self.state.booted and self.state.resolution is not None
@@ -234,6 +250,9 @@ class FuzzSession:
         if sig != self._looked:
             self._looked = sig
             await self._look()
+        if self._recovery is not None:
+            await self._recover_step()
+            return
         if self.run.mode == "fuzz" and self.run.rng.random() < float(self.cfg["irregular_prob"]):
             await self._irregular("random")
             return
@@ -245,6 +264,7 @@ class FuzzSession:
         )
         if cands:
             cands += self._search_candidates()
+        cands = self._apply_intent(cands)
         top = self.state.top_modal()
         if top is not None and not top.buttons and not self.state.busy:
             self._modal_since = self._modal_since or now
@@ -268,6 +288,98 @@ class FuzzSession:
             await self._external(op)
         else:
             await self._normal(op, key, verify)
+
+    # --- プレイの目的 ---
+
+    def _choose_intent(self, why: str) -> None:
+        """プレイの目的を選ぶ（random モード）。ランの最初のプレイは「本編を進める」。"""
+        run = self.run
+        if run.mode != "random":
+            run.intent = None
+            return
+        if run.plays == 0:
+            intent = "progress"
+        else:
+            names = list(INTENTS)
+            intent = run.rng.choices(names, weights=[float(self.cfg[f"intent_{n}"]) for n in names])[0]
+        run.plays += 1
+        run.intent = intent
+        self._play_start = len(run.experience.reached)
+        self.publish(Event("harness", "intent", {"intent": intent, "play": run.plays, "why": why}, self.launch))
+
+    def _end_play(self) -> None:
+        """プレイの目的と、そのあいだに新しく届いた本文・scene・選択肢の数を「ハーネスの記録」に書く。"""
+        run = self.run
+        if run.intent is None:
+            return
+        reached = len(run.experience.reached) - self._play_start
+        run.notes.append(
+            f"プレイ {run.plays}（起動 #{self.launch}）: 目的「{INTENTS[run.intent]}」。"
+            f"新しく届いた本文・scene・選択肢 {reached} 件"
+        )
+        run.intent = None
+
+    def _apply_intent(self, cands: list[Op]) -> list[Op]:
+        """寄り道を始める操作（本文を読んでいるときの右クリック・ホイール上、本文中に出ている操作のボタン）の重みを、
+        目的に合わせて変える。「本編を進める」なら減らし、「画面を見て回る」なら増やす。"""
+        intent = self.run.intent
+        if intent is None or self.state.top_modal() is not None:
+            return cands
+        f = float(self.cfg[f"{intent}_detour_factor"])
+        hud = self.state.reading_with_buttons()
+
+        def detour(op: Op) -> bool:
+            if op.kind in ("right_click", "wheel_up"):
+                return True
+            return hud and op.target is not None and op.target.kind == "button"
+
+        return [dataclasses.replace(op, weight=op.weight * f) if detour(op) else op for op in cands]
+
+    # --- 再起動の前に抜け出す ---
+
+    def recover(self, rule: str, on_fail: Callable[[], None]) -> bool:
+        """S-02 / S-03 のとき、再起動する前に、抜け出す操作を recover_ops 回まで試す。試せないときは False。"""
+        if rule not in RECOVERABLE or int(self.cfg["recover_ops"]) <= 0 or self._exiting:
+            return False
+        if self._recovery is None:
+            self._recovery = {
+                "rule": rule, "left": int(self.cfg["recover_ops"]), "since": self.state.last_progress_t,
+                "ops": [], "on_fail": on_fail,
+            }
+        return True
+
+    async def _recover_step(self) -> None:
+        r = self._recovery
+        assert r is not None
+        if self.state.last_progress_t != r["since"]:
+            # 本文・scene・選択肢が来た。抜け出せたので再起動しない
+            self._recovery = None
+            ops = " → ".join(f"`{o}`" for o in r["ops"]) or "（操作なし）"
+            self.run.notes.append(f"{r['rule']} のあと、{ops} で抜け出せたので、再起動しなかった（起動 #{self.launch}）")
+            self.publish(Event("harness", "recovered", {"rule": r["rule"], "ops": r["ops"]}, self.launch))
+            return
+        if r["left"] <= 0:
+            self._recovery = None
+            ops = " → ".join(f"`{o}`" for o in r["ops"])
+            self.run.notes.append(f"{r['rule']} のあと、{ops} を試しても抜け出せなかったので、再起動した（起動 #{self.launch}）")
+            r["on_fail"]()
+            return
+        # 押せるもの（ガードに従う）と、Esc・右クリック・本文送りを、同じ重みで順に試す
+        allow_exit = False
+        cands = normal_candidates(self.state, self.run.guard, self.cfg["weights"], allow_exit, None, None)
+        cands += [Op("key", arg="esc"), Op("right_click"), Op("advance")]
+        seen: dict[str, Op] = {}
+        for op in cands:
+            if op.kind in ("click", "key", "right_click", "advance", "drag", "wheel_down", "wheel_up"):
+                seen.setdefault(op.label, dataclasses.replace(op, weight=1.0, novelty=True, group=None))
+        key = "recover:" + state_key(self.state)
+        op = self.run.decider.choose(key, list(seen.values()))
+        if op is None:
+            r["left"] = 0
+            return
+        r["left"] -= 1
+        r["ops"].append(op.label)
+        await self._normal(op, key, False)
 
     def _search_candidates(self) -> list[Op]:
         """まだ見ていないボタンが画面の外にある向きへ動かす操作（fuzz/search.py）。"""

@@ -67,6 +67,15 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "progress_window_sec": 3.0,
     "progress_bonus": 5.0,  # 押すといつも進行につながる操作の重みに掛ける（割合に応じて 1〜この値）
     "rewind_factor": 0.1,  # 押すといつも巻き戻す操作の重みに掛ける（割合に応じて 1〜この値）
+    # プレイの目的（random モード）。起動したときとタイトルに戻ったときに、重みで1つ選ぶ（ランの最初のプレイは progress）。
+    # progress: 本編を先へ進める（寄り道を減らし、進め方の経験を使う）、explore: 画面を見て回る（寄り道を増やす）
+    "intent_progress": 3.0,
+    "intent_explore": 1.0,
+    # 寄り道を始める操作（本文を読んでいるときの右クリック・ホイール上、本文中に出ている操作のボタン）の重みに掛ける
+    "progress_detour_factor": 0.2,
+    "explore_detour_factor": 3.0,
+    # S-02 / S-03（ゲームは動いているが進まない）のとき、再起動する前に、抜け出す操作をこの回数まで試す
+    "recover_ops": 8,
     "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")

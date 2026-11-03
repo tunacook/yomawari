@@ -169,7 +169,7 @@ def test_front_change_after_silent_click_confirms_external():
     asyncio.run(s._check_front("TitleUI/Banner"))
     assert book.entries["TitleUI/Banner"].role == "external"
     assert windows.activated == [1] and not s.run.guard.external_available("TitleUI/Banner")
-    assert [e.kind for e in events] == ["external"]
+    assert [e.kind for e in events if e.kind != "intent"] == ["external"]
 
 
 # --- ループ: 推定だけの exit ---

@@ -161,7 +161,12 @@ class Harness:
             self.issues.append(i)
             self._publish(Event("harness", "issue", i.to_json(), i.launch))
             if i.action == "restart" and self._restart_req is not None:
-                self._restart_req.set()
+                req = self._restart_req
+                # ゲームは動いているが進まない（S-02 / S-03）なら、再起動する前に抜け出す操作を試す
+                if self._session_fuzz is not None and self._session_fuzz.launch == i.launch and \
+                        self._session_fuzz.recover(i.rule_id, req.set):
+                    continue
+                req.set()
 
     def _on_records(self, recs: list[Record], launch: int) -> None:
         for r in recs:
@@ -328,8 +333,11 @@ class Harness:
             if opts.mode == "random":
                 # 進行につながった操作を優先し、巻き戻した操作を後回しにする。fuzz モードでは掛けない（いつもの道に偏らないように）
                 exp, fc = self._fuzz.experience, self.fuzz_cfg
+                run = self._fuzz
+                # 経験は、目的が「本編を進める」のプレイでだけ使う（「画面を見て回る」では寄り道や巻き戻しも試す）
                 self._fuzz.decider.learned = lambda key, op: exp.factor(  # type: ignore[attr-defined]
-                    key, op.label, float(fc["progress_bonus"]), float(fc["rewind_factor"]))
+                    key, op.label, float(fc["progress_bonus"]), float(fc["rewind_factor"])
+                ) if run.intent == "progress" else 1.0
             if self.driver_factory is None:
                 from .input.mouse_kb import PyAutoGuiDriver
 
