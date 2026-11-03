@@ -153,7 +153,8 @@ class FuzzSession:
         key = state_key(self.state)
         verify = False
         if self._verify_next:
-            known = [op for op in cands if (key, op.label) in self.run.responsive]
+            # 画面を動かす操作（方向キー・Enter・ドラッグ・ホイール）は、フォーカスやスクロール位置で結果が変わるので使わない
+            known = [op for op in cands if op.group != "move" and (key, op.label) in self.run.responsive]
             if known:
                 cands, verify = known, True
         op = self.run.decider.choose(key, cands)
