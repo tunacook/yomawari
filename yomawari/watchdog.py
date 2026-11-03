@@ -27,6 +27,7 @@ from .events import Event, Issue, now_wall
 from .fuzz.decider import RandomDecider
 from .fuzz.guard import Guard
 from .fuzz.loop import FuzzRun, FuzzSession
+from .fuzz.roles import RoleBook
 from .input.base import InputDriver
 from .input.pointer import Pointer
 from .platform import Platform
@@ -85,6 +86,7 @@ class Harness:
         fuzz_cfg: dict[str, Any] | None = None,
         spec: GameSpec | None = None,
         driver_factory: Callable[[], InputDriver] | None = None,
+        roles: RoleBook | None = None,
     ) -> None:
         self.build = build
         self.exe = exe
@@ -98,6 +100,7 @@ class Harness:
         self.fuzz_cfg = fuzz_cfg or {}
         self.spec = spec or GameSpec()
         self.driver_factory = driver_factory
+        self.roles = roles or RoleBook()
         self.engine = Engine(rules)
         self.state = GameState()
         self.issues: list[Issue] = []
@@ -106,6 +109,7 @@ class Harness:
         self.restarts = 0
         self._stopping = False
         self._expect_exit = False
+        self._exit_after_op = False
         self._restart_req: asyncio.Event | None = None
         self._fuzz: FuzzRun | None = None
         self._session_fuzz: FuzzSession | None = None
@@ -129,6 +133,14 @@ class Harness:
         self._handle_issues(self.engine.feed(ev))
         if self._session_fuzz is not None:
             self._session_fuzz.on_event(ev)
+        if ev.kind == "boot" and ev.source == "game":
+            d = ev.data
+            self.roles.build = "/".join(str(d[k]) for k in ("version", "build_guid") if d.get(k)) or None
+        elif ev.kind == "proc_exit" and ev.data["code"] == 0 and ev.data.get("after_op"):
+            # 押した直後に正常に終わった。ハーネスが止めたのでなければ、終了を期待する操作と同じく起動し直して続ける
+            self.roles.confirm(str(ev.data["after_op"]), "exit", "終了コード 0 で終わった")
+            if not ev.data["by_harness"]:
+                self._exit_after_op = True
         if ev.kind == "external":
             d = ev.data
             self.notes.append(
@@ -192,6 +204,12 @@ class Harness:
 
     # --- 1回の起動 ---
 
+    def _recent_press(self) -> str | None:
+        # ハーネス自身が止めたとき（_stopping）は、直前に押したボタンのせいにしない
+        if self._session_fuzz is None or self._stopping:
+            return None
+        return self._session_fuzz.recent_press()
+
     def _on_expect_exit(self, expecting: bool) -> None:
         # 終了を期待するボタンを押す。プロセスの終了はハーネスの終了操作として扱う（C-01 にしない）。
         # ハーネス自身の停止（_stopping）とは分けて持つ（押すのに失敗して取り消すときに、停止中の印まで消さないように）
@@ -202,6 +220,7 @@ class Harness:
         log_path = run_dir / ("player.log" if launch == 0 else f"player.{launch}.log")
         self._stopping = False
         self._expect_exit = False
+        self._exit_after_op = False
         self._restart_req = asyncio.Event()
         stop = asyncio.Event()
         since = time.time() - 1.0
@@ -226,6 +245,7 @@ class Harness:
                 watch_process(
                     proc, self._publish, launch, stop, float(s["process_poll_sec"]),
                     lambda: self._stopping or self._expect_exit,
+                    self._recent_press,
                 )
             ),
             asyncio.create_task(
@@ -247,7 +267,8 @@ class Harness:
             remaining = max(0.0, deadline - time.monotonic())
             try:
                 await asyncio.wait_for(self._restart_req.wait(), timeout=remaining)
-                reason = "relaunch" if self._expect_exit and proc.poll() is not None else "restart"
+                ended = proc.poll() is not None
+                reason = "relaunch" if (self._expect_exit or self._exit_after_op) and ended else "restart"
             except TimeoutError:
                 pass
         except asyncio.CancelledError:
@@ -293,7 +314,7 @@ class Harness:
             self._fuzz = FuzzRun(
                 mode=opts.mode,
                 decider=RandomDecider(random.Random(seed), float(self.fuzz_cfg["no_response_factor"])),
-                guard=Guard(self.spec.guard_buttons, self.spec.guard_roles),
+                guard=Guard(self.spec.guard_buttons, self.spec.guard_roles, self.roles),
                 rng=random.Random(f"{seed}:trigger"),
                 cfg=self.fuzz_cfg,
                 response_timeout=float(self.rules["S-01"].param("timeout_sec")),
@@ -349,6 +370,11 @@ class Harness:
                     self.notes.append(f"セーブ・設定の復元に失敗しました: {e!r}（yomawari restore で再試行できます）")
             if self._fuzz is not None:
                 self.notes.append(self._fuzz.summary())
+            self.notes += self.roles.new
+            try:
+                self.roles.save()
+            except OSError as e:
+                self.notes.append(f"ボタンの役割を保存できませんでした: {self.roles.path} ({e})")
             self._status(time.monotonic(), force=True)
             self._bus.close()
             summary = RunSummary(
@@ -370,6 +396,7 @@ class Harness:
                     "OS": f"{self.platform.name} {pyplatform.mac_ver()[0] or pyplatform.release()}",
                 },
                 harness_notes=self.notes,
+                silent_buttons=self.engine.silent_buttons(),
             )
             report = write_report(summary, self.issues, run_dir)
         return RunResult(run_dir, report, self.issues, interrupted)

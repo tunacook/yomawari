@@ -9,6 +9,11 @@
 
 判定（S-01 / S-02 / S-05 / C-04）は detect/engine.py が op / op_result / exit_expected イベントから行う。
 ここは操作と、反応があったかどうかの記録だけをする。
+
+ボタンの役割（DESIGN.md §9「役割の推定と判定」）は、押す前の推定を Guard（RoleBook）が持ち、押したあとの観測で確定する。
+ここで確定するのは、前面のアプリの切り替わり（external）、タイトル画面の再表示（to_title）、解像度の変化（system_setting）。
+終了（exit）はプロセスの終了を見ているウォッチドッグが確定する。推定だけの exit は、押して role_window_sec のうちに
+終わらなければ推定を取り消す（C-04 にしない）。
 """
 
 from __future__ import annotations
@@ -50,6 +55,7 @@ class FuzzRun:
     labels: set[str] = field(default_factory=set)
     recent: deque[str] = field(default_factory=lambda: deque(maxlen=10))
     responsive: set[tuple[str, str]] = field(default_factory=set)  # (状態, 操作) のうち、反応があったもの
+    last_press: tuple[str, float] | None = None  # 最後に押したボタンの "<menu>/<name>" と時刻（役割の確定に使う）
     screen_weights: dict[str, float] = field(default_factory=dict)  # プロファイルの [screens.<menu>] weight
     stopped_reason: str | None = None
 
@@ -89,10 +95,37 @@ class FuzzSession:
         self._modal_since: float | None = None
         self._trigger: asyncio.Task[None] | None = None
         self._exiting = False
+        self._title_returns = state.title_returns
+        self._resolution_changes = state.resolution_changes
 
     # --- イベント（バスから同期で呼ばれる） ---
 
+    def recent_press(self, now: float | None = None) -> str | None:
+        """role_window_sec のうちに押したボタンの "<menu>/<name>"。なければ None。"""
+        lp = self.run.last_press
+        now = time.monotonic() if now is None else now
+        if lp is None or now - lp[1] > float(self.cfg["role_window_sec"]):
+            return None
+        return lp[0]
+
+    def _observe(self, ev: Event) -> None:
+        """タイトル画面の再表示と解像度の変化を、直前に押したボタンの役割として確定する。"""
+        if ev.launch != self.launch:
+            return
+        if self.state.title_returns != self._title_returns:
+            self._title_returns = self.state.title_returns
+            key = self.recent_press()
+            if key is not None:
+                self.run.guard.book.confirm(key, "to_title", f"タイトル画面（{self.state.title_menu}）が再び出た")
+        if self.state.resolution_changes != self._resolution_changes:
+            self._resolution_changes = self.state.resolution_changes
+            key = self.recent_press()
+            if key is not None:
+                self.run.guard.book.confirm(key, "system_setting", f"解像度・画面モードが {self.state.resolution} に変わった")
+
     def on_event(self, ev: Event) -> None:
+        if ev.source == "game":
+            self._observe(ev)
         if self.run.mode != "fuzz" or ev.source != "game" or ev.kind not in TRIGGERS or ev.launch != self.launch:
             return
         if ev.kind in ("transition", "save", "load") and ev.data.get("phase") != "start":
@@ -180,6 +213,8 @@ class FuzzSession:
             await asyncio.sleep(0.05)
         waited = time.monotonic() - started
         responded = self.state.signature() != before
+        if not responded and op.target is not None and op.target.kind == "button":
+            await self._check_front(op.target.key)
         self.run.stats["normal"] += 1
         self.run.decider.feedback(key, op, responded)
         if responded:
@@ -218,10 +253,29 @@ class FuzzSession:
             self.run.stats["irregular"] += 1
             self._verify_next = True
 
+    async def _check_front(self, key: str) -> None:
+        """押しても画面が変わらなかったボタン。ゲームの外のアプリが前面に出ていたら external と確定し、ゲームを前面に戻す。"""
+        front = await asyncio.to_thread(self.pointer.platform.frontmost_pid)
+        if front is None or front == self.pointer.pid:
+            return
+        self.run.guard.book.confirm(key, "external", "前面のアプリがゲーム以外に切り替わった")
+        self.run.guard.use_external(key)
+        try:
+            await asyncio.to_thread(self.pointer.ensure_front)
+            back = True
+        except PointerError:
+            back = False
+        self.publish(Event("harness", "external", {"target": key, "front_changed": True, "back": back}, self.launch))
+        self._verify_next = True
+
     async def _expect_exit(self, op: Op) -> None:
+        assert op.target is not None
         # 押す前に知らせる（押した直後に終わっても、ハーネスの終了操作として扱われるように）
         self.on_expect_exit(True)
         self._exiting = True
+        if self.run.guard.book.is_estimate(op.target):
+            await self._exit_probe(op)
+            return
         if await self._do(op):
             self.run.stats["expect_exit"] += 1
             self.run.last_exit_t = time.monotonic()
@@ -229,6 +283,18 @@ class FuzzSession:
         else:
             self.on_expect_exit(False)
             self._exiting = False
+
+    async def _exit_probe(self, op: Op) -> None:
+        """推定だけの exit を押す。終われば（ウォッチドッグが）確定、role_window_sec のうちに終わらなければ推定を取り消す。"""
+        assert op.target is not None
+        if await self._do(op):
+            self.run.stats["expect_exit"] += 1
+            self.run.last_exit_t = time.monotonic()
+            await asyncio.sleep(float(self.cfg["role_window_sec"]))
+            # ここまで来たら終わっていない（終われば、このセッションごと止められる）
+            self.run.guard.book.cancel(op.target.key, f"{self.cfg['role_window_sec']:g} 秒たってもゲームが終わらなかった")
+        self.on_expect_exit(False)
+        self._exiting = False
 
     async def _external(self, op: Op) -> None:
         assert op.target is not None
@@ -239,6 +305,8 @@ class FuzzSession:
         await asyncio.sleep(float(self.cfg["external_wait_sec"]))
         front = await asyncio.to_thread(self.pointer.platform.frontmost_pid)
         changed = front is not None and front != self.pointer.pid
+        if changed:
+            self.run.guard.book.confirm(op.target.key, "external", "前面のアプリがゲーム以外に切り替わった")
         try:
             await asyncio.to_thread(self.pointer.ensure_front)
             back = True
@@ -265,6 +333,8 @@ class FuzzSession:
         self.run.recent.append(op.label)
         if op.target is not None:
             self.run.labels.add(op.target.label)
+            if op.target.kind == "button":
+                self.run.last_press = (op.target.key, time.monotonic())
         self.publish(Event("harness", "op", {**op.to_json(), "trigger": trigger, "pos": pos}, self.launch))
         return True
 

@@ -27,6 +27,7 @@ from rich.text import Text
 from . import launcher
 from .config import BuildConfig, Config, ConfigError, find_config_path, normalize_path_input, stdin_is_tty
 from .detect.engine import Rule, RuleError, load_rules
+from .fuzz.roles import RoleBook, load_role_hints
 from .platform import Platform, get_platform
 from .profile import apply_rules, load_spec
 from .savestate import SaveState, resolve_target
@@ -187,6 +188,9 @@ def run(
     rules = apply_rules(rules, spec)
     if spec.profile_path:
         console.print(f"プロファイル: {spec.profile_path}")
+    # ボタンの役割の推定と確定（DESIGN.md §9「役割の推定と判定」）。ランをまたいで runs/_experience/<ゲーム>.json に覚える
+    game = spec.profile_path.parent.name if spec.profile_path else b.name
+    roles = RoleBook(load_role_hints(cfg.rules_path), cfg.runs_dir / "_experience" / f"{game}.json")
 
     rc = cfg.run
     opts = RunOptions(
@@ -200,6 +204,7 @@ def run(
         on_status=(lambda s: live.update(_status_text(s))) if live else None,
         fuzz_cfg=cfg.fuzz,
         spec=spec,
+        roles=roles,
     )
     if live:
         with live:

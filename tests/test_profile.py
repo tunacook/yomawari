@@ -32,7 +32,7 @@ def test_examples_profiles_are_valid():
 def test_merge_order_and_arrays(tmp_path):
     profile = {
         "guard": {"roles": {"to_title": "normal"}, "buttons": {"deny": ["TitleUI/Shop"]}},
-        "screens": {"ListUI": {"weight": 0.5, "no_response_ok": ["Slot"]}},
+        "screens": {"ListUI": {"weight": 0.5}},
     }
     local = {
         "guard": {"buttons": {"deny": ["TitleUI/Share"]}},
@@ -43,7 +43,6 @@ def test_merge_order_and_arrays(tmp_path):
     assert spec.guard_buttons["deny"] == ["TitleUI/Shop", "TitleUI/Share"]  # 配列は足し合わせる
     assert spec.screen_weights == {"ListUI": 0.2}  # yomawari.toml が上書きする
     assert spec.guard_roles == {**GUARD_ROLE_DEFAULTS, "to_title": "normal"}
-    assert spec.no_response_ok == {"ListUI": ["Slot"]}
 
 
 @pytest.mark.parametrize("profile", [
@@ -52,6 +51,7 @@ def test_merge_order_and_arrays(tmp_path):
     {"guard": {"buttons": {"never": ["A/B"]}}},
     {"screens": {"ListUI": {"scroll": ["drag"]}}},
     {"screens": {"ListUI": {"weight": -1}}},
+    {"screens": {"ListUI": {"no_response_ok": ["Slot"]}}},  # 押した結果から覚えるので廃止した
 ])
 def test_invalid_profile_is_rejected(profile):
     with pytest.raises(ConfigError):
@@ -72,19 +72,12 @@ def test_unknown_section_and_profile_path(tmp_path):
     assert load_spec(cfg, b).screen_weights == {"ListUI": 0.5}
 
 
-def test_rules_override_and_no_response_ok():
+def test_rules_override():
     rules = scaled_rules(1.0)
-    spec = build_spec({
-        "rules": {"S-05": {"consecutive": 5}},
-        "screens": {"ListUI": {"no_response_ok": ["Slot"]}},
-    }, {})
+    spec = build_spec({"rules": {"S-05": {"consecutive": 5}}}, {})
     out = apply_rules(rules, spec)
     assert out["S-05"].param("consecutive") == 5
     assert rules["S-05"].param("consecutive") == 3  # 元の rules は変えない
-    engine = Engine(out)
-    miss = {"kind": "click", "responded": False, "interfered": False, "heartbeat_age": 0.5}
-    for _ in range(6):
-        assert engine.feed(Event("harness", "op_result", {**miss, "target": "ListUI/Slot#3"}, 0)) == []
     with pytest.raises(ConfigError):
         apply_rules(rules, build_spec({"rules": {"Z-99": {"x": 1}}}, {}))
     with pytest.raises(ConfigError):
@@ -135,6 +128,7 @@ def test_s05_ignores_types():
     engine = Engine(scaled_rules(1.0))
     miss = {"kind": "click", "responded": False, "interfered": False, "heartbeat_age": 0.5,
             "target": "SettingsUI/Lang", "type": "dropdown"}
+    engine.feed(Event("harness", "op_result", {**miss, "type": "button", "responded": True}, 0))
     for _ in range(5):
         assert engine.feed(Event("harness", "op_result", miss, 0)) == []
     out = []

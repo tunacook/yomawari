@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Reflection;
 using System.Text;
 using Naninovel;
 using Naninovel.UI;
@@ -10,8 +11,8 @@ namespace Yomawari
     /**
      * <summary>
      * 画面に出ている Naninovel の UI を 0.2 秒ごとに見て、変化があったときだけ出す。
-     * - menu / menu_close: IUIManager が管理する UI の表示・非表示と、その中の押せるボタン（name, rect, type, role, locked, hidden）
- *   と、スクロール領域（scroll）。DESIGN.md §3、§9「ゲーム固有の仕様」①
+     * - menu / menu_close: IUIManager が管理する UI の表示・非表示と、その中の押せるボタン（name, rect, type, text, role, hidden）
+     *   と、スクロール領域（scroll）。DESIGN.md §3、§9「ゲーム固有の仕様」①。ゲーム側に Yomawari 用の部品は求めない（§1）
      * - transition: ISceneTransitionUI / ILoadingUI の表示（start）と非表示（end）
      * - choices: 表示中の選択肢ボタン（id, text, rect, locked）
      * ボタンの位置はホバーの拡大などで少し動くので、変化の判定は 1/20 単位に丸めて行う（出す値は丸めない）
@@ -21,6 +22,11 @@ namespace Yomawari
     {
         const float Interval = 0.2f;
         const float SignatureGrid = 20f;
+        const int MaxText = 40;
+
+        // TextMeshPro を参照しなくて済むように、TMP_Text は型の名前で探して text を読む（見つからなければ uGUI の Text だけ）
+        static readonly System.Type tmpText = System.Type.GetType("TMPro.TMP_Text, Unity.TextMeshPro");
+        static readonly PropertyInfo tmpTextProp = tmpText?.GetProperty("text");
 
         class Shown
         {
@@ -37,7 +43,6 @@ namespace Yomawari
         readonly List<IManagedUI> closed = new();
         readonly List<Selectable> selectables = new();
         readonly List<ScrollRect> scrollRects = new();
-        readonly List<IYomawariButtonState> states = new();
         string choicesSignature;
         float elapsed;
 
@@ -110,7 +115,7 @@ namespace Yomawari
             else YomawariLog.Emit("menu_close", "\"name\":" + YomawariFormat.Str(s.Name));
         }
 
-        // 押せるボタン（Selectable で interactable なもの）の [{name, rect, type, role, locked, hidden}]。
+        // 押せるボタン（Selectable で interactable なもの）の [{name, rect, type, text, role, hidden}]。
         // rect は祖先の RectMask2D / Mask と画面で切り取った見えている部分。中心が見えていないボタンは hidden にして、
         // 矩形は切り取らずに出す（ハーネスは同じ名前のボタンを出てきた順で数えるので、スクロールしても番号が変わらないように）
         string Buttons(MonoBehaviour root, out string signature)
@@ -125,16 +130,16 @@ namespace Yomawari
                 if (!YomawariRect.TryGetScreen(rt, out var min, out var max)) continue;
                 var hidden = !Clip(rt, ref min, ref max);
                 var role = Role(s);
-                var locked = Locked(s);
+                var text = TextOf(s);
                 if (json.Length > 1) json.Append(',');
                 json.Append("{\"name\":").Append(YomawariFormat.Str(s.name))
                     .Append(",\"rect\":").Append(YomawariFormat.Rect(min.x, min.y, max.x, max.y, Screen.width, Screen.height))
                     .Append(",\"type\":").Append(YomawariFormat.Str(TypeOf(s)));
+                if (text != null) json.Append(",\"text\":").Append(YomawariFormat.Str(text));
                 if (role != null) json.Append(",\"role\":").Append(YomawariFormat.Str(role));
-                if (locked) json.Append(",\"locked\":true");
                 if (hidden) json.Append(",\"hidden\":true");
                 json.Append('}');
-                AppendSignature(sig, s.name + (locked ? "!" : "") + (hidden ? "~" : ""), min, max);
+                AppendSignature(sig, s.name + "|" + text + (hidden ? "~" : ""), min, max);
             }
             signature = sig.ToString();
             return json.Append(']').ToString();
@@ -178,11 +183,26 @@ namespace Yomawari
             return "other";
         }
 
-        // YomawariButtonRole があればそれ、なければ Naninovel の標準の部品から
+        // ボタンの子の Text / TMP_Text の文字（役割の推定に使う。DESIGN.md §9「役割の推定と判定」）。
+        // 改行と前後の空白を詰め、MaxText 文字で切る。文字がなければ null
+        static string TextOf(Selectable s)
+        {
+            string raw = null;
+            var ui = s.GetComponentInChildren<UnityEngine.UI.Text>(false);
+            if (ui != null) raw = ui.text;
+            else if (tmpText != null && tmpTextProp != null)
+            {
+                var tmp = s.GetComponentInChildren(tmpText, false);
+                if (tmp != null) raw = tmpTextProp.GetValue(tmp) as string;
+            }
+            if (string.IsNullOrWhiteSpace(raw)) return null;
+            var t = string.Join(" ", raw.Split(new[] { '\n', '\r', '\t' }, System.StringSplitOptions.RemoveEmptyEntries)).Trim();
+            return t.Length > MaxText ? t.Substring(0, MaxText) : t;
+        }
+
+        // Naninovel の標準の部品から分かる役割（§9「ゲーム固有の仕様」①）。分からなければ null（ハーネスが推定する）
         static string Role(Selectable s)
         {
-            if (s.TryGetComponent<YomawariButtonRole>(out var r) && r.role != YomawariRole.None)
-                return YomawariButtonRole.Name(r.role);
             if (s.TryGetComponent<TitleExitButton>(out _)) return "exit";
             if (s.TryGetComponent<ControlPanelTitleButton>(out _)) return "to_title";
             if (s.TryGetComponent<TitleNewGameButton>(out _)) return "new_game";
@@ -191,14 +211,6 @@ namespace Yomawari
                 s.TryGetComponent<GameSettingsScreenModeDropdown>(out _) ||
                 s.TryGetComponent<GameSettingsGraphicsDropdown>(out _)) return "system_setting";
             return null;
-        }
-
-        bool Locked(Selectable s)
-        {
-            s.GetComponents(states);
-            foreach (var st in states)
-                if (st.YomawariLocked) return true;
-            return false;
         }
 
         // スクロール領域ごとの {rect, up, down, left, right}（その方向にまだ項目があるか）

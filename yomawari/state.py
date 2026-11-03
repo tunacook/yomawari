@@ -109,6 +109,12 @@ class GameState:
     loading: bool = False
     last_game_t: float | None = None
     last_progress_t: float | None = None  # scene / line / choices が来た時刻
+    # 役割の確定（DESIGN.md §9「役割の推定と判定」）に使う観測。
+    # 起動して最初に出たボタンのある menu をタイトル画面として覚え、本編（line）を挟んで再び出た回数を数える
+    title_menu: str | None = None
+    title_returns: int = 0
+    resolution_changes: int = 0  # resolution の値（w / h / mode）が変わった回数
+    _played_since_title: bool = False
     _order: int = 0
 
     def feed(self, ev: Event) -> None:
@@ -130,7 +136,10 @@ class GameState:
         self.booted = True
 
     def _on_resolution(self, d: dict[str, Any], t: float) -> None:
-        self.resolution = {"w": d.get("w"), "h": d.get("h"), "mode": d.get("mode")}
+        res = {"w": d.get("w"), "h": d.get("h"), "mode": d.get("mode")}
+        if self.resolution is not None and res != self.resolution:
+            self.resolution_changes += 1
+        self.resolution = res
 
     def _on_scene(self, d: dict[str, Any], t: float) -> None:
         self.scene = d.get("name")
@@ -140,6 +149,8 @@ class GameState:
         self.line = {k: d.get(k) for k in ("label", "line_id", "speaker", "text")}
         self.line_done = False
         self.last_progress_t = t
+        if self.title_menu is not None and self.title_menu not in self.menus:
+            self._played_since_title = True
 
     def _on_line_done(self, d: dict[str, Any], t: float) -> None:
         self.line_done = True
@@ -154,6 +165,7 @@ class GameState:
                 bname = str(b.get("name"))
                 buttons.append(Target(
                     "button", name, bname, r, nth=seen.get(bname, 0),
+                    text=_opt_str(b.get("text")),
                     type=_opt_str(b.get("type")), role=_opt_str(b.get("role")), locked=bool(b.get("locked")),
                     hidden=bool(b.get("hidden")),
                 ))
@@ -161,6 +173,11 @@ class GameState:
         prev = self.menus.get(name)
         if prev is None:
             self._order += 1
+            if self.title_menu is None and buttons:
+                self.title_menu = name
+            elif name == self.title_menu and self._played_since_title:
+                self.title_returns += 1
+                self._played_since_title = False
         self.menus[name] = Menu(name, bool(d.get("modal")), buttons, prev.order if prev else self._order)
 
     def _on_menu_close(self, d: dict[str, Any], t: float) -> None:

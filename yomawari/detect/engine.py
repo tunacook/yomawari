@@ -102,6 +102,9 @@ class ProcessExitDetector(Detector):
         code, by_harness = ev.data["code"], ev.data["by_harness"]
         if by_harness and code in self.ok_codes:
             return []
+        if code == 0 and ev.data.get("after_op"):
+            # ハーネスがボタンを押した直後に、正常に終わった。そのボタンを exit と確定する（DESIGN.md §9「役割の推定と判定」）
+            return []
         why = "ハーネスの終了操作に対して" if by_harness else "ハーネスが終了させていないのに"
         return [
             self.issue(
@@ -347,7 +350,11 @@ class TransitionStuckDetector(Detector):
 
 
 class ButtonNoResponseDetector(Detector):
-    """S-05: 同じボタンを押しても、画面の反応がない回が続く。"""
+    """S-05: 前に反応したボタンを押しても、画面の反応がない回が続く。
+
+    一度も反応したことのないボタン（ロック中のスロットなど、押しても何も起きないのが仕様のもの）は数えず、
+    silent に押した回数を残す（レポートの「一度も反応しなかったボタン」）。
+    """
 
     def __init__(self, rule: Rule) -> None:
         super().__init__(rule)
@@ -356,6 +363,8 @@ class ButtonNoResponseDetector(Detector):
         self.ignore = [re.compile(p) for p in rule.param("ignore_patterns")]
         self.ignore_types = set(rule.param("ignore_types"))
         self.misses: dict[str, int] = {}
+        self.responded: set[str] = set()
+        self.silent: dict[str, int] = {}
 
     def on_event(self, ev: Event) -> list[Issue]:
         d = ev.data
@@ -366,8 +375,13 @@ class ButtonNoResponseDetector(Detector):
             return []
         if d.get("responded"):
             self.misses.pop(target, None)
+            self.silent.pop(target, None)
+            self.responded.add(target)
             return []
         if not _alive(ev, self.alive):
+            return []
+        if target not in self.responded:
+            self.silent[target] = self.silent.get(target, 0) + 1
             return []
         self.misses[target] = self.misses.get(target, 0) + 1
         if self.misses[target] < self.consecutive:
@@ -412,4 +426,12 @@ class Engine:
         out: list[Issue] = []
         for d in self.detectors:
             out.extend(d.on_tick(now, launch))
+        return out
+
+    def silent_buttons(self) -> dict[str, int]:
+        """S-05 が見た、一度も反応しなかったボタンと押した回数。"""
+        out: dict[str, int] = {}
+        for d in self.detectors:
+            if isinstance(d, ButtonNoResponseDetector):
+                out.update(d.silent)
         return out

@@ -26,6 +26,7 @@ class RunSummary:
     rules_path: str
     env: dict[str, str] = field(default_factory=dict)
     harness_notes: list[str] = field(default_factory=list)
+    silent_buttons: dict[str, int] = field(default_factory=dict)  # 一度も反応しなかったボタン → 押した回数
 
 
 @dataclass
@@ -108,6 +109,16 @@ def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
                     f"最前面のモーダル `{st.get('top_modal')}`"
                 )
             out += ["", "- 判定: [ ] 正しい検出　[ ] 誤検知", ""]
+
+    if summary.silent_buttons:
+        out += [
+            "## 一度も反応しなかったボタン", "",
+            ("押しても画面が一度も変わらなかったボタン（S-05 の対象にしていない）。ロック中・空のスロットなど仕様どおりなら問題ない。"
+             "押せそうに見えて何も起きないボタンがないかを見る"), "",
+            "| ボタン | 押した回数 |", "|---|---|",
+        ]
+        out += [f"| `{k}` | {n} |" for k, n in sorted(summary.silent_buttons.items())]
+        out.append("")
 
     out += ["## 実行環境", ""]
     out += [f"- {k}: {v}" for k, v in summary.env.items()]
