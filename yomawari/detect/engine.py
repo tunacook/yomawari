@@ -294,6 +294,7 @@ class AdvanceStallDetector(Detector):
         self.clicks = int(rule.param("clicks"))
         self.alive = float(rule.param("heartbeat_alive_sec"))
         self.count = 0
+        self.lead: list[str] = []  # 進まなくなる前の操作（本文送りが続くと「直前の操作」から押し出されるため）
 
     def on_event(self, ev: Event) -> list[Issue]:
         if ev.kind == "launch" or (ev.source == "game" and ev.kind in self.PROGRESS):
@@ -303,13 +304,16 @@ class AdvanceStallDetector(Detector):
         if ev.kind != "op_result" or d.get("kind") != "advance" or d.get("interfered") or not _alive(ev, self.alive):
             return []
         self.count += 1
+        if self.count == 1:
+            self.lead = [str(x) for x in (d.get("recent") or [])[:-1]][-5:]
         if self.count < self.clicks:
             return []
         self.count = 0
         st = d.get("state") or {}
+        lead = f"。本文送りを続ける前の操作（古い順）: {' → '.join(f'`{x}`' for x in self.lead)}" if self.lead else ""
         return [
             self.issue(
-                f"本文を {self.clicks} 回送っても進みません（行 {st.get('line_id')}）",
+                f"本文を {self.clicks} 回送っても進みません（行 {st.get('line_id')}）{lead}",
                 key=str(st.get("line_id")), launch=ev.launch, t=ev.t, wall=ev.wall,
                 recent=d.get("recent"), state=st,
             )
@@ -373,6 +377,10 @@ class ButtonNoResponseDetector(Detector):
         target = str(d.get("target"))
         if d.get("type") in self.ignore_types or any(p.search(target) for p in self.ignore):
             return []
+        if d.get("quiet") and not d.get("responded"):
+            # 押した時点で暗い・空に見えていた（反応しないのが仕様と見込んだ）ボタン。セーブ画面では反応した
+            # 空のスロットが、ロード画面で反応しないのは正常なので、数えない
+            return []
         if d.get("responded"):
             self.misses.pop(target, None)
             self.silent.pop(target, None)
@@ -396,6 +404,44 @@ class ButtonNoResponseDetector(Detector):
         ]
 
 
+class DimButtonRespondedDetector(Detector):
+    """V-07: ほかの同じ種類のボタンより暗い（今は押せないように見える）ボタンを押したら、別の画面が出た。
+
+    暗いのに別の画面に進めるのは、見た目と動作が食い違っている（アンロックされていないのに回想が開ける、など）。
+    押せないことを知らせる演出（震える、ボタンのない通知が出る）で画面の状態が変わっただけでは出さない。
+    押してセーブが始まったときも出さない（空きのセーブスロットはサムネイルがなく暗く写るが、セーブするのが正しい操作）。
+    暗いかどうかはファジングのループが押す前に画面の明るさで決め、op_result の dim で、
+    別の画面が出たかは screen_changed で伝える（fuzz/looks.py、GameState.screens）。
+    """
+
+    def __init__(self, rule: Rule) -> None:
+        super().__init__(rule)
+        self.alive = float(rule.param("heartbeat_alive_sec"))
+        self.seen: set[str] = set()
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        d = ev.data
+        if ev.kind != "op_result" or d.get("kind") != "click" or not d.get("dim"):
+            return []
+        if not d.get("screen_changed") or d.get("interfered") or not _alive(ev, self.alive):
+            return []
+        if d.get("saved"):
+            # 空きのセーブスロットは、サムネイルがなくてほかより暗く写るが、押してセーブするのが正しい操作
+            return []
+        target = str(d.get("target"))
+        if target in self.seen:
+            return []
+        self.seen.add(target)
+        return [
+            self.issue(
+                f"{target} はほかの同じ種類のボタンより暗い（押せないように見える）のに、押すと別の画面が出ました"
+                f"（{', '.join((d.get('state') or {}).get('menus') or []) or 'menu なし'}）",
+                key=target, launch=ev.launch, t=ev.t, wall=ev.wall,
+                recent=d.get("recent"), state=d.get("state"),
+            )
+        ]
+
+
 DETECTORS: dict[str, Callable[[Rule], Detector]] = {
     "C-01": ProcessExitDetector,
     "C-02": CrashDumpDetector,
@@ -406,6 +452,7 @@ DETECTORS: dict[str, Callable[[Rule], Detector]] = {
     "S-02": AdvanceStallDetector,
     "S-03": TransitionStuckDetector,
     "S-05": ButtonNoResponseDetector,
+    "V-07": DimButtonRespondedDetector,
     "L-01": LogErrorDetector,
 }
 

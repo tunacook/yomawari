@@ -169,7 +169,7 @@ def test_front_change_after_silent_click_confirms_external():
     asyncio.run(s._check_front("TitleUI/Banner"))
     assert book.entries["TitleUI/Banner"].role == "external"
     assert windows.activated == [1] and not s.run.guard.external_available("TitleUI/Banner")
-    assert [e.kind for e in events] == ["external"]
+    assert [e.kind for e in events if e.kind != "intent"] == ["external"]
 
 
 # --- ループ: 推定だけの exit ---
@@ -210,3 +210,21 @@ def test_harness_confirms_exit_and_relaunches(tmp_path):
     assert book.entries["RClickMenuUI/ToExit"].role == "exit"
     assert book.entries["RClickMenuUI/ToExit"].build == "1.0/abc"
     assert h._exit_after_op and h._restart_req.is_set() and h.issues == []
+
+
+def test_title_menu_that_gets_buttons_later():
+    # TitleUI はフェードイン中にボタンなしで出て、あとからボタン付きで出し直す（Rachel）
+    st = GameState()
+    feed = lambda kind, **d: st.feed(Event("game", kind, d, 0))
+    feed("menu", name="TitleUI", buttons=[])
+    feed("menu", name="TitleUI", buttons=[{"name": "Start", "rect": [0.1, 0.1, 0.2, 0.2]}])
+    feed("menu", name="SaveLoadUI", modal=True, buttons=[{"name": "Slot", "rect": [0.1, 0.1, 0.2, 0.2]}])
+    assert st.title_menu == "TitleUI"
+
+
+def test_roles_are_per_button_not_per_name():
+    book = RoleBook(HINTS)
+    book.confirm("MemoryListUI/Slot#3", "external", "前面のアプリがゲーム以外に切り替わった")
+    slot = lambda n: Target("button", "MemoryListUI", "Slot", (0, 0, 0.1, 0.1), nth=n)
+    assert book.role_of(slot(3)) == "external"
+    assert book.role_of(slot(4)) is None  # 同じ名前のほかのスロットには効かない

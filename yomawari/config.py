@@ -47,6 +47,44 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "no_response_factor": 0.2,
     "drag_distance": 0.3,
     "role_window_sec": 5.0,
+    # 同じ名前のボタンが並ぶとき、いちばん明るいものの dim_ratio 倍より暗く、差が dim_min_gap 以上のものを「暗い」とし、
+    # 押す重みに dim_factor を掛ける（DESIGN.md §9「画像による推定」）。dim_factor = 1 で無効
+    "dim_ratio": 0.6,
+    "dim_min_gap": 0.1,
+    # 画面の見た目から、後ろに下がった画面を判定する（DESIGN.md §9「手前の画面を見た目で判定する」）。ボタンの位置が
+    # 変わらないのに、手前にあったときと比べて behind_ratio 倍より暗い（明るい）、かつ差が behind_min_gap 以上になった
+    # ボタンが behind_share 以上ある画面は、後ろに下がったとみなす。暗幕は暗いボタンも暗くするので、差は小さく取る
+    "behind_ratio": 0.6,
+    "behind_min_gap": 0.02,
+    "behind_share": 0.6,
+    "dim_factor": 0.05,
+    "new_bright_factor": 20.0,  # 前に見たときは暗かったのに明るくなったボタン（新しくアンロックされたもの）の重みに掛ける
+    "explore_factor": 3.0,  # 見えている並びがどれも押せそうにない・明るさに差がないとき、探す操作（fuzz/search.py）の重みに掛ける
+    "hover_wait_sec": 0.3,  # 明るさを測る前に、カーソルをボタンのない場所へ動かしてから待つ時間（ホバーの演出が戻るまで）
+    "quiet_wait_sec": 1.0,  # 暗い・空のボタン（反応しないと見込んでいるもの）を押したあと、反応を待つ時間
+    # 同じ名前の並びで、まだ見ていないボタンが画面の外にある向きへ動かす操作（fuzz/search.py）の重み。
+    # [fuzz.weights] click × 画面の重み × search_factor。見えているものがすべて暗い・押しても反応しなかった・明るさに差がないときは explore_factor も掛ける
+    "search_factor": 1.0,
+    # 前に見て明るかった（開示済みと分かっている）ボタンが画面の外にあるとき、そこへ戻る操作の重み。click × 画面の重み × return_factor。
+    # まだ見ていないボタンを探す（search_factor）のとは別の行動として扱う
+    "return_factor": 3.0,
+    "search_give_up": 6,  # その向きへ動かしても続けてこの回数反応しなければ、動かせないとみなしてやめる
+    # ゲームが開いた画面で、見えているものがどれも押せないとき、向きを決めずに動かして探す回数の上限（開き直すと数え直す）
+    "blind_search_limit": 30,
+    # 進め方の経験（DESIGN.md §9「経験の蓄積」）。押してから progress_window_sec のうちに、まだ見ていない本文・scene・選択肢に
+    # 届いたら「進行につながった」、ロードかタイトル戻りが始まったら「巻き戻した」と数え、random モードで重みに掛ける
+    "progress_window_sec": 3.0,
+    "progress_bonus": 5.0,  # 押すといつも進行につながる操作の重みに掛ける（割合に応じて 1〜この値）
+    "rewind_factor": 0.1,  # 押すといつも巻き戻す操作の重みに掛ける（割合に応じて 1〜この値）
+    # プレイの目的（random モード）。起動したときとタイトルに戻ったときに、重みで1つ選ぶ（ランの最初のプレイは progress）。
+    # progress: 本編を先へ進める（寄り道を減らし、進め方の経験を使う）、explore: 画面を見て回る（寄り道を増やす）
+    "intent_progress": 3.0,
+    "intent_explore": 1.0,
+    # 寄り道を始める操作（本文を読んでいるときの右クリック・ホイール上、本文中に出ている操作のボタン）の重みに掛ける
+    "progress_detour_factor": 0.2,
+    "explore_detour_factor": 3.0,
+    # S-02 / S-03（ゲームは動いているが進まない）のとき、再起動する前に、抜け出す操作をこの回数まで試す
+    "recover_ops": 8,
     "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")

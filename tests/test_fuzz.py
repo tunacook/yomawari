@@ -43,6 +43,7 @@ CFG = {
     "stuck_modal_sec": 0.2,
     "external_wait_sec": 0.05,
     "exit_min_interval_sec": 3600,
+    "hover_wait_sec": 0,
 }
 
 
@@ -57,8 +58,10 @@ class SimGame:
     dead_settings: 設定ボタンは1回目だけ設定を開き、2回目からは押しても何も起きない
     """
 
-    def __init__(self, emit, title=TITLE, bugs=()):
+    def __init__(self, emit, title=TITLE, bugs=(), list_modal=True, list_at_boot=False):
         self.emit = emit
+        self.list_at_boot = list_at_boot
+        self.list_modal = list_modal
         self.title = dict(title)
         self.bugs = set(bugs)
         self.screen = "title"
@@ -68,12 +71,18 @@ class SimGame:
         self.clicked = []
         self.offset = 0.0
         self.scrolled = 0
+        self.max_offset = 0.0
         self.list_closed = 0
         self.settings_opened = 0
 
     def boot(self):
         self.emit("boot", version="sim")
         self.emit("resolution", w=2000, h=1000, mode="Windowed")
+        if self.list_at_boot:
+            # ゲームが一覧を開く（本文の途中で選ばせる画面など）。ハーネスのボタン操作では開かない
+            self.screen = "list"
+            self._show_list()
+            return
         self._show_title()
 
     def _show_title(self):
@@ -83,13 +92,14 @@ class SimGame:
     def _show_list(self):
         slots = [{"name": "Slot", "rect": [0.2, 0.1 + 0.2 * i - self.offset, 0.8, 0.25 + 0.2 * i - self.offset]}
                  for i in range(LIST_SLOTS)]
-        self.emit("menu", name="ListUI", modal=True, buttons=slots)
+        self.emit("menu", name="ListUI", modal=self.list_modal, buttons=slots)
 
     def scroll_list(self, step):
         if self.screen != "list":
             return
         self.scrolled += 1
         self.offset = min(max(self.offset + 0.2 * step, 0), 0.2 * (LIST_SLOTS - 4))
+        self.max_offset = max(self.max_offset, self.offset)
         self._show_list()
 
     def key(self, name):
@@ -103,7 +113,8 @@ class SimGame:
             self.scroll_list(1 if name == "down" else -1)
 
     def wheel(self, amount):
-        self.scroll_list(-1 if amount < 0 else 1)
+        # pyautogui と同じく、負の値がホイールを下へ（下の項目が出てくる）
+        self.scroll_list(1 if amount < 0 else -1)
 
     def drag(self, dy):
         self.scroll_list(1 if dy < 0 else -1)
@@ -170,7 +181,8 @@ class SimDriver:
     def hotkey(self, *names): ...
 
 
-def run_sim(mode, seconds, bugs=(), title=TITLE, guard=None, cfg=CFG, seed="1", book=None):
+def run_sim(mode, seconds, bugs=(), title=TITLE, guard=None, cfg=CFG, seed="1", book=None, list_modal=True,
+            list_at_boot=False):
     rules = scaled_rules(0.05)  # S-01: 0.25秒、S-03: 0.5秒
     engine = Engine(rules)
     state = GameState()
@@ -184,7 +196,7 @@ def run_sim(mode, seconds, bugs=(), title=TITLE, guard=None, cfg=CFG, seed="1", 
         if "session" in holder:
             holder["session"].on_event(ev)
 
-    game = SimGame(lambda kind, **d: publish(Event("game", kind, d, 0)), title=title, bugs=bugs)
+    game = SimGame(lambda kind, **d: publish(Event("game", kind, d, 0)), title=title, bugs=bugs, list_modal=list_modal, list_at_boot=list_at_boot)
     run = FuzzRun(
         mode=mode, decider=RandomDecider(random.Random(seed), cfg["no_response_factor"]), guard=Guard(guard or {}, book=book),
         rng=random.Random(seed), cfg=cfg, response_timeout=float(rules["S-01"].param("timeout_sec")),
@@ -221,6 +233,10 @@ def test_random_mode_reaches_reading_and_advances():
     assert not issues, [i.detail for i in issues]
     assert run.stats["normal"] > 0 and run.stats["irregular"] == 0
     assert any(e.kind == "op_result" and e.data["kind"] == "advance" and e.data["responded"] for e in events)
+    # 本文送りで新しい行に届いたことを、進行につながった操作として数えている（fuzz/experience.py）
+    adv = run.experience.ops["reading"]["advance"]
+    assert adv["tries"] > 0 and 0 < adv["progress"] <= adv["tries"]
+    assert run.experience.ops["menus:TitleUI"]["click TitleUI/NewGameButton"]["progress"] == 1
 
 
 def test_fuzz_mode_stuck_after_rapid_click_is_s01_or_s02():
@@ -362,13 +378,17 @@ def test_s02_counts_advances_until_progress():
     engine = Engine(scaled_rules(1.0))
     adv = {"kind": "advance", "label": "advance", "responded": False, "interfered": False,
            "heartbeat_age": 0.5, "recent": [], "state": {"line_id": "a:1.0"}}
-    for _ in range(19):
+    for _ in range(9):
         assert engine.feed(Event("harness", "op_result", adv, 0)) == []
     engine.feed(Event("game", "line", {"line_id": "a:2.0"}, 0))  # 進んだら数え直す
     out = []
-    for _ in range(20):
-        out += engine.feed(Event("harness", "op_result", adv, 0))
+    # 進めなくなった原因の操作（回想一覧を Esc で閉じた）は、本文送りが続くと「直前の操作」から押し出される。前の操作として載せる
+    first = {**adv, "recent": ["click MemoryListUI/Slot#17", "wheel_down 3", "key esc", "advance"]}
+    out += engine.feed(Event("harness", "op_result", first, 0))
+    for _ in range(9):
+        out += engine.feed(Event("harness", "op_result", {**adv, "recent": ["advance"] * 10}, 0))
     assert [i.rule_id for i in out] == ["S-02"]
+    assert "10 回" in out[0].detail and "`wheel_down 3` → `key esc`" in out[0].detail
 
 
 # --- ハーネス全体（モックゲーム） ---
@@ -462,12 +482,23 @@ def test_decider_puts_no_response_ops_later():
 
 
 def test_list_screen_scrolls_and_leaves():
-    # 押しても反応しないスロットばかりのモーダルでも、スクロールして先を出し、Esc で抜ける
-    game, run, issues, events, _ = run_sim("random", 2.0, title=LIST_TITLE)
-    assert game.scrolled > 0
+    # 押しても反応しないスロットばかりのモーダルでも、スクロールして先を出し、Esc で抜ける。見た目に差がないので、
+    # 押して確かめるより先に一覧を最後まで見て回り、見終えてから抜ける
+    game, run, issues, events, _ = run_sim("random", 8.0, title=LIST_TITLE)
+    assert {"ListUI/Slot"} | {f"ListUI/Slot#{i}" for i in range(1, LIST_SLOTS)} <= run.seen
     assert game.list_closed > 0
     results = [e.data for e in events if e.kind == "op_result"]
     assert any(r["kind"] in ("drag", "wheel_down", "key") and r["responded"] for r in results)
+    # 見ていない項目のある向きが分かっている間（最後の項目が見えるまで）は、向きを決めずに動かす操作（逆向きの
+    # ドラッグなど）を混ぜない
+    def last_visible(e):
+        if not (e.source == "game" and e.kind == "menu" and e.data["name"] == "ListUI"):
+            return False
+        r = e.data["buttons"][-1]["rect"]
+        return 0 <= (r[1] + r[3]) / 2 <= 1
+    end = next(i for i, e in enumerate(events) if last_visible(e))
+    before = [e.data["label"] for e in events[:end] if e.kind == "op"]
+    assert not {"drag down", "wheel_up 3", "key up"} & set(before), before
     # 描画領域の外のスロットは押さない
     clicks = [e.data["pos"] for e in events if e.kind == "op" and e.data["kind"] == "click"]
     assert clicks and all(0 <= x <= BOUNDS.w and 0 <= y <= BOUNDS.h for x, y in clicks)
@@ -514,6 +545,120 @@ def test_decider_does_not_bury_leave_under_many_buttons():
     # click 5 : move 2 : leave 1 なので、30回のうち抜ける操作は数回は出る（ボタン1つあたりで分けると 1/50 未満）
     assert picked.count("leave") >= 2, picked
     assert picked.count("move") >= 4, picked
+
+
+def test_list_screen_is_searched_to_the_end():
+    # 見えているスロットが反応しないので、まだ見ていないスロットのある下へ、端まで動かして探す
+    game, run, issues, events, _ = run_sim("random", 6.0, title=LIST_TITLE)
+    _assert_searched(game, run, events)
+
+
+def test_non_modal_list_is_searched_to_the_end():
+    # モーダルでない一覧（Rachel の回想一覧）には、ランダムに動かす操作（move）は出ない。探す操作だけで端まで行く
+    game, run, issues, events, _ = run_sim("random", 6.0, title=LIST_TITLE, list_modal=False)
+    _assert_searched(game, run, events)
+    # 端まで見るまでは、見ていないスロットのある下へだけ動かす（見終わってスロットがどれも反応しなければ、ほかの向きも試す）
+    ops = [e.data["label"] for e in events if e.kind == "op"]
+    moves = [o for o in ops if o.split()[0] in ("drag", "wheel_down", "wheel_up", "key")]
+    assert moves[:3] and all(o in ("drag up", "wheel_down 3", "key down") for o in moves[:3])
+    # ハーネスが ListButton で開いた寄り道の画面なので、一通り見たら、ほかの向きへ動かして探し続けない
+    assert set(moves) <= {"drag up", "wheel_down 3", "key down"}
+    assert any("寄り道" in n and "TitleUI/ListButton" in n for n in run.notes)
+
+
+def test_list_opened_by_game_is_searched_in_all_directions_until_limit():
+    # ゲームが開いた一覧は、押せるものを見つけないと進めない。一通り見ても押せるものがなければ、すべての向きを試し、
+    # blind_search_limit 回で諦めて記録する
+    cfg = {**CFG, "blind_search_limit": 5}
+    game, run, issues, events, _ = run_sim("random", 8.0, cfg=cfg, list_modal=False, list_at_boot=True)
+    assert {f"ListUI/Slot#{i}" for i in range(1, LIST_SLOTS)} <= run.seen
+    ops = [e.data["label"] for e in events if e.kind == "op"]
+    assert {"drag down", "wheel_up 3", "key up"} & set(ops)  # 下以外の向きも試した
+    assert run.blind_tries["ListUI"] == 5
+    assert any("ゲームが開いた画面" in n and "見つからなかった" in n for n in run.notes)
+
+
+def _assert_searched(game, run, events):
+    # いちばん下のスロットの中心が描画領域に入るのは、0.2 ずつ動かして 1.4 のとき
+    assert game.max_offset >= 1.4 - 1e-9
+    assert {f"ListUI/Slot#{i}" for i in range(1, LIST_SLOTS)} <= run.seen
+    assert any(e.kind == "op" and e.data["kind"] in ("wheel_down", "drag", "key") for e in events)
+
+
+def test_reading_with_hud_button_still_advances():
+    # 回想中のように、本文を読んでいる途中で操作のボタン（「本編へ戻る」）が出ている。ボタンだけでなく本文送りも候補に入れる
+    st = GameState()
+    feed = lambda kind, **d: st.feed(Event("game", kind, d, 0))
+    feed("scene", name="memories/m1")
+    # 最初は画面の外から滑り込んでくる（hidden）。見えるようになってから本文が来る
+    feed("menu", name="MemoryScenarioPlaying", modal=False,
+         buttons=[{"name": "OpenDialog", "rect": [0, -0.18, 0.23, -0.1], "text": "本編へ戻る", "hidden": True}])
+    feed("menu", name="MemoryScenarioPlaying", modal=False,
+         buttons=[{"name": "OpenDialog", "rect": [0, 0.0, 0.23, 0.08], "text": "本編へ戻る"}])
+    assert not st.reading_with_buttons()  # まだ本文が来ていない
+    feed("line", line_id="memories/m1:1", text="a")
+    # ボタンの位置が動いて出し直されても、開いている間に本文が進んだ画面のまま
+    feed("menu", name="MemoryScenarioPlaying", modal=False,
+         buttons=[{"name": "OpenDialog", "rect": [0, 0.01, 0.23, 0.09], "text": "本編へ戻る"}])
+    assert st.reading_with_buttons()
+    # 確認ダイアログを開いている間はボタンが見えなくなり、「引き続き読む」で閉じるとまた見える。本文を読んでいる途中のまま
+    # （run 2050 では、閉じたあとのボタンを本文のあとに出たものとみなし、本文を送らずにダイアログを開き直していた）
+    feed("menu", name="MemoryScenarioPlayingDialogUI", modal=True,
+         buttons=[{"name": "ReturnScenarioCancelButton", "rect": [0.4, 0.5, 0.6, 0.6]}])
+    feed("menu", name="MemoryScenarioPlaying", modal=False, buttons=[])
+    assert not st.reading_with_buttons()  # ダイアログ（モーダル）が出ている
+    feed("menu_close", name="MemoryScenarioPlayingDialogUI")
+    feed("menu", name="MemoryScenarioPlaying", modal=False,
+         buttons=[{"name": "OpenDialog", "rect": [0, 0.01, 0.23, 0.09], "text": "本編へ戻る"}])
+    assert st.reading_with_buttons()
+    ops = normal_candidates(st, Guard({}), FUZZ_DEFAULTS["weights"], allow_exit=False)
+    labels = {op.label for op in ops}
+    assert {"advance", "click MemoryScenarioPlaying/OpenDialog"} <= labels
+    # 本文のあとにボタンのある画面が出た（タイトルに戻った、ボタンで一覧を開いた）ときは、本文を読んでいる途中ではない
+    feed("menu", name="TitleUI", modal=False, buttons=[{"name": "NewGameButton", "rect": [0.1, 0.5, 0.3, 0.6]}])
+    assert not st.reading_with_buttons()
+    assert "advance" not in {op.label for op in normal_candidates(st, Guard({}), FUZZ_DEFAULTS["weights"], False)}
+    feed("menu_close", name="TitleUI")
+    # 選択肢が出ているときも足さない
+    feed("choices", items=[{"id": "c1", "text": "はい", "rect": [0.4, 0.4, 0.6, 0.5]}])
+    assert not st.reading_with_buttons()
+    # モーダル（右クリックメニュー）が出ているときも足さない
+    feed("choices_done")
+    assert st.reading_with_buttons()
+    feed("menu", name="RClickMenuUI", modal=True, buttons=[{"name": "ToSave", "rect": [0.1, 0.1, 0.2, 0.2]}])
+    assert not st.reading_with_buttons()
+    feed("menu_close", name="RClickMenuUI")
+    assert st.reading_with_buttons()
+    # 閉じて開き直した画面は、また本文が進むまで読んでいる途中とはみなさない
+    feed("menu_close", name="MemoryScenarioPlaying")
+    feed("menu", name="MemoryScenarioPlaying", modal=False,
+         buttons=[{"name": "OpenDialog", "rect": [0, 0.01, 0.23, 0.09], "text": "本編へ戻る"}])
+    assert not st.reading_with_buttons()
+    feed("line", line_id="memories/m1:2", text="b")
+    assert st.reading_with_buttons()
+
+
+def test_fully_covered_modal_is_not_top():
+    # ゲームが開いた選択画面（モーダルでない）と同時に右クリックメニュー（モーダル）が開き、選択画面の下に隠れた。
+    # 右クリックメニューを手前の画面とせず、選択画面のボタンを押す
+    st = GameState()
+    feed = lambda kind, **d: st.feed(Event("game", kind, d, 0))
+    feed("menu", name="MemoryListUI", modal=False, buttons=[{"name": "Slot", "rect": [0.1, 0.1, 0.3, 0.3]}])
+    feed("menu", name="RClickMenuUI", modal=True, buttons=[
+        {"name": "ToSave", "rect": [0.1, 0.1, 0.2, 0.2], "covered": True},
+        {"name": "ToLoad", "rect": [0.1, 0.3, 0.2, 0.4], "covered": True},
+    ])
+    assert st.top_modal() is None
+    assert [t.label for t in st.targets()] == ["MemoryListUI/Slot"]
+    # 一部だけ覆われているモーダルは、手前のまま
+    feed("menu", name="RClickMenuUI", modal=True, buttons=[
+        {"name": "ToSave", "rect": [0.1, 0.1, 0.2, 0.2], "covered": True},
+        {"name": "ToLoad", "rect": [0.1, 0.3, 0.2, 0.4]},
+    ])
+    assert st.top_modal().name == "RClickMenuUI"
+    # ボタンのないモーダル（暗転の幕）も手前のまま
+    feed("menu", name="CurtainUI", modal=True, buttons=[])
+    assert st.top_modal().name == "CurtainUI"
 
 
 def test_verify_does_not_use_move_ops():

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import random
 from collections import Counter
+from collections.abc import Callable
 from typing import Protocol
 
 from .ops import Op
@@ -31,13 +32,17 @@ class RandomDecider:
         self.tries: Counter[tuple[str, str]] = Counter()
         self.misses: Counter[tuple[str, str]] = Counter()
         self._last: dict[str, str] = {}
+        # 経験から重みに掛けるもの（state_key, 操作）→ 倍率。random モードで、進行につながった操作を優先し、
+        # 巻き戻した操作を後回しにする（fuzz/experience.py）。None なら使わない
+        self.learned: Callable[[str, Op], float] | None = None
 
     def factor(self, key: str, op: Op) -> float:
         """試行回数と反応のなさで下がる、重みの倍率。"""
+        learned = self.learned(key, op) if self.learned is not None else 1.0
         if not op.novelty:
-            return 1.0
+            return learned
         k = (key, op.label)
-        return 1 / (1 + self.tries[k]) * self.no_response_factor ** self.misses[k]
+        return learned / (1 + self.tries[k]) * self.no_response_factor ** self.misses[k]
 
     def weight(self, key: str, op: Op) -> float:
         return op.weight * self.factor(key, op)

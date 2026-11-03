@@ -70,12 +70,13 @@ def state_key(state: GameState) -> str:
 
 def normal_candidates(
     state: GameState, guard: Guard, weights: dict[str, float], allow_exit: bool,
-    screen_weights: dict[str, float] | None = None,
+    screen_weights: dict[str, float] | None = None, factors: dict[str, float] | None = None,
 ) -> list[Op]:
     """通常の操作の候補。暗転などで待つべきときは空。
 
     locked のボタン（ゲームが押せないと伝えたもの）は入れない。screen_weights はプロファイルの
-    [screens.<menu>] weight で、その menu のボタンの重みに掛ける。
+    [screens.<menu>] weight で、その menu のボタンの重みに掛ける。factors はボタン（label）ごとに重みに掛けるもの
+    （暗い・空のボタンは小さく、新しく明るくなったボタンは大きく。fuzz/looks.py）。画面の外を探す操作は fuzz/search.py。
     """
     if state.busy:
         return []
@@ -84,22 +85,28 @@ def normal_candidates(
     click = float(weights["click"])
     for t in targets:
         w = click * (screen_weights or {}).get(t.menu, 1.0)
+        w *= (factors or {}).get(t.label, 1.0)
         kind = guard.kind_of(t)
         if kind is None:
             ops.append(Op("click", t, weight=w, novelty=True, group="button"))
         elif kind == "expect_exit" and allow_exit:
             ops.append(Op("expect_exit", t, weight=w, novelty=True, group="button"))
-        elif kind == "external" and guard.external_available(t.key):
+        elif kind == "external" and guard.external_available(t.label):
             ops.append(Op("external", t, weight=w, novelty=True, group="button"))
     top = state.top_modal()
     if top is not None and top.buttons:
         # 見えているボタンがない・すべて押せないときも、動かす・抜ける操作は試す
         return ops + modal_candidates(top.area, weights)
-    if targets:
+    if targets and not state.reading_with_buttons():
         return ops
     if top is not None:
         # ボタンのないモーダル（暗転の幕など）。抜け出す操作は loop が時間を見て足す
         return []
+    # 本文を読んでいる。操作のボタン（回想中の「本編へ戻る」など）が出ていても、本文送りを並べて候補に入れる
+    return ops + reading_candidates(weights)
+
+
+def reading_candidates(weights: dict[str, float]) -> list[Op]:
     return [
         Op("advance", weight=float(weights["advance"])),
         Op("right_click", weight=float(weights["right_click"])),
@@ -107,7 +114,9 @@ def normal_candidates(
     ]
 
 
-def modal_candidates(area: tuple[float, float, float, float] | None, weights: dict[str, float]) -> list[Op]:
+def modal_candidates(
+    area: tuple[float, float, float, float] | None, weights: dict[str, float],
+) -> list[Op]:
     """ボタンのあるモーダルな画面で、ボタンを押す以外に試す操作（動かす・抜ける）。"""
     x0, y0, x1, y1 = area or (0.0, 0.0, 1.0, 1.0)
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2

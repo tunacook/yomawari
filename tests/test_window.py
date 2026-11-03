@@ -28,10 +28,14 @@ def test_inconsistent_resolution_is_none():
 
 
 class FakeWindows:
-    def __init__(self, info, front=None):
+    def __init__(self, info, front=None, shot=None):
         self.info = info
         self.front = front
         self.activated = []
+        self.shot = shot  # capture が返す Shot（None なら撮れない）
+
+    def capture(self, rect):
+        return self.shot
 
     def window_info(self, pid):
         return self.info

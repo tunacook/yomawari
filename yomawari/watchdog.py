@@ -25,8 +25,10 @@ from .config import BuildConfig
 from .detect.engine import Engine, Rule, RuleError
 from .events import Event, Issue, now_wall
 from .fuzz.decider import RandomDecider
+from .fuzz.experience import Experience
 from .fuzz.guard import Guard
 from .fuzz.loop import FuzzRun, FuzzSession
+from .fuzz.looks import load_inactive_words
 from .fuzz.roles import RoleBook
 from .input.base import InputDriver
 from .input.pointer import Pointer
@@ -159,7 +161,12 @@ class Harness:
             self.issues.append(i)
             self._publish(Event("harness", "issue", i.to_json(), i.launch))
             if i.action == "restart" and self._restart_req is not None:
-                self._restart_req.set()
+                req = self._restart_req
+                # ゲームは動いているが進まない（S-02 / S-03）なら、再起動する前に抜け出す操作を試す
+                if self._session_fuzz is not None and self._session_fuzz.launch == i.launch and \
+                        self._session_fuzz.recover(i.rule_id, req.set):
+                    continue
+                req.set()
 
     def _on_records(self, recs: list[Record], launch: int) -> None:
         for r in recs:
@@ -319,7 +326,18 @@ class Harness:
                 cfg=self.fuzz_cfg,
                 response_timeout=float(self.rules["S-01"].param("timeout_sec")),
                 screen_weights=self.spec.screen_weights,
+                inactive_words=load_inactive_words(self.rules_path),
+                # 進め方の経験は、ボタンの役割と同じファイル（runs/_experience/<ゲーム>.json）に覚える
+                experience=Experience(self.roles.path),
             )
+            if opts.mode == "random":
+                # 進行につながった操作を優先し、巻き戻した操作を後回しにする。fuzz モードでは掛けない（いつもの道に偏らないように）
+                exp, fc = self._fuzz.experience, self.fuzz_cfg
+                run = self._fuzz
+                # 経験は、目的が「本編を進める」のプレイでだけ使う（「画面を見て回る」では寄り道や巻き戻しも試す）
+                self._fuzz.decider.learned = lambda key, op: exp.factor(  # type: ignore[attr-defined]
+                    key, op.label, float(fc["progress_bonus"]), float(fc["rewind_factor"])
+                ) if run.intent == "progress" else 1.0
             if self.driver_factory is None:
                 from .input.mouse_kb import PyAutoGuiDriver
 
@@ -369,7 +387,13 @@ class Harness:
                 except Exception as e:  # 復元の失敗は必ずレポートに残す
                     self.notes.append(f"セーブ・設定の復元に失敗しました: {e!r}（yomawari restore で再試行できます）")
             if self._fuzz is not None:
+                self.notes += self._fuzz.notes
+                self.notes += self._fuzz.experience.new
                 self.notes.append(self._fuzz.summary())
+                try:
+                    self._fuzz.experience.save()
+                except OSError as e:
+                    self.notes.append(f"進め方の経験を保存できませんでした: {self._fuzz.experience.path} ({e})")
             self.notes += self.roles.new
             try:
                 self.roles.save()

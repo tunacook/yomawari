@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import random
 import time
 from collections import Counter, deque
@@ -28,10 +29,24 @@ from typing import Any
 
 from ..events import Event
 from ..input.pointer import Pointer, PointerError
-from ..state import GameState
+from ..state import GameState, Rect
 from .decider import Decider
+from .experience import Experience, Press
 from .guard import Guard
-from .ops import Op, escape_candidates, irregular_candidates, normal_candidates, state_key
+from .looks import Values, alike, brightest, dark, groups, inactive, measure
+from .ops import (
+    Op,
+    escape_candidates,
+    irregular_candidates,
+    normal_candidates,
+    state_key,
+)
+from .search import REVEAL, Lead, blind_candidates, known_leads, leads, search_candidates, searchable_menus, stuck_rows
+
+# プレイの目的（random モード）→ レポートでの呼び方
+INTENTS = {"progress": "本編を進める", "explore": "画面を見て回る"}
+# 再起動する前に、抜け出す操作を試すルール（ゲームは動いているが進まない）
+RECOVERABLE = ("S-02", "S-03")
 
 # イレギュラー操作を差し込むきっかけにするゲームのイベント
 TRIGGERS = {"transition", "line", "choices", "save", "load", "scene"}
@@ -55,8 +70,37 @@ class FuzzRun:
     labels: set[str] = field(default_factory=set)
     recent: deque[str] = field(default_factory=lambda: deque(maxlen=10))
     responsive: set[tuple[str, str]] = field(default_factory=set)  # (状態, 操作) のうち、反応があったもの
-    last_press: tuple[str, float] | None = None  # 最後に押したボタンの "<menu>/<name>" と時刻（役割の確定に使う）
+    last_press: tuple[str, float] | None = None  # 最後に押したボタンの label と時刻（役割の確定に使う）
+    notes: list[str] = field(default_factory=list)  # report.md の「ハーネスの記録」に載せること
+    inactive_words: list[str] = field(default_factory=list)  # rules.yaml の inactive_hints.text
+    # 見た目（fuzz/looks.py）。ランのあいだ覚えておく
+    dim_seen: set[str] = field(default_factory=set)  # 暗いボタンがあると記録した並び
+    bright_noted: set[str] = field(default_factory=set)  # 新しく明るくなったとして先に押したボタン（ランで1回だけ）
+    dim_history: dict[str, bool] = field(default_factory=dict)  # ボタン（label）→ 前に測ったとき暗かったか
+    newly_bright: set[str] = field(default_factory=set)  # 前は暗かったのに明るくなり、まだ押していないボタン
     screen_weights: dict[str, float] = field(default_factory=dict)  # プロファイルの [screens.<menu>] weight
+    # 画面の外を探す（fuzz/search.py）。ランのあいだ覚えておく
+    seen: set[str] = field(default_factory=set)  # 一度でも見えたボタンの label
+    silent: set[str] = field(default_factory=set)  # 最後に押したとき反応しなかったボタンの label
+    search_miss: Counter[str] = field(default_factory=Counter)  # "<menu>/<name>:<向き>" → 動かしても続けて反応しなかった回数
+    # menu → それを開いたボタンの label（ハーネスがボタンを押して開いた寄り道の画面）。ここにない menu はゲームが開いたもの
+    opened_by: dict[str, str] = field(default_factory=dict)
+    # 並び（looks の並びのキー）→ 押しても反応しなかったボタンの明るさ。同じような明るさのボタンも押せないとみなす
+    locked_look: dict[str, tuple[float, float]] = field(default_factory=dict)
+    locked_noted: set[str] = field(default_factory=set)
+    # ボタン（label）→ 画面が手前にあったときに測った (位置, 明るさ)。後ろに下がったかを判定するのに使う
+    look_base: dict[str, tuple[Rect, tuple[float, float]]] = field(default_factory=dict)
+    behind_noted: set[str] = field(default_factory=set)  # 「後ろに下がった」と記録に書いた menu  # 「同じ見た目も押せないとみなした」と記録に書いた並び
+    search_dead: Counter[tuple[str, str]] = field(default_factory=Counter)  # (menu, 探す操作) → 続けて反応しなかった回数
+    blind_tries: Counter[str] = field(default_factory=Counter)  # menu → 向きを決めずに探した回数（開き直すと 0 に戻す）
+    search_noted: set[str] = field(default_factory=set)  # 「ハーネスの記録」に書いた探し方（menu ごと）
+    # 進め方の経験（fuzz/experience.py）
+    experience: Experience = field(default_factory=Experience)
+    presses: deque[Press] = field(default_factory=lambda: deque(maxlen=20))  # 最近押した操作
+    opened_press: dict[str, Press] = field(default_factory=dict)  # 寄り道の画面 → それを開いた操作
+    # プレイの目的（random モード）。起動したとき・タイトルに戻ったときに選び直す
+    intent: str | None = None
+    plays: int = 0
     stopped_reason: str | None = None
 
     def summary(self) -> str:
@@ -95,8 +139,19 @@ class FuzzSession:
         self._modal_since: float | None = None
         self._trigger: asyncio.Task[None] | None = None
         self._exiting = False
+        self._looked: Any = None  # 見た目を比べたときの signature
+        self._dim: set[str] = set()
+        self._varied: set[str] = set()  # 明るさに差のあった並び（looks の並びのキー）
+        self._values: dict[str, Values] = {}  # 最後に撮った画像での、並びごとのボタンの明るさ
+        # 探す・戻る操作の label → それが向かう ("<unseen|known>:<menu>/<name>:<向き>", menu)
+        self._search: dict[str, list[tuple[str, str]]] = {}
+        self._blind: dict[str, list[str]] = {}  # 向きを決めずに探す操作の label → その menu
         self._title_returns = state.title_returns
         self._resolution_changes = state.resolution_changes
+        self._play_start = 0  # このプレイを始めたときに届いていた本文・scene・選択肢の数
+        # 再起動の前に抜け出す操作を試している間: {"rule", "left", "since", "ops", "on_fail"}
+        self._recovery: dict[str, Any] | None = None
+        self._choose_intent("起動した")
 
     # --- イベント（バスから同期で呼ばれる） ---
 
@@ -117,15 +172,46 @@ class FuzzSession:
             key = self.recent_press()
             if key is not None:
                 self.run.guard.book.confirm(key, "to_title", f"タイトル画面（{self.state.title_menu}）が再び出た")
+            self._credit("rewind")
+            self._end_play()
+            self._choose_intent("タイトルに戻った")
         if self.state.resolution_changes != self._resolution_changes:
             self._resolution_changes = self.state.resolution_changes
             key = self.recent_press()
             if key is not None:
                 self.run.guard.book.confirm(key, "system_setting", f"解像度・画面モードが {self.state.resolution} に変わった")
 
+    def _progress(self, ev: Event) -> None:
+        """まだ見ていない本文・scene・選択肢に届いたら進行、ロードが始まったら巻き戻しとして、直前の操作に数える。"""
+        if ev.launch != self.launch:
+            return
+        d = ev.data
+        place = None
+        if ev.kind == "line" and d.get("line_id") is not None:
+            place = f"line:{d.get('line_id')}"
+        elif ev.kind == "scene" and d.get("name"):
+            place = f"scene:{d.get('name')}"
+        elif ev.kind == "choices" and d.get("items"):
+            # 選択肢の id は表示のたびに変わるので、本文で表す
+            place = "choices:" + "|".join(str(c.get("text")) for c in d["items"] if isinstance(c, dict))
+        if place is not None and self.run.experience.reach(place):
+            self._credit("progress")
+        elif ev.kind == "load" and d.get("phase") == "start":
+            self._credit("rewind")
+
+    def _credit(self, kind: str) -> None:
+        """progress_window_sec のうちに押した最後の操作と、いま開いている寄り道の画面を開いた操作に数える。"""
+        run = self.run
+        now = time.monotonic()
+        window = float(self.cfg["progress_window_sec"])
+        presses = [p for p in run.presses if now - p.t <= window][-1:]
+        presses += [p for name, p in run.opened_press.items() if name in self.state.menus and p not in presses]
+        run.experience.credit(presses, kind)
+
     def on_event(self, ev: Event) -> None:
         if ev.source == "game":
             self._observe(ev)
+            self._progress(ev)
         if self.run.mode != "fuzz" or ev.source != "game" or ev.kind not in TRIGGERS or ev.launch != self.launch:
             return
         if ev.kind in ("transition", "save", "load") and ev.data.get("phase") != "start":
@@ -155,6 +241,7 @@ class FuzzSession:
         finally:
             if self._trigger is not None:
                 self._trigger.cancel()
+            self._end_play()
 
     def _ready(self) -> bool:
         return self.state.booted and self.state.resolution is not None
@@ -170,12 +257,28 @@ class FuzzSession:
             return
         if now - self._sig_t < float(self.cfg["settle_sec"]):
             return
+        if sig != self._looked:
+            self._looked = sig
+            await self._look()
+        if self._recovery is not None:
+            await self._recover_step()
+            return
         if self.run.mode == "fuzz" and self.run.rng.random() < float(self.cfg["irregular_prob"]):
             await self._irregular("random")
             return
 
         allow_exit = now - (self.run.last_exit_t or self.run.started) >= float(self.cfg["exit_min_interval_sec"])
-        cands = normal_candidates(self.state, self.run.guard, self.cfg["weights"], allow_exit, self.run.screen_weights)
+        cands = normal_candidates(
+            self.state, self.run.guard, self.cfg["weights"], allow_exit, self.run.screen_weights,
+            self._factors(),
+        )
+        if cands:
+            search = self._search_candidates()
+            if self._search:
+                # 向きの決まった探し方・戻り方があるので、向きを決めずに動かす操作は使わない（探す向きと逆に動かして打ち消す）
+                cands = [op for op in cands if op.group != "move" or op.label == "key enter"]
+            cands += search
+        cands = self._apply_intent(cands)
         top = self.state.top_modal()
         if top is not None and not top.buttons and not self.state.busy:
             self._modal_since = self._modal_since or now
@@ -186,8 +289,9 @@ class FuzzSession:
         key = state_key(self.state)
         verify = False
         if self._verify_next:
-            # 画面を動かす操作（方向キー・Enter・ドラッグ・ホイール）は、フォーカスやスクロール位置で結果が変わるので使わない
-            known = [op for op in cands if op.group != "move" and (key, op.label) in self.run.responsive]
+            # 画面を動かす操作（方向キー・Enter・ドラッグ・ホイール。一覧を探す操作も）は、フォーカスやスクロール位置で
+            # 結果が変わるので使わない
+            known = [op for op in cands if op.group not in ("move", "search", "return") and (key, op.label) in self.run.responsive]
             if known:
                 cands, verify = known, True
         op = self.run.decider.choose(key, cands)
@@ -201,12 +305,356 @@ class FuzzSession:
         else:
             await self._normal(op, key, verify)
 
+    # --- プレイの目的 ---
+
+    def _choose_intent(self, why: str) -> None:
+        """プレイの目的を選ぶ（random モード）。ランの最初のプレイは「本編を進める」。"""
+        run = self.run
+        if run.mode != "random":
+            run.intent = None
+            return
+        if run.plays == 0:
+            intent = "progress"
+        else:
+            names = list(INTENTS)
+            intent = run.rng.choices(names, weights=[float(self.cfg[f"intent_{n}"]) for n in names])[0]
+        run.plays += 1
+        run.intent = intent
+        self._play_start = len(run.experience.reached)
+        self.publish(Event("harness", "intent", {"intent": intent, "play": run.plays, "why": why}, self.launch))
+
+    def _end_play(self) -> None:
+        """プレイの目的と、そのあいだに新しく届いた本文・scene・選択肢の数を「ハーネスの記録」に書く。"""
+        run = self.run
+        if run.intent is None:
+            return
+        reached = len(run.experience.reached) - self._play_start
+        run.notes.append(
+            f"プレイ {run.plays}（起動 #{self.launch}）: 目的「{INTENTS[run.intent]}」。"
+            f"新しく届いた本文・scene・選択肢 {reached} 件"
+        )
+        run.intent = None
+
+    def _apply_intent(self, cands: list[Op]) -> list[Op]:
+        """寄り道を始める操作（本文を読んでいるときの右クリック・ホイール上、本文中に出ている操作のボタン）の重みを、
+        目的に合わせて変える。「本編を進める」なら減らし、「画面を見て回る」なら増やす。"""
+        intent = self.run.intent
+        if intent is None or self.state.top_modal() is not None:
+            return cands
+        f = float(self.cfg[f"{intent}_detour_factor"])
+        hud = self.state.reading_with_buttons()
+
+        def detour(op: Op) -> bool:
+            if op.kind in ("right_click", "wheel_up"):
+                return True
+            return hud and op.target is not None and op.target.kind == "button"
+
+        return [dataclasses.replace(op, weight=op.weight * f) if detour(op) else op for op in cands]
+
+    # --- 再起動の前に抜け出す ---
+
+    def recover(self, rule: str, on_fail: Callable[[], None]) -> bool:
+        """S-02 / S-03 のとき、再起動する前に、抜け出す操作を recover_ops 回まで試す。試せないときは False。"""
+        if rule not in RECOVERABLE or int(self.cfg["recover_ops"]) <= 0 or self._exiting:
+            return False
+        if self._recovery is None:
+            self._recovery = {
+                "rule": rule, "left": int(self.cfg["recover_ops"]), "since": self.state.last_progress_t,
+                "ops": [], "on_fail": on_fail,
+            }
+        return True
+
+    async def _recover_step(self) -> None:
+        r = self._recovery
+        assert r is not None
+        if self.state.last_progress_t != r["since"]:
+            # 本文・scene・選択肢が来た。抜け出せたので再起動しない
+            self._recovery = None
+            ops = " → ".join(f"`{o}`" for o in r["ops"]) or "（操作なし）"
+            self.run.notes.append(f"{r['rule']} のあと、{ops} で抜け出せたので、再起動しなかった（起動 #{self.launch}）")
+            self.publish(Event("harness", "recovered", {"rule": r["rule"], "ops": r["ops"]}, self.launch))
+            return
+        if r["left"] <= 0:
+            self._recovery = None
+            ops = " → ".join(f"`{o}`" for o in r["ops"])
+            self.run.notes.append(f"{r['rule']} のあと、{ops} を試しても抜け出せなかったので、再起動した（起動 #{self.launch}）")
+            r["on_fail"]()
+            return
+        # 押せるもの（ガードに従う）と、Esc・右クリック・本文送りを、同じ重みで順に試す
+        allow_exit = False
+        cands = normal_candidates(self.state, self.run.guard, self.cfg["weights"], allow_exit, None, None)
+        cands += [Op("key", arg="esc"), Op("right_click"), Op("advance")]
+        seen: dict[str, Op] = {}
+        for op in cands:
+            if op.kind in ("click", "key", "right_click", "advance", "drag", "wheel_down", "wheel_up"):
+                seen.setdefault(op.label, dataclasses.replace(op, weight=1.0, novelty=True, group=None))
+        key = "recover:" + state_key(self.state)
+        op = self.run.decider.choose(key, list(seen.values()))
+        if op is None:
+            r["left"] = 0
+            return
+        r["left"] -= 1
+        r["ops"].append(op.label)
+        await self._normal(op, key, False)
+
+    def _search_candidates(self) -> list[Op]:
+        """まだ見ていないボタンが画面の外にある向きへ動かす操作（fuzz/search.py）。"""
+        run = self.run
+        for m in searchable_menus(self.state):
+            run.seen |= {b.label for b in m.visible_buttons}
+        for name in [n for n in run.opened_by if n not in self.state.menus]:
+            del run.opened_by[name]  # 閉じた
+            run.opened_press.pop(name, None)
+        self._search, self._blind = {}, {}
+        found = self._choose_leads()
+        stuck = self._quiet() | run.silent
+        if not found:
+            # どの向きに項目があるか分からない（画面の外の矩形が来ない、ページ送りの一覧など）、または一通り見終わった。
+            # 見えている並びがどれも押せそうにないときに、すべての向きへ動かして押せるものを探すのは、ゲームが開いた画面
+            # （本文の途中で選ばせる画面など。押せるものを見つけないと先に進めない）だけ。ハーネスがボタンで開いた寄り道の
+            # 画面（右クリックメニューから開いた回想一覧など）は、押せるものがないのが正常なこともあるので探さない
+            ops = []
+            for menu, _name, point in stuck_rows(self.state, stuck):
+                if menu in run.opened_by:
+                    self._note_search(menu, f"`{menu}` は `{run.opened_by[menu]}` で開いた寄り道の画面なので、見ていない項目を"
+                                            "一通り見たら、押せるものを探すのをやめた（押せるものがないのが正常なこともあるため）")
+                    continue
+                if run.blind_tries[menu] >= int(self.cfg["blind_search_limit"]):
+                    self._note_search(menu, f"`{menu}` はゲームが開いた画面で、見えている項目がどれも押せず、すべての向きへ"
+                                            f"{run.blind_tries[menu]} 回動かしても押せるものが見つからなかった（進めない可能性がある）")
+                    continue
+                self._note_search(menu, f"`{menu}` はゲームが開いた画面で、見えている項目がどれも押せないので、すべての向きへ"
+                                        "動かして押せるものを探した", final=False)
+                w = (float(self.cfg["weights"]["click"]) * run.screen_weights.get(menu, 1.0)
+                     * float(self.cfg["search_factor"]) * float(self.cfg["explore_factor"]))
+                for op in blind_candidates(point, w):
+                    ops.append(op)
+                    self._blind.setdefault(op.label, []).append(menu)
+            return ops
+        return self._lead_ops(found, stuck)
+
+    def _choose_leads(self) -> list[Lead]:
+        """画面の外へ動かす向き。まだ認識していない項目を探す（unseen）のと、すでに認識している開示済みの項目へ戻る
+        （known）のは別の行動として、menu ごとにどちらか一方だけを選ぶ（両方を混ぜると、逆の向きへ動かして打ち消し合う）。
+        見当をつけている項目が画面の外にあれば、まっすぐそちらへ向かう。見当がないときだけ、見ていない項目を探す。"""
+        run = self.run
+        give_up = int(self.cfg["search_give_up"])
+        unseen = [lead for lead in leads(self.state, run.seen) if run.search_miss[self._lead_key(lead)] < give_up]
+        known = [lead for lead in known_leads(self.state, self._known()) if run.search_miss[self._lead_key(lead)] < give_up]
+        menus = {lead.menu for lead in known}
+        return known + [lead for lead in unseen if lead.menu not in menus]
+
+    @staticmethod
+    def _lead_key(lead: Lead) -> str:
+        return f"{lead.kind}:{lead.menu}/{lead.name}:{lead.direction}"
+
+    def _lead_ops(self, found: list[Lead], stuck: set[str]) -> list[Op]:
+        run = self.run
+        click = float(self.cfg["weights"]["click"])
+        low = float(self.cfg["no_response_factor"])
+        ops: list[Op] = []
+        for kind, group in (("unseen", "search"), ("known", "return")):
+            these = [lead for lead in found if lead.kind == kind]
+            weights: dict[str, float] = {}
+            for lead in these:
+                row = f"{lead.menu}/{lead.name}"
+                w = click * run.screen_weights.get(lead.menu, 1.0)
+                if kind == "known":
+                    # 前に見て明るかった項目へ戻る。見えているものに明るいものがないときだけ候補になる
+                    w *= float(self.cfg["return_factor"])
+                    self._note_search(lead.menu, f"`{lead.menu}` で、前に見て明るかった項目（開示済みと分かっている"
+                                                 "もの）が画面の外にあったので、そこへ戻った", final=False, tag="known")
+                else:
+                    w *= float(self.cfg["search_factor"])
+                    if all(label in stuck for label in lead.visible) or row not in self._varied:
+                        # 見えているものに押せそうなものがない、または見た目に差がなく、どれを押せばよいか分からない。
+                        # 人が一覧を一通り眺めてから選ぶように、押して確かめる（反応がないと待たされる）より先に見て回る
+                        w *= float(self.cfg["explore_factor"])
+                weights[row] = max(weights.get(row, 0.0), w)
+            for op in search_candidates(these, weights, group):
+                targets = [lead for lead in these if (op.kind, op.arg) in REVEAL[lead.direction]]
+                menu = targets[0].menu if targets else ""
+                # この画面で動かしても反応しなかった手段（一覧が受け付けない方向キーなど）は後回しにする
+                op = dataclasses.replace(op, weight=op.weight * low ** run.search_dead[(menu, op.label)])
+                self._search[op.label] = [(self._lead_key(lead), lead.menu) for lead in targets]
+                ops.append(op)
+        return ops
+
+    def _known(self) -> set[str]:
+        """すでに認識している開示済みの項目（見当をつけている項目）: このランで測ったとき並びの中で明るかった（ほかに暗い
+        ものがあった）もの、または押して先に進んだことのあるもの（前のランの経験を含む）。押して反応がなかったものは除く。"""
+        bright = {label for label, dim in self.run.dim_history.items() if dim is False}
+        return (bright | self.run.experience.progressed_targets()) - self.run.silent
+
+    def _note_search(self, menu: str, text: str, final: bool = True, tag: str = "") -> None:
+        """探し方を「ハーネスの記録」に書く。menu・行動（tag）ごとに、始めたときと終えたときの1回ずつ。"""
+        key = f"{menu}:{tag}:{'end' if final else 'start'}"
+        if key in self.run.search_noted:
+            return
+        self.run.search_noted.add(key)
+        self.run.notes.append(f"{text}（起動 #{self.launch}）")
+
+    def _quiet(self) -> set[str]:
+        """押しても反応しないと見込んでいるボタン（暗い、文字で空と分かる）の label。"""
+        return self._dim | self._locked_alike() | inactive(self.state.targets(), self.run.inactive_words)
+
+    def _judge_behind(self, measured: dict[str, Values], rects: dict[str, Rect]) -> None:
+        """画面の見た目から、後ろに下がった画面を判定する。
+
+        人は、ボタンの位置は変わらないのに見た目がまとめて変わった（暗幕がかかって暗くなった、別のパネルが重なった）
+        画面を「後ろに下がった」とみなし、手前に出てきたものから次の操作を探す。ハーネスも、手前にあったときに測った
+        明るさ（位置ごと）と比べ、同じ位置のボタンのうち behind_share 以上が、同じような明るさでなくなった（behind_ratio /
+        behind_min_gap で判定）画面を後ろに下がったとし、押す候補から外す。見た目が元に戻れば、手前に戻ったとする。
+        同じ位置で比べられるボタンが3つに満たないときは、前の判定を残す。手前に出てきたもの（ほかの画面の見えている
+        ボタン・選択肢）がなければ、後ろに下がったとはしない（背景が動いて半透明のボタンの見た目が変わっただけのときに、
+        押せるものがなくならないように）。"""
+        run = self.run
+        ratio, gap = float(self.cfg["behind_ratio"]), float(self.cfg["behind_min_gap"])
+        share = float(self.cfg["behind_share"])
+        compared: Counter[str] = Counter()
+        changed: Counter[str] = Counter()
+        by_menu: dict[str, dict[str, tuple[float, float]]] = {}
+        for gkey, values in measured.items():
+            menu = gkey.split("/", 1)[0]
+            for label, v in values.items():
+                by_menu.setdefault(menu, {})[label] = v
+                base = run.look_base.get(label)
+                if base is None or max(abs(a - b) for a, b in zip(base[0], rects[label])) > 0.005:
+                    continue  # 手前にあったときに、同じ位置で測っていない
+                compared[menu] += 1
+                changed[menu] += not alike(v, base[1], ratio, gap)
+        behind = {name for name in self.state.behind if name in self.state.menus}
+        for menu, values in by_menu.items():
+            ahead = bool(self.state.choices) or any(
+                m.visible_buttons for name, m in self.state.menus.items() if name != menu and name not in behind
+            )
+            if compared[menu] >= 3:
+                if changed[menu] / compared[menu] >= share and ahead:
+                    if menu not in behind and menu not in run.behind_noted:
+                        run.behind_noted.add(menu)
+                        run.notes.append(
+                            f"`{menu}` のボタンが、位置は変わらないのに見た目がまとめて変わった（{changed[menu]}/"
+                            f"{compared[menu]} 個。暗くなった・ほかのものが重なった）ので、後ろに下がったとみなし、"
+                            f"手前に出てきた画面を操作した（起動 #{self.launch}）"
+                        )
+                    behind.add(menu)
+                else:
+                    behind.discard(menu)
+            if menu not in behind:
+                for label, v in values.items():
+                    run.look_base[label] = (rects[label], v)
+        self.state.behind = behind
+
+    def _locked_alike(self) -> set[str]:
+        """押しても反応しなかったボタンと同じような明るさのボタン。人が1つ押してみて「この見た目は開示されていない」と
+        覚え、同じ見た目のものは押さずに、ほかを探しにいくように。
+
+        比べる相手は、同じ画像に写っている、反応しなかったボタン。写っていなければ、その並びで最後に反応しなかった
+        ボタンを測ったときの明るさ（同じ画面の同じ並びなので、後ろの絵はほぼ変わらない）。"""
+        run = self.run
+        ratio, gap = float(self.cfg["dim_ratio"]), float(self.cfg["dim_min_gap"])
+        out: set[str] = set()
+        for gkey, values in self._values.items():
+            refs = [v for label, v in values.items() if label in run.silent]
+            if not refs and gkey in run.locked_look:
+                refs = [run.locked_look[gkey]]
+            if not refs:
+                continue
+            alikes = {
+                label for label, v in values.items()
+                if label not in run.silent and any(alike(v, r, ratio, gap) for r in refs)
+            }
+            if alikes and gkey not in run.locked_noted:
+                run.locked_noted.add(gkey)
+                run.notes.append(
+                    f"`{gkey}` の並びで、押しても反応しなかったボタンと同じ見た目のもの（{len(alikes)} 個）も押せないと"
+                    f"みなし、押さずにほかを探した（起動 #{self.launch}）"
+                )
+            out |= alikes
+        return out
+
+    def _factors(self) -> dict[str, float]:
+        """ボタン（label）ごとに、押す重みに掛けるもの。"""
+        out: dict[str, float] = {}
+        low = float(self.cfg["dim_factor"])
+        for label in self._quiet():
+            out[label] = low
+        for label in self.run.newly_bright:
+            out[label] = float(self.cfg["new_bright_factor"])
+        return out
+
+    async def _look(self) -> None:
+        """画面が落ち着いたら、同じ種類に見えるボタンの並びの明るさを比べ、暗いものを覚える（押す順番を後回しにする）。
+
+        比べる相手は、同じときに撮った画像の中の、同じ並びでいちばん明るいもの。ランのあいだに見たいちばん明るいものとは
+        比べない（半透明の UI は後ろの絵で明るさが変わり、別のときに撮ったものとは比べられないため）。
+        前は暗かったのに、ほかに暗いものが残っている並びで明るくなったボタン（新しくアンロックされたもの）は、ランで1回だけ先に押す。
+        """
+        self._dim, self._varied, self._values = set(), set(), {}
+        # 後ろに下がったと判定した画面のボタンも測る（手前に戻ってきたかを見るため）
+        targets = self.state.targets() + [
+            b for name in sorted(self.state.behind) if name in self.state.menus
+            for b in self.state.menus[name].visible_buttons
+        ]
+        if float(self.cfg["dim_factor"]) >= 1 or not groups(targets):
+            return  # 無効にしている、または同じ種類に見えるボタンが並んでいない
+        try:
+            shot = await asyncio.to_thread(self.pointer.capture, float(self.cfg["hover_wait_sec"]))
+        except PointerError:
+            return
+        if shot is None:
+            return  # 画面収録の権限がないなど。見た目なしで続ける
+        run = self.run
+        record: dict[str, Any] = {}
+        measured = measure(targets, shot)
+        self._judge_behind(measured, {t.label: t.rect for t in targets})
+        for gkey, values in measured.items():
+            if gkey.split("/", 1)[0] in self.state.behind:
+                continue  # 後ろの画面は、手前の画面の影で暗く見えるので、暗い・明るいを判定しない
+            ref = brightest(values)
+            dk = dark(values, ref, float(self.cfg["dim_ratio"]), float(self.cfg["dim_min_gap"]))
+            self._dim |= dk
+            self._values[gkey] = values
+            if dk:
+                self._varied.add(gkey)
+            # 並びがすべて同じ明るさなら、暗い・明るいは分からないので、前の記録を残す
+            for label in values if dk else ():
+                now = label in dk
+                if run.dim_history.get(label) and not now and label not in run.bright_noted:
+                    run.bright_noted.add(label)
+                    run.newly_bright.add(label)
+                    run.notes.append(f"`{label}` は前に見たときは暗かったのに明るくなったので、先に押す（起動 #{self.launch}）")
+                run.dim_history[label] = now
+            if dk and gkey not in run.dim_seen:
+                run.dim_seen.add(gkey)
+                run.notes.append(
+                    f"`{gkey}` の並びで、いちばん明るいものより暗いボタン（{len(dk)}/{len(values)} 個）を後回しにした"
+                    f"（起動 #{self.launch}）"
+                )
+            record[gkey] = {
+                "ref": [round(ref[0], 3), round(ref[1], 3)],
+                "buttons": {k: [round(v[0], 3), round(v[1], 3), k in dk] for k, v in values.items()},
+            }
+        if record:
+            # 明るさの判定をあとから確かめられるように残す（events.jsonl）
+            self.publish(Event("harness", "looks", {"groups": record}, self.launch))
+
     async def _normal(self, op: Op, key: str, verify: bool) -> None:
         before = self.state.signature()
+        screens_before = self.state.screens()
+        saves_before = self.state.saves
+        # 反応しないと見込んでいるボタンは、何も起きないことを確かめるだけなので、待つ時間を短くする
+        quiet = op.target is not None and op.target.label in self._quiet()
         started = time.monotonic()
+        press = Press(key, op.label, started)
+        self.run.presses.append(press)
         if not await self._do(op):
+            self.run.presses.remove(press)
             return
+        self.run.experience.pressed(key, op.label)
         timeout = self.run.response_timeout
+        if quiet:
+            timeout = min(timeout, float(self.cfg["quiet_wait_sec"]))
         while time.monotonic() - started < timeout:
             if self.state.signature() != before:
                 break
@@ -214,13 +662,41 @@ class FuzzSession:
         waited = time.monotonic() - started
         responded = self.state.signature() != before
         if not responded and op.target is not None and op.target.kind == "button":
-            await self._check_front(op.target.key)
+            await self._check_front(op.target.label)
+        # 別の画面に切り替わったか（ボタンのある menu・モーダルが開いた／閉じた、scene が変わった）。V-07 が使う
+        screen_changed = responded and self.state.screens() != screens_before
         self.run.stats["normal"] += 1
         self.run.decider.feedback(key, op, responded)
         if responded:
             self.run.responsive.add((key, op.label))
         else:
             self.run.stats["no_response"] += 1
+        if op.target is not None and op.target.kind == "button":
+            (self.run.silent.discard if responded else self.run.silent.add)(op.target.label)
+            if not responded:
+                for gkey, values in self._values.items():
+                    if op.target.label in values:
+                        self.run.locked_look[gkey] = values[op.target.label]
+        if responded and op.target is not None:
+            # ボタンで開いた画面は寄り道（fuzz/search.py の探し方を変える）
+            for name in self.state.screens()[1] - screens_before[1]:
+                if name in self.state.menus:
+                    self.run.opened_by[name] = op.target.label
+                    self.run.opened_press[name] = press
+                    self.run.blind_tries.pop(name, None)
+        if op.group in ("search", "return"):
+            for menu in self._blind.get(op.label, []):
+                self.run.blind_tries[menu] += 1
+            for k, _menu in self._search.get(op.label, []):
+                if responded:
+                    self.run.search_miss.pop(k, None)
+                else:
+                    self.run.search_miss[k] += 1
+            for menu in {m for _k, m in self._search.get(op.label, [])}:
+                if responded:
+                    self.run.search_dead.pop((menu, op.label), None)
+                else:
+                    self.run.search_dead[(menu, op.label)] += 1
         hb_age = time.monotonic() - self.state.last_game_t if self.state.last_game_t is not None else None
         self.publish(
             Event(
@@ -229,6 +705,10 @@ class FuzzSession:
                     **op.to_json(),
                     "target": op.target.label if op.target else None,  # 同じ名前のボタンは #n で分けて数える
                     "type": op.target.type if op.target else None,
+                    "dim": bool(op.target and op.target.label in self._dim),
+                    "screen_changed": screen_changed,
+                    "saved": self.state.saves != saves_before,  # 押してセーブが始まった（空きのスロットにセーブした）
+                    "quiet": quiet,
                     "responded": responded,
                     "waited": round(waited, 3),
                     "verify": verify,
@@ -292,13 +772,13 @@ class FuzzSession:
             self.run.last_exit_t = time.monotonic()
             await asyncio.sleep(float(self.cfg["role_window_sec"]))
             # ここまで来たら終わっていない（終われば、このセッションごと止められる）
-            self.run.guard.book.cancel(op.target.key, f"{self.cfg['role_window_sec']:g} 秒たってもゲームが終わらなかった")
+            self.run.guard.book.cancel(op.target.label, f"{self.cfg['role_window_sec']:g} 秒たってもゲームが終わらなかった")
         self.on_expect_exit(False)
         self._exiting = False
 
     async def _external(self, op: Op) -> None:
         assert op.target is not None
-        self.run.guard.use_external(op.target.key)
+        self.run.guard.use_external(op.target.label)
         if not await self._do(op):
             return
         self.run.stats["external"] += 1
@@ -306,14 +786,14 @@ class FuzzSession:
         front = await asyncio.to_thread(self.pointer.platform.frontmost_pid)
         changed = front is not None and front != self.pointer.pid
         if changed:
-            self.run.guard.book.confirm(op.target.key, "external", "前面のアプリがゲーム以外に切り替わった")
+            self.run.guard.book.confirm(op.target.label, "external", "前面のアプリがゲーム以外に切り替わった")
         try:
             await asyncio.to_thread(self.pointer.ensure_front)
             back = True
         except PointerError:
             back = False
         self.publish(
-            Event("harness", "external", {"target": op.target.key, "front_changed": changed, "back": back}, self.launch)
+            Event("harness", "external", {"target": op.target.label, "front_changed": changed, "back": back}, self.launch)
         )
         self._verify_next = True
 
@@ -333,8 +813,9 @@ class FuzzSession:
         self.run.recent.append(op.label)
         if op.target is not None:
             self.run.labels.add(op.target.label)
+            self.run.newly_bright.discard(op.target.label)
             if op.target.kind == "button":
-                self.run.last_press = (op.target.key, time.monotonic())
+                self.run.last_press = (op.target.label, time.monotonic())
         self.publish(Event("harness", "op", {**op.to_json(), "trigger": trigger, "pos": pos}, self.launch))
         return True
 

@@ -25,6 +25,7 @@
 | タイトルへ戻る（`to_title`） | Naninovel の `ControlPanelTitleButton` | `[button role="title"]` | `action` が `MainMenu` |
 | 画面・言語の設定（`system_setting`） | Naninovel の `GameSettings*Dropdown`（言語・解像度・画面モード・画質） | `[button role="fullscreen"]` | `action` が `Preference("display", …)`、`Language` |
 | 押せない（`locked`） | Naninovel の選択肢の `Locked`、`interactable` | `disabled` | `sensitive`（`action` の `get_sensitive()`。ギャラリーのロック中のボタンも insensitive になる） |
+| ほかの UI に覆われている（`covered`） | ボタンの中心に EventSystem のレイキャストを当て、先に当たるのがほかの UI か（UI ごとの Canvas の Order in Layer が反映される） | ボタンの中心で `document.elementFromPoint` を呼び、返る要素がそのボタン（か子）でないか（レイヤーの `z-index` が反映される） | ボタンより手前のレイヤー・`zorder` に、`modal True` の screen か、その位置を覆う displayable があるか |
 | スクロールの先（`scroll`） | `ScrollRect` | `scrollHeight` > `clientHeight` の要素 | `viewport` / `vpgrid` の `yadjustment` |
 
 ① で読み取れないもの（表の「—」と、自作の部品すべて）は、ハーネスが推定し、押した結果で確定する。Ren'Py は、ボタンの動作が `action` のオブジェクトとして画面に残るので、3つの中ではいちばん多くを ① で読み取れる。

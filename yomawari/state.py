@@ -45,6 +45,7 @@ class Target:
     role: str | None = None  # exit / external / to_title / system_setting / new_game / deny
     locked: bool = False  # ゲームが「いまは押せない（押しても何も起きないのが仕様）」と伝えたもの
     hidden: bool = False  # ゲームが「スクロール領域のマスクで隠れている」と伝えたもの
+    covered: bool = False  # ゲームが「中心を押すと、上に重なったほかの UI に当たる」と伝えたもの
 
     @property
     def key(self) -> str:
@@ -63,9 +64,9 @@ class Target:
 
     @property
     def visible(self) -> bool:
-        """見えているか。ゲームが hidden と伝えたもののほか、中心が描画領域の外にあるもの（hidden を出さない
+        """見えていて押せるか。ゲームが hidden / covered と伝えたもののほか、中心が描画領域の外にあるもの（hidden を出さない
         古いパッケージやエンジンでは、スクロールで隠れた項目の矩形が画面の外のまま来る）も見えていないとする。"""
-        if self.hidden:
+        if self.hidden or self.covered:
             return False
         cx, cy = (self.rect[0] + self.rect[2]) / 2, (self.rect[1] + self.rect[3]) / 2
         return 0 <= cx <= 1 and 0 <= cy <= 1
@@ -77,6 +78,8 @@ class Menu:
     modal: bool
     buttons: list[Target]
     order: int  # 表示された順番（大きいほど新しい）
+    # 開いている間に本文（line）が進んだ。本文を読んでいる途中に重なって出ている画面（回想中の「本編へ戻る」など）と確かめた
+    read_over: bool = False
 
     @property
     def visible_buttons(self) -> list[Target]:
@@ -114,6 +117,10 @@ class GameState:
     title_menu: str | None = None
     title_returns: int = 0
     resolution_changes: int = 0  # resolution の値（w / h / mode）が変わった回数
+    saves: int = 0  # セーブが始まった回数（押したボタンでセーブしたかを見るため。V-07）
+    # 画面の見た目から、後ろに下がったと判定した menu（ハーネスが画像で判定して入れる。fuzz/loop.py の _look）。
+    # 押せる候補から除く。閉じたら除く
+    behind: set[str] = field(default_factory=set)
     _played_since_title: bool = False
     _order: int = 0
 
@@ -149,6 +156,8 @@ class GameState:
         self.line = {k: d.get(k) for k in ("label", "line_id", "speaker", "text")}
         self.line_done = False
         self.last_progress_t = t
+        for m in self.menus.values():
+            m.read_over = True
         if self.title_menu is not None and self.title_menu not in self.menus:
             self._played_since_title = True
 
@@ -167,21 +176,27 @@ class GameState:
                     "button", name, bname, r, nth=seen.get(bname, 0),
                     text=_opt_str(b.get("text")),
                     type=_opt_str(b.get("type")), role=_opt_str(b.get("role")), locked=bool(b.get("locked")),
-                    hidden=bool(b.get("hidden")),
+                    hidden=bool(b.get("hidden")), covered=bool(b.get("covered")),
                 ))
                 seen[bname] = seen.get(bname, 0) + 1
         prev = self.menus.get(name)
+        if self.title_menu is None and buttons:
+            # 最初はボタンなし（フェードイン中で押せない）で出て、あとからボタン付きで出し直すことがあるので、
+            # 新しく出たときに限らず、最初にボタンを持った menu をタイトルとする
+            self.title_menu = name
+        elif prev is None and name == self.title_menu and self._played_since_title:
+            self.title_returns += 1
+            self._played_since_title = False
         if prev is None:
             self._order += 1
-            if self.title_menu is None and buttons:
-                self.title_menu = name
-            elif name == self.title_menu and self._played_since_title:
-                self.title_returns += 1
-                self._played_since_title = False
-        self.menus[name] = Menu(name, bool(d.get("modal")), buttons, prev.order if prev else self._order)
+        menu = Menu(name, bool(d.get("modal")), buttons, prev.order if prev else self._order)
+        # 出し直し（ボタンが動いた・確認ダイアログの間だけ隠れた）では、本文が進んだことを忘れない。閉じたら忘れる
+        menu.read_over = prev is not None and prev.read_over
+        self.menus[name] = menu
 
     def _on_menu_close(self, d: dict[str, Any], t: float) -> None:
         self.menus.pop(str(d.get("name")), None)
+        self.behind.discard(str(d.get("name")))
 
     def _on_choices(self, d: dict[str, Any], t: float) -> None:
         items = []
@@ -205,6 +220,8 @@ class GameState:
 
     def _on_save(self, d: dict[str, Any], t: float) -> None:
         self.saving = d.get("phase") == "start"
+        if self.saving:
+            self.saves += 1
 
     def _on_load(self, d: dict[str, Any], t: float) -> None:
         self.loading = d.get("phase") == "start"
@@ -216,8 +233,25 @@ class GameState:
         """暗転・セーブ・ロードの途中。通常の操作は待つ。"""
         return bool(self.transitions) or self.saving or self.loading
 
+    def reading_with_buttons(self) -> bool:
+        """本文を読んでいる途中で、操作のボタンが画面に出ている（回想中の「本編へ戻る」など）。
+
+        モーダルも選択肢もなく、ボタンの見えている menu がすべて、開いている間に本文が進んだことがある（出たタイミングで
+        推測せず、本文が進んだという結果で確かめる）。本文のあとに開いた画面（タイトルに戻った、ボタンで一覧を開いた）は、
+        まだ本文が進んでいないので、本文を読んでいる途中ではない。
+        """
+        if self.line is None or self.choices or self.top_modal() is not None:
+            return False
+        shown = [m for m in self.menus.values() if m.visible_buttons]
+        return bool(shown) and all(m.read_over for m in shown)
+
     def top_modal(self) -> Menu | None:
-        modals = [m for m in self.menus.values() if m.modal]
+        """いちばん新しいモーダル。ボタンがすべてほかの UI に覆われているモーダルは、手前に出ていないので除く
+        （ゲームが開いた選択画面と同時に右クリックメニューが開き、選択画面の下に隠れたときなど）。"""
+        modals = [
+            m for m in self.menus.values()
+            if m.modal and m.name not in self.behind and not (m.buttons and all(b.covered for b in m.buttons))
+        ]
         return max(modals, key=lambda m: m.order) if modals else None
 
     def targets(self) -> list[Target]:
@@ -227,7 +261,8 @@ class GameState:
             return top.visible_buttons
         out = [c for c in self.choices if c.visible]
         for m in sorted(self.menus.values(), key=lambda m: -m.order):
-            out.extend(m.visible_buttons)
+            if m.name not in self.behind:
+                out.extend(m.visible_buttons)
         return out
 
     def find(self, key: str, nth: int = 0) -> Target | None:
@@ -255,6 +290,14 @@ class GameState:
             tuple(c.key for c in self.choices),
             self.busy,
         )
+
+    def screens(self) -> tuple[str | None, frozenset[str]]:
+        """画面の切り替わりを見るための要約: (scene, ボタンのある menu かモーダルな menu の名前)。
+
+        signature と違い、本文の位置・ボタンのない通知（トーストなど）・ボタンの並びの変化は含めない。
+        押せないことを知らせる演出では変わらず、別の画面が開いた・閉じたときに変わる。
+        """
+        return self.scene, frozenset(m.name for m in self.menus.values() if m.buttons or m.modal)
 
     def snapshot(self) -> dict[str, Any]:
         top = self.top_modal()
