@@ -11,8 +11,8 @@ from yomawari.post.report import RunSummary, render
 from yomawari.purpose import DEFAULT_PURPOSE, PURPOSE_DEFAULTS, PurposeError, purposes, resolve
 
 
-def test_default_is_stuck_and_every_builtin_resolves():
-    assert RUN_DEFAULTS["purpose"] == DEFAULT_PURPOSE == "stuck"
+def test_default_is_play_and_every_builtin_resolves():
+    assert RUN_DEFAULTS["purpose"] == DEFAULT_PURPOSE == "play"
     for name in PURPOSE_DEFAULTS:
         p = resolve(name)
         assert p.description and p.mode in ("fuzz", "random", "aging")

@@ -58,7 +58,7 @@ PURPOSE_DEFAULTS: dict[str, dict[str, Any]] = {
         "fuzz": {},
     },
 }
-DEFAULT_PURPOSE = "stuck"
+DEFAULT_PURPOSE = "play"
 
 
 class PurposeError(ValueError):

@@ -17,7 +17,7 @@ watermark_mask = { anchor = "bottom-right", w = 220, h = 40 }   # Development Bu
 
 [run]
 hours = 8
-purpose = "stuck"            # ランの目的（--purpose で変えられる）。stuck / play / buttons / gacha / rta / aging（README「使い方」）
+purpose = "play"             # ランの目的（--purpose で変えられる）。play / stuck / buttons / gacha / rta / aging（README「使い方」）
 seed = "auto"
 open_report = true
 keep_runs_days = 14

@@ -167,8 +167,8 @@ def run(
     hours: float | None = typer.Option(None, "--hours", help="実行時間（時間）。既定は yomawari.toml の run.hours"),
     purpose: str | None = typer.Option(
         None, "--purpose", "-p",
-        help="ランの目的: stuck（進行不能を探す）| play（通常のプレイ）| buttons（ボタンの不具合）| gacha（ガチャプレイ）"
-             "| rta（最短で進める）| aging（放置）、または yomawari.toml で足した目的。既定は yomawari.toml の run.purpose（stuck）",
+        help="ランの目的: play（通常のプレイ）| stuck（進行不能を探す）| buttons（ボタンの不具合）| gacha（ガチャプレイ）"
+             "| rta（最短で進める）| aging（放置）、または yomawari.toml で足した目的。既定は yomawari.toml の run.purpose（play）",
     ),
     mode: str | None = typer.Option(
         None, "--mode",

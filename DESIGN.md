@@ -220,7 +220,7 @@ yomawari/
 ```bash
 yomawari run [--build NAME | --build-path PATH] [--hours 8] [--purpose stuck|play|buttons|gacha|rta|aging|<足した目的>]
              [--mode fuzz|random|aging] [--seed N] [--no-open]
-#   --purpose: ランの目的（§9「ランの目的」）。既定は run.purpose（stuck）
+#   --purpose: ランの目的（§9「ランの目的」）。既定は run.purpose（play）
 #   --mode: 目的の mode を上書きする。fuzz: 通常の操作 + イレギュラー操作 / random: 通常の操作のみ / aging: 操作せず観測のみ
 yomawari replay <issue-id>
 yomawari minimize <issue-id>
@@ -284,7 +284,7 @@ profile = "~/work/Rachel/yomawari.profile.toml"                  # ゲームの�
 
 [run]
 hours = 8
-purpose = "stuck"            # ランの目的（§9「ランの目的」）。--purpose で変えられる
+purpose = "play"             # ランの目的（§9「ランの目的」）。--purpose で変えられる
 seed = "auto"
 open_report = true
 keep_runs_days = 14
@@ -684,12 +684,12 @@ ignore_patterns = ["<既知で無害なエラーの正規表現>"]
 - 選択肢の行き先は、選んだあとに最初に来た `scene`（タイトルや終了も含む）で記録する
 
 #### ランの目的
-デバッグで見たいものは、ランごとに違う（進行不能を探したい、ボタンの不具合を探したい、連打で落ちる操作を探したい、最短で進めたときの不具合を見たい…）。`yomawari run --purpose <名前>` でランの目的を選び、操作のモード・`[fuzz]` の設定・レポートで先に見せるルールをまとめて変える（`yomawari/purpose.py`）。指定がなければ `[run] purpose`（既定 `stuck`）。`--mode` を指定すれば、目的の mode より優先する。
+デバッグで見たいものは、ランごとに違う（進行不能を探したい、ボタンの不具合を探したい、連打で落ちる操作を探したい、最短で進めたときの不具合を見たい…）。`yomawari run --purpose <名前>` でランの目的を選び、操作のモード・`[fuzz]` の設定・レポートで先に見せるルールをまとめて変える（`yomawari/purpose.py`）。指定がなければ `[run] purpose`（既定 `play`）。`--mode` を指定すれば、目的の mode より優先する。
 
 | 目的 | mode | `[fuzz]` の上書き | レポートで先に見せるルール（focus） |
 |---|---|---|---|
-| `stuck`（進行不能を探す。既定） | random | プレイの目的を半々（`intent_progress` 1、`intent_explore` 1）にして、本編を進めつつ寄り道と行き来もする。`recover_ops` 0（進めなくなったら、抜け出す操作を試さずに記録して再起動する。進行不能を見逃さないため） | S-02, S-03, S-01, H-01 |
-| `play`（通常のプレイ） | random | 「本編を進める」だけ（`intent_explore` 0）。進め方の経験を使う | なし |
+| `play`（通常のプレイ。既定） | random | 「本編を進める」だけ（`intent_explore` 0）。進め方の経験を使う | なし |
+| `stuck`（進行不能を探す） | random | プレイの目的を半々（`intent_progress` 1、`intent_explore` 1）にして、本編を進めつつ寄り道と行き来もする。`recover_ops` 0（進めなくなったら、抜け出す操作を試さずに記録して再起動する。進行不能を見逃さないため） | S-02, S-03, S-01, H-01 |
 | `buttons`（ボタンの不具合） | random | 「画面を見て回る」だけ（`intent_progress` 0）。経験を使わない（`learn` false）。暗いボタンも押す（`dim_factor` 0.3）。ボタンを押す重みを上げる（`weights.click` 10） | S-05, V-07, S-01 |
 | `gacha`（ガチャプレイ） | fuzz | イレギュラーな操作と、反応を待たずに次を押す操作を多めに（`irregular_prob` 0.3、`trigger_prob` 0.6）。経験を使わない | C-01〜04, H-01, L-01 |
 | `rta`（最短で進める） | random | 「本編を進める」だけ。進行につながった操作を強く優先し（`progress_bonus` 20）、巻き戻しを避け（`rewind_factor` 0.02）、寄り道をほとんどしない（`progress_detour_factor` 0.05） | S-02, S-03 |

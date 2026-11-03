@@ -18,7 +18,7 @@ CONFIG_NAME = "yomawari.toml"
 # [run] の既定値。yomawari.example.toml と揃える
 RUN_DEFAULTS: dict[str, Any] = {
     "hours": 8.0,
-    "purpose": "stuck",  # ランの目的（yomawari/purpose.py）。--purpose で変えられる
+    "purpose": "play",  # ランの目的（yomawari/purpose.py）。--purpose で変えられる
     "seed": "auto",
     "open_report": True,
     "keep_runs_days": 14,
