@@ -95,13 +95,40 @@ rules:
     severity: major
     title: ボタンを押しても反応しない
     description: >-
-      menu のボタン（矩形の中心）を押しても画面の状態が変わらない回が、同じボタンで続く。
+      前に反応した menu のボタン（矩形の中心）を押しても画面の状態が変わらない回が、同じボタンで続く。
+      一度も反応したことのないボタン（ロック中のスロットなど）は数えず、レポートの「一度も反応しなかったボタン」に載せる。
       押しても menu の並びが変わらない種類（トグル、ドロップダウンなど）は ignore_types で除く
     params:
       consecutive: 3
       heartbeat_alive_sec: 3
       # ボタンの種類（menu の type）。押しても並びが変わらないもの
       ignore_types: ["toggle", "dropdown", "slider", "input"]
-      # "<menu>/<ボタン>" に対する正規表現。ゲーム固有のものはプロファイルの [screens.<menu>] no_response_ok に書く。
+      # "<menu>/<ボタン>" に対する正規表現。ゲーム固有のものはプロファイルの [rules.S-05] に書く。
       # 名前の既定値は、type を出さない古いパッケージのビルド向け。パッケージが type を出すようになったら消す
       ignore_patterns: ["Toggle", "Dropdown", "Slider"]
+
+# ボタンの役割を、押す前にボタンの文字（menu の text）と名前（GameObject 名）から推定するキーワード（DESIGN.md §9「役割の推定と判定」）。
+# ゲームごとではなく yomawari 全体で共通に持つ（ゲームのプロファイルには書かない）。
+# - text: 英数字の語は単語として（大文字小文字を区別しない）、日本語などは部分一致で照らし合わせる
+# - name: 名前を CamelCase・_・空白・数字で区切った語の並びと照らし合わせる（"to title" は "ToTitleMenu" に当たり、"TitleWebSite" には当たらない）
+# 文字で決まればそれを使い、なければ名前で決める。複数の役割に当てはまれば推定しない。
+# 推定は押し方を決めるだけで、役割は押した結果で確定する（外れていれば取り消す）。
+role_hints:
+  exit:
+    text: ["終了", "Quit", "Exit"]
+    name: ["quit", "exit"]
+  external:
+    text: ["Webサイト", "WEBサイト", "ウェブサイト", "公式サイト", "ホームページ", "Website", "Web Site", "Twitter", "Discord", "Steam"]
+    name: ["website", "web site", "homepage", "url", "link", "browser", "twitter", "discord"]
+  to_title:
+    text: ["タイトルへ", "タイトルに戻る", "タイトル画面", "Title", "Main Menu"]
+    name: ["to title", "back to title", "main menu"]
+  system_setting:
+    text: ["フルスクリーン", "ウィンドウモード", "解像度", "画面モード", "言語", "画質", "Fullscreen", "Windowed", "Resolution", "Screen Mode", "Language", "Graphics"]
+    name: ["resolution", "fullscreen", "full screen", "screen mode", "window mode", "language", "graphics"]
+  new_game:
+    text: ["はじめから", "最初から", "ニューゲーム", "New Game"]
+    name: ["new game"]
+  deny:
+    text: ["購入", "課金", "ショップ", "投稿", "シェア", "ツイート", "Buy", "Purchase", "Shop", "Share", "Tweet"]
+    name: ["purchase", "buy", "shop", "share", "tweet"]

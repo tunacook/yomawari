@@ -54,7 +54,7 @@ class SimGame:
     """タイトル → ニューゲームで本文、設定はモーダル。bugs で不具合を仕込む。
 
     stuck_after_rapid: 本文中に5回以上の連打を受けると、以後の本文送りに反応しない
-    dead_settings: 設定ボタンを押しても何も起きない
+    dead_settings: 設定ボタンは1回目だけ設定を開き、2回目からは押しても何も起きない
     """
 
     def __init__(self, emit, title=TITLE, bugs=()):
@@ -69,6 +69,7 @@ class SimGame:
         self.offset = 0.0
         self.scrolled = 0
         self.list_closed = 0
+        self.settings_opened = 0
 
     def boot(self):
         self.emit("boot", version="sim")
@@ -132,7 +133,8 @@ class SimGame:
             self.screen = "list"
             self.offset = 0.0
             self._show_list()
-        elif hit == "SettingsButton" and "dead_settings" not in self.bugs:
+        elif hit == "SettingsButton" and not ("dead_settings" in self.bugs and self.settings_opened):
+            self.settings_opened += 1
             self.screen = "settings"
             self.emit("menu", name="SettingsUI", modal=True, buttons=[{"name": k, "rect": r} for k, r in RETURN.items()])
         elif hit == "ReturnButton":
@@ -168,7 +170,7 @@ class SimDriver:
     def hotkey(self, *names): ...
 
 
-def run_sim(mode, seconds, bugs=(), title=TITLE, guard=None, cfg=CFG, seed="1"):
+def run_sim(mode, seconds, bugs=(), title=TITLE, guard=None, cfg=CFG, seed="1", book=None):
     rules = scaled_rules(0.05)  # S-01: 0.25秒、S-03: 0.5秒
     engine = Engine(rules)
     state = GameState()
@@ -184,7 +186,7 @@ def run_sim(mode, seconds, bugs=(), title=TITLE, guard=None, cfg=CFG, seed="1"):
 
     game = SimGame(lambda kind, **d: publish(Event("game", kind, d, 0)), title=title, bugs=bugs)
     run = FuzzRun(
-        mode=mode, decider=RandomDecider(random.Random(seed), cfg["no_response_factor"]), guard=Guard(guard or {}),
+        mode=mode, decider=RandomDecider(random.Random(seed), cfg["no_response_factor"]), guard=Guard(guard or {}, book=book),
         rng=random.Random(seed), cfg=cfg, response_timeout=float(rules["S-01"].param("timeout_sec")),
     )
     driver = SimDriver(game)
@@ -420,11 +422,12 @@ def test_harness_random_mode_clicks_mock_game(tmp_path, mock_app, fake_platform)
 
     # 2560x1440 の描画領域が、1280x748 の外枠の下 720pt に収まる（タイトルバー 28pt）
     assert drivers[0].clicks and all(28 <= y <= 748 for _, y, _, _ in drivers[0].clicks)
-    # モックはクリックに反応しないので、押したボタンが S-05 になる。deny は押さない
-    s05 = [i.detail for i in r.issues if i.rule_id == "S-05"]
-    assert any("TitleUI/SettingsButton" in d for d in s05), [i.detail for i in r.issues]
-    assert not any("NewGameButton" in d for d in s05)
-    assert "操作: 通常" in r.report_path.read_text()
+    # モックはクリックに反応しない。一度も反応しなかったボタンは S-05 にせず、レポートに一覧で載せる。deny は押さない
+    assert not [i for i in r.issues if i.rule_id == "S-05"], [i.detail for i in r.issues]
+    report = r.report_path.read_text()
+    assert "## 一度も反応しなかったボタン" in report and "`TitleUI/SettingsButton`" in report
+    assert "NewGameButton" not in report
+    assert "操作: 通常" in report
     assert (fake_platform.save / "slot1.dat").read_text() == "original"
 
 

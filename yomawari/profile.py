@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import re
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -16,7 +15,7 @@ from typing import Any
 from .config import GUARD_KINDS, GUARD_ROLE_DEFAULTS, BuildConfig, Config, ConfigError
 from .detect.engine import Rule
 
-SCREEN_KEYS = ("weight", "no_response_ok")
+SCREEN_KEYS = ("weight",)
 PROFILE_SECTIONS = ("guard", "screens", "rules")
 
 
@@ -25,7 +24,6 @@ class GameSpec:
     guard_buttons: dict[str, list[str]] = field(default_factory=lambda: {k: [] for k in GUARD_KINDS})
     guard_roles: dict[str, str] = field(default_factory=lambda: dict(GUARD_ROLE_DEFAULTS))
     screen_weights: dict[str, float] = field(default_factory=dict)
-    no_response_ok: dict[str, list[str]] = field(default_factory=dict)  # menu → ボタンの name
     rules: dict[str, dict[str, Any]] = field(default_factory=dict)  # ルールID → params の上書き
     profile_path: Path | None = None
 
@@ -87,11 +85,6 @@ def build_spec(profile: dict[str, Any], local: dict[str, Any], profile_path: Pat
             if not isinstance(w, int | float) or w < 0:
                 raise ConfigError(f"screens.{menu}.weight は 0 以上の数にしてください")
             spec.screen_weights[menu] = float(w)
-        ok = raw.get("no_response_ok", [])
-        if not isinstance(ok, list) or not all(isinstance(x, str) for x in ok):
-            raise ConfigError(f"screens.{menu}.no_response_ok は文字列の配列にしてください")
-        if ok:
-            spec.no_response_ok[menu] = [str(x) for x in ok]
 
     for rid, params in doc.get("rules", {}).items():
         if not isinstance(params, dict):
@@ -101,7 +94,7 @@ def build_spec(profile: dict[str, Any], local: dict[str, Any], profile_path: Pat
 
 
 def apply_rules(rules: dict[str, Rule], spec: GameSpec) -> dict[str, Rule]:
-    """rules.yaml のパラメータに、プロファイルの [rules.<ID>] と [screens.<menu>] no_response_ok を重ねる。"""
+    """rules.yaml のパラメータに、プロファイルの [rules.<ID>] を重ねる。"""
     out = dict(rules)
     for rid, params in spec.rules.items():
         if rid not in out:
@@ -111,12 +104,6 @@ def apply_rules(rules: dict[str, Rule], spec: GameSpec) -> dict[str, Rule]:
         if unknown:
             raise ConfigError(f"rules.{rid}: rules.yaml にないパラメータです: {', '.join(unknown)}")
         out[rid] = replace(rule, params=merge(rule.params, params))
-    if spec.no_response_ok and "S-05" in out:
-        # 押しても反応がないのが正常なボタン。S-05 は "<menu>/<name>#<n>" で数えるので、#n も含めて除く
-        patterns = [f"^{re.escape(menu)}/{re.escape(name)}(#\\d+)?$"
-                    for menu, names in spec.no_response_ok.items() for name in names]
-        rule = out["S-05"]
-        out["S-05"] = replace(rule, params=merge(rule.params, {"ignore_patterns": patterns}))
     return out
 
 
