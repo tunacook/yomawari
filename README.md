@@ -3,6 +3,23 @@ Unity製ノベルゲームを自動でプレイしてくれる仕組み。
 
 Unity のビルド（`.app` / `.exe`）を夜間に自動でプレイさせ、クラッシュ・ハング・進行不能・表示異常を Markdown のレポートにまとめる。設計は [DESIGN.md](DESIGN.md) を参照。
 
+## 技術スタック
+
+| 層 | 使っているもの | 用途 |
+|---|---|---|
+| ハーネス本体 | Python 3.11 以上（arm64 ネイティブ）、asyncio | ゲームの起動・監視・操作・判定を1つのイベントループで回す |
+| パッケージ管理 | [uv](https://docs.astral.sh/uv/)、`pyproject.toml`、`uv.lock`、hatchling | Python 本体・依存の取得、`yomawari` コマンドのインストール |
+| CLI・表示 | [Typer](https://typer.tiangolo.com/)、[Rich](https://rich.readthedocs.io/) | `yomawari run` / `doctor` / `builds` などのコマンドと、ラン中の進捗表示 |
+| 設定 | TOML（[tomlkit](https://tomlkit.readthedocs.io/)、標準の `tomllib`）、YAML（[PyYAML](https://pyyaml.org/)） | `yomawari.toml`（tomlkit。対話登録で書き足してもコメントが残る）、ゲームのプロファイル（tomllib）、検出ルール `rules.yaml` と役割のキーワード（YAML） |
+| プロセス監視 | [psutil](https://psutil.readthedocs.io/) | ゲームの生存・終了コード・CPU・メモリ |
+| 入力 | [PyAutoGUI](https://pyautogui.readthedocs.io/) | OS のマウス・キーボード入力でゲームを操作する（ゲームに操作の受け口は作らない） |
+| macOS の API | [PyObjC](https://pyobjc.readthedocs.io/)（Quartz・Cocoa）、ctypes | ウィンドウの位置と倍率、前面のアプリ、画面収録・アクセシビリティの権限の確認 |
+| 画像の判定 | [Ollama](https://ollama.com/)（ローカル）＋画像対応モデル `qwen2.5vl:7b`、[httpx](https://www.python-httpx.org/) | ボタンの見た目からの役割の推定などの補助。判定の主役はルール（`rules.yaml`）で、AI の答えから Critical は出さない |
+| テスト | [pytest](https://docs.pytest.org/) | 実ゲームなしで、Player.log のサンプルや模擬ゲームを流し込んで確かめる |
+| ゲーム側 | Unity 2022.3 以上、UPM パッケージ `com.tunacook.yomawari`（C#）、Naninovel 1.21 以上（任意） | 起動引数 `-yomawari` のときだけ Player.log に `[YOMAWARI]` 行（1行 JSON）を出す |
+
+ゲームからハーネスへは Player.log の `[YOMAWARI]` 行、ハーネスからゲームへは OS の入力、の一方向ずつで通信する。主な実行環境は Apple Silicon の Mac。Windows 対応は後日（DESIGN.md フェーズ7）。
+
 ## 環境構築（macOS / Apple Silicon）
 
 ### 1. uv を入れる
@@ -79,11 +96,25 @@ yomawari はゲームの画面を撮り（**画面収録**）、マウスとキ�
 | `パスが存在しません` | ビルドを移動・削除した。`yomawari builds edit <名前>` でパスを直す |
 | `実行ファイルを解決できません` / `Mach-O ではありません` | `.app` が壊れているか、Mac 向けのビルドではない。Unity で Mac 向けにビルドし直す |
 | `x86_64 のみのビルドです` が注意 | 動くが Rosetta 経由になる。Unity の Build Settings で Architecture を Apple silicon か Intel 64-bit + Apple silicon にしてビルドし直す |
-| `Ollama に接続できません` が注意 | フェーズ5まで使わないので、今は無視してよい |
+| `Ollama に接続できません` が注意 | 7 の手順で入れて起動する（`brew services start ollama`）。入れない場合は `[judge] kind = "none"` にすれば出なくなる（ボタンの見た目からの推定はしない） |
+| `モデル '...' が見つかりません` が注意 | `ollama pull qwen2.5vl:7b` を実行するか、`[judge] model` を `ollama list` に出る名前に合わせる |
 | `未復元のセーブ退避があります` が注意 | 前回のランが途中で止まった。`yomawari restore` でセーブと PlayerPrefs を戻す |
 | `caffeinate が見つかりません` が注意 | 通常の macOS には入っている。PATH に `/usr/bin` があるか確かめる |
 
-### 7. ゲーム側の準備
+### 7. Ollama（画像による判定）を入れる
+ボタンの見た目からの役割の推定（DESIGN.md §9「画像による推定」）など、画像の判定の補助に、ローカルの [Ollama](https://ollama.com/) と画像対応モデルを使う。入れなくても動く（そのときは、ボタンの文字と名前だけで役割を推定する）。
+
+```zsh
+brew install ollama
+brew services start ollama        # ログイン時に自動で起動する（夜間のランでも使えるように）
+ollama pull qwen2.5vl:7b          # 約 6GB。メモリ 16GB 以上の Mac を想定
+ollama list                       # qwen2.5vl:7b が出ればよい
+```
+`yomawari.toml` の `[judge]` で、`kind = "local"`、`model = "qwen2.5vl:7b"` にする（`yomawari.example.toml` の既定値）。`yomawari doctor` で `Ollama: qwen2.5vl:7b は pull 済み` と出ればよい。
+- `brew services` を使わず、そのときだけ `ollama serve` で起動してもよい（ランのあいだは閉じない）
+- 別のモデルを使うときは、`ollama pull <モデル名:タグ>` して `[judge] model` を書き換える。画像を読めるモデル（vision 対応）を選ぶ
+
+### 8. ゲーム側の準備
 ゲームの `Packages/manifest.json` にパッケージ `com.tunacook.yomawari` を足してビルドする。手順と Player Settings、Naninovel のゲームで自動で出るイベントは [docs/game-integration.md](docs/game-integration.md) を参照。`yomawari builds check mac_dev` で `boot を受信しました` と出ればよい。
 
 ## 環境構築（Windows）
@@ -128,5 +159,5 @@ macOS の「画面収録」「アクセシビリティ」に当たる許可は W
 macOS と同じく、ゲームの `Packages/manifest.json` にパッケージ `com.tunacook.yomawari` を足し、Windows（x86_64）向けにビルドする。手順は [docs/game-integration.md](docs/game-integration.md) を参照。セーブ・PlayerPrefs・クラッシュダンプの場所は [DESIGN.md §7](DESIGN.md#7-ラン・ライフサイクルとウォッチドッグ) に書いてある。
 
 ## 補足
-- Ollama（画像判定）はフェーズ5から使う。今は入れなくても動く。
+- Ollama（画像の判定）は入れなくても動く（環境構築の 7）。
 - 夜間に回すときは、画面の自動ロックとスクリーンセーバーを止めておく。ほかの注意点は [DESIGN.md §13](DESIGN.md#13-macos実行時の注意) を参照。
