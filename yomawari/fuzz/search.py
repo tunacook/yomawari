@@ -43,7 +43,7 @@ def searchable_menus(state: GameState) -> list[Menu]:
     top = state.top_modal()
     if top is not None:
         return [top]
-    return [m for m in state.menus.values() if m.buttons]
+    return [m for m in state.menus.values() if m.buttons and m.name not in state.behind]
 
 
 def leads(state: GameState, seen: set[str]) -> list[Lead]:

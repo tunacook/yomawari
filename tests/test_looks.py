@@ -287,3 +287,59 @@ def test_quiet_buttons_wait_shorter():
     asyncio.run(s._normal(Op("click", t), "modal:SaveLoadUI", False))
     res = [e.data for e in events if e.kind == "op_result"][0]
     assert res["quiet"] and not res["responded"] and res["waited"] < 1.0
+
+
+def test_screen_that_changed_look_in_place_is_behind():
+    # run 2203: 回想を読み終えると、回想一覧（モーダル）の上に要約（モーダルと知らされない）が出た。一覧のスロットは
+    # 位置が同じまま、暗幕で暗くなったり要約のパネルが重なったりした。見た目から一覧が後ろに下がったと判定し、要約を操作する
+    import random
+
+    from yomawari.config import FUZZ_DEFAULTS
+    from yomawari.events import Event
+    from yomawari.fuzz.decider import RandomDecider
+    from yomawari.fuzz.guard import Guard
+    from yomawari.fuzz.loop import FuzzRun, FuzzSession
+    from yomawari.input.pointer import Pointer
+    from yomawari.sensors.window import ScreenRect, WindowInfo
+    from yomawari.state import GameState
+
+    from .test_window import FakeWindows
+
+    st = GameState()
+    feed = lambda kind, **d: st.feed(Event("game", kind, d, 0))  # noqa: E731
+    slots = [{"name": "Slot", "rect": [0.1 * i, 0.3, 0.1 * i + 0.08, 0.4]} for i in range(6)]
+    feed("menu", name="MemoryListUI", modal=True, buttons=slots)
+    cfg = {**FUZZ_DEFAULTS, "hover_wait_sec": 0}
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                  rng=random.Random(1), cfg=cfg, response_timeout=0.1)
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
+    s = FuzzSession(run, st, Pointer(windows, None, 1, st, activate_wait=0), lambda ev: None, 0, lambda _: None)
+    labels = ["MemoryListUI/Slot"] + [f"MemoryListUI/Slot#{i}" for i in range(1, 6)]
+    rects = {t.label: t.rect for t in st.menus["MemoryListUI"].buttons}
+    front = [(0.056, 0.128), (0.067, 0.176), (0.107, 0.186), (0.134, 0.214), (0.113, 0.186), (0.242, 0.584)]
+    later = [(0.02, 0.084), (0.036, 0.137), (0.111, 0.533), (0.321, 0.768), (0.173, 0.658), (0.084, 0.208)]
+    s._judge_behind({"MemoryListUI/Slot": dict(zip(labels, front))}, rects)
+    assert st.behind == set()
+    # 手前に出てきたものがなければ、見た目が変わっても（背景が動いただけかもしれない）後ろに下がったとはしない
+    s._judge_behind({"MemoryListUI/Slot": dict(zip(labels, later))}, rects)
+    assert st.behind == set()
+    s._judge_behind({"MemoryListUI/Slot": dict(zip(labels, front))}, rects)
+    # 要約が出た。一覧のボタンは同じ位置のまま、見た目がまとめて変わった
+    feed("menu", name="MemorySummaryUI", modal=False, buttons=[
+        {"name": "StartToMemoryScenario", "rect": [0.42, 0.76, 0.61, 0.84], "text": "この思い出を読む"},
+        {"name": "CloseMemorySummary", "rect": [0.18, 0.77, 0.24, 0.82]},
+    ])
+    assert st.top_modal().name == "MemoryListUI"  # ゲームが知らせる印だけでは、一覧が手前のまま
+    s._judge_behind({"MemoryListUI/Slot": dict(zip(labels, later))}, rects)
+    assert st.behind == {"MemoryListUI"}
+    assert st.top_modal() is None
+    assert {t.label for t in st.targets()} == {"MemorySummaryUI/StartToMemoryScenario", "MemorySummaryUI/CloseMemorySummary"}
+    assert any("`MemoryListUI` のボタンが、位置は変わらないのに見た目がまとめて変わった" in n for n in run.notes)
+    # 要約を閉じて、見た目が元に戻れば、一覧が手前に戻る
+    feed("menu_close", name="MemorySummaryUI")
+    s._judge_behind({"MemoryListUI/Slot": dict(zip(labels, front))}, rects)
+    assert st.behind == set() and st.top_modal().name == "MemoryListUI"
+    # スクロールして位置が変わったボタンは比べない（見た目が変わっても、後ろに下がったとはしない）
+    moved = {k: (r[0], r[1] + 0.1, r[2], r[3] + 0.1) for k, r in rects.items()}
+    s._judge_behind({"MemoryListUI/Slot": dict(zip(labels, later))}, moved)
+    assert st.behind == set()

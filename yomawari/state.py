@@ -118,6 +118,9 @@ class GameState:
     title_returns: int = 0
     resolution_changes: int = 0  # resolution の値（w / h / mode）が変わった回数
     saves: int = 0  # セーブが始まった回数（押したボタンでセーブしたかを見るため。V-07）
+    # 画面の見た目から、後ろに下がったと判定した menu（ハーネスが画像で判定して入れる。fuzz/loop.py の _look）。
+    # 押せる候補から除く。閉じたら除く
+    behind: set[str] = field(default_factory=set)
     _played_since_title: bool = False
     _order: int = 0
 
@@ -193,6 +196,7 @@ class GameState:
 
     def _on_menu_close(self, d: dict[str, Any], t: float) -> None:
         self.menus.pop(str(d.get("name")), None)
+        self.behind.discard(str(d.get("name")))
 
     def _on_choices(self, d: dict[str, Any], t: float) -> None:
         items = []
@@ -244,7 +248,10 @@ class GameState:
     def top_modal(self) -> Menu | None:
         """いちばん新しいモーダル。ボタンがすべてほかの UI に覆われているモーダルは、手前に出ていないので除く
         （ゲームが開いた選択画面と同時に右クリックメニューが開き、選択画面の下に隠れたときなど）。"""
-        modals = [m for m in self.menus.values() if m.modal and not (m.buttons and all(b.covered for b in m.buttons))]
+        modals = [
+            m for m in self.menus.values()
+            if m.modal and m.name not in self.behind and not (m.buttons and all(b.covered for b in m.buttons))
+        ]
         return max(modals, key=lambda m: m.order) if modals else None
 
     def targets(self) -> list[Target]:
@@ -254,7 +261,8 @@ class GameState:
             return top.visible_buttons
         out = [c for c in self.choices if c.visible]
         for m in sorted(self.menus.values(), key=lambda m: -m.order):
-            out.extend(m.visible_buttons)
+            if m.name not in self.behind:
+                out.extend(m.visible_buttons)
         return out
 
     def find(self, key: str, nth: int = 0) -> Target | None:

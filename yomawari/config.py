@@ -51,6 +51,12 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     # 押す重みに dim_factor を掛ける（DESIGN.md §9「画像による推定」）。dim_factor = 1 で無効
     "dim_ratio": 0.6,
     "dim_min_gap": 0.1,
+    # 画面の見た目から、後ろに下がった画面を判定する（DESIGN.md §9「手前の画面を見た目で判定する」）。ボタンの位置が
+    # 変わらないのに、手前にあったときと比べて behind_ratio 倍より暗い（明るい）、かつ差が behind_min_gap 以上になった
+    # ボタンが behind_share 以上ある画面は、後ろに下がったとみなす。暗幕は暗いボタンも暗くするので、差は小さく取る
+    "behind_ratio": 0.6,
+    "behind_min_gap": 0.02,
+    "behind_share": 0.6,
     "dim_factor": 0.05,
     "new_bright_factor": 20.0,  # 前に見たときは暗かったのに明るくなったボタン（新しくアンロックされたもの）の重みに掛ける
     "explore_factor": 3.0,  # 見えている並びがどれも押せそうにない・明るさに差がないとき、探す操作（fuzz/search.py）の重みに掛ける

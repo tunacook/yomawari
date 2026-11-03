@@ -29,7 +29,7 @@ from typing import Any
 
 from ..events import Event
 from ..input.pointer import Pointer, PointerError
-from ..state import GameState
+from ..state import GameState, Rect
 from .decider import Decider
 from .experience import Experience, Press
 from .guard import Guard
@@ -87,7 +87,10 @@ class FuzzRun:
     opened_by: dict[str, str] = field(default_factory=dict)
     # 並び（looks の並びのキー）→ 押しても反応しなかったボタンの明るさ。同じような明るさのボタンも押せないとみなす
     locked_look: dict[str, tuple[float, float]] = field(default_factory=dict)
-    locked_noted: set[str] = field(default_factory=set)  # 「同じ見た目も押せないとみなした」と記録に書いた並び
+    locked_noted: set[str] = field(default_factory=set)
+    # ボタン（label）→ 画面が手前にあったときに測った (位置, 明るさ)。後ろに下がったかを判定するのに使う
+    look_base: dict[str, tuple[Rect, tuple[float, float]]] = field(default_factory=dict)
+    behind_noted: set[str] = field(default_factory=set)  # 「後ろに下がった」と記録に書いた menu  # 「同じ見た目も押せないとみなした」と記録に書いた並び
     search_dead: Counter[tuple[str, str]] = field(default_factory=Counter)  # (menu, 探す操作) → 続けて反応しなかった回数
     blind_tries: Counter[str] = field(default_factory=Counter)  # menu → 向きを決めずに探した回数（開き直すと 0 に戻す）
     search_noted: set[str] = field(default_factory=set)  # 「ハーネスの記録」に書いた探し方（menu ごと）
@@ -495,6 +498,53 @@ class FuzzSession:
         """押しても反応しないと見込んでいるボタン（暗い、文字で空と分かる）の label。"""
         return self._dim | self._locked_alike() | inactive(self.state.targets(), self.run.inactive_words)
 
+    def _judge_behind(self, measured: dict[str, Values], rects: dict[str, Rect]) -> None:
+        """画面の見た目から、後ろに下がった画面を判定する。
+
+        人は、ボタンの位置は変わらないのに見た目がまとめて変わった（暗幕がかかって暗くなった、別のパネルが重なった）
+        画面を「後ろに下がった」とみなし、手前に出てきたものから次の操作を探す。ハーネスも、手前にあったときに測った
+        明るさ（位置ごと）と比べ、同じ位置のボタンのうち behind_share 以上が、同じような明るさでなくなった（behind_ratio /
+        behind_min_gap で判定）画面を後ろに下がったとし、押す候補から外す。見た目が元に戻れば、手前に戻ったとする。
+        同じ位置で比べられるボタンが3つに満たないときは、前の判定を残す。手前に出てきたもの（ほかの画面の見えている
+        ボタン・選択肢）がなければ、後ろに下がったとはしない（背景が動いて半透明のボタンの見た目が変わっただけのときに、
+        押せるものがなくならないように）。"""
+        run = self.run
+        ratio, gap = float(self.cfg["behind_ratio"]), float(self.cfg["behind_min_gap"])
+        share = float(self.cfg["behind_share"])
+        compared: Counter[str] = Counter()
+        changed: Counter[str] = Counter()
+        by_menu: dict[str, dict[str, tuple[float, float]]] = {}
+        for gkey, values in measured.items():
+            menu = gkey.split("/", 1)[0]
+            for label, v in values.items():
+                by_menu.setdefault(menu, {})[label] = v
+                base = run.look_base.get(label)
+                if base is None or max(abs(a - b) for a, b in zip(base[0], rects[label])) > 0.005:
+                    continue  # 手前にあったときに、同じ位置で測っていない
+                compared[menu] += 1
+                changed[menu] += not alike(v, base[1], ratio, gap)
+        behind = {name for name in self.state.behind if name in self.state.menus}
+        for menu, values in by_menu.items():
+            ahead = bool(self.state.choices) or any(
+                m.visible_buttons for name, m in self.state.menus.items() if name != menu and name not in behind
+            )
+            if compared[menu] >= 3:
+                if changed[menu] / compared[menu] >= share and ahead:
+                    if menu not in behind and menu not in run.behind_noted:
+                        run.behind_noted.add(menu)
+                        run.notes.append(
+                            f"`{menu}` のボタンが、位置は変わらないのに見た目がまとめて変わった（{changed[menu]}/"
+                            f"{compared[menu]} 個。暗くなった・ほかのものが重なった）ので、後ろに下がったとみなし、"
+                            f"手前に出てきた画面を操作した（起動 #{self.launch}）"
+                        )
+                    behind.add(menu)
+                else:
+                    behind.discard(menu)
+            if menu not in behind:
+                for label, v in values.items():
+                    run.look_base[label] = (rects[label], v)
+        self.state.behind = behind
+
     def _locked_alike(self) -> set[str]:
         """押しても反応しなかったボタンと同じような明るさのボタン。人が1つ押してみて「この見た目は開示されていない」と
         覚え、同じ見た目のものは押さずに、ほかを探しにいくように。
@@ -541,7 +591,11 @@ class FuzzSession:
         前は暗かったのに、ほかに暗いものが残っている並びで明るくなったボタン（新しくアンロックされたもの）は、ランで1回だけ先に押す。
         """
         self._dim, self._varied, self._values = set(), set(), {}
-        targets = self.state.targets()
+        # 後ろに下がったと判定した画面のボタンも測る（手前に戻ってきたかを見るため）
+        targets = self.state.targets() + [
+            b for name in sorted(self.state.behind) if name in self.state.menus
+            for b in self.state.menus[name].visible_buttons
+        ]
         if float(self.cfg["dim_factor"]) >= 1 or not groups(targets):
             return  # 無効にしている、または同じ種類に見えるボタンが並んでいない
         try:
@@ -552,7 +606,11 @@ class FuzzSession:
             return  # 画面収録の権限がないなど。見た目なしで続ける
         run = self.run
         record: dict[str, Any] = {}
-        for gkey, values in measure(targets, shot).items():
+        measured = measure(targets, shot)
+        self._judge_behind(measured, {t.label: t.rect for t in targets})
+        for gkey, values in measured.items():
+            if gkey.split("/", 1)[0] in self.state.behind:
+                continue  # 後ろの画面は、手前の画面の影で暗く見えるので、暗い・明るいを判定しない
             ref = brightest(values)
             dk = dark(values, ref, float(self.cfg["dim_ratio"]), float(self.cfg["dim_min_gap"]))
             self._dim |= dk
