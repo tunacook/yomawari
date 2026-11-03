@@ -218,8 +218,10 @@ yomawari/
 
 ### コマンド
 ```bash
-yomawari run [--build NAME | --build-path PATH] [--hours 8] [--mode fuzz|random|aging] [--seed N] [--no-open]
-#   fuzz: 通常の操作 + イレギュラー操作 / random: 通常の操作のみ / aging: 操作せず観測のみ
+yomawari run [--build NAME | --build-path PATH] [--hours 8] [--purpose stuck|play|buttons|gacha|rta|aging|<足した目的>]
+             [--mode fuzz|random|aging] [--seed N] [--no-open]
+#   --purpose: ランの目的（§9「ランの目的」）。既定は run.purpose（play）
+#   --mode: 目的の mode を上書きする。fuzz: 通常の操作 + イレギュラー操作 / random: 通常の操作のみ / aging: 操作せず観測のみ
 yomawari replay <issue-id>
 yomawari minimize <issue-id>
 yomawari report <run-id>
@@ -282,6 +284,7 @@ profile = "~/work/Rachel/yomawari.profile.toml"                  # ゲームの�
 
 [run]
 hours = 8
+purpose = "play"             # ランの目的（§9「ランの目的」）。--purpose で変えられる
 seed = "auto"
 open_report = true
 keep_runs_days = 14
@@ -333,6 +336,7 @@ intent_explore = 1            # random モードで、プレイの目的「画�
 progress_detour_factor = 0.2  # 目的が「本編を進める」のとき、寄り道を始める操作（本文中の右クリック・ホイール上・操作のボタン）の重みに掛ける
 explore_detour_factor = 3     # 目的が「画面を見て回る」のとき、寄り道を始める操作の重みに掛ける
 recover_ops = 8               # S-02 / S-03 のとき、再起動する前に抜け出す操作（Esc・右クリック・本文送り・ボタン）を試す回数
+learn = true                  # random モードで、進め方の経験（進行につながった操作を優先する）を使う。ランの目的で変える
 
 [fuzz.weights]                # 通常の操作の重み
 advance = 20
@@ -679,8 +683,25 @@ ignore_patterns = ["<既知で無害なエラーの正規表現>"]
 - `report.md` の「ハーネスの記録」には、本文送り（`reading` の `advance`）以外で、初めて進行につながった操作を載せる（「状態 `modal:MemoryListUI` で `click MemoryListUI/MemoryListGridSlot (Clone)#48` を押すと先に進んだので、次から優先する」）
 - 選択肢の行き先は、選んだあとに最初に来た `scene`（タイトルや終了も含む）で記録する
 
+#### ランの目的
+デバッグで見たいものは、ランごとに違う（進行不能を探したい、ボタンの不具合を探したい、連打で落ちる操作を探したい、最短で進めたときの不具合を見たい…）。`yomawari run --purpose <名前>` でランの目的を選び、操作のモード・`[fuzz]` の設定・レポートで先に見せるルールをまとめて変える（`yomawari/purpose.py`）。指定がなければ `[run] purpose`（既定 `play`）。`--mode` を指定すれば、目的の mode より優先する。
+
+| 目的 | mode | `[fuzz]` の上書き | レポートで先に見せるルール（focus） |
+|---|---|---|---|
+| `play`（通常のプレイ。既定） | random | 「本編を進める」だけ（`intent_explore` 0）。進め方の経験を使う | なし |
+| `stuck`（進行不能を探す） | random | プレイの目的を半々（`intent_progress` 1、`intent_explore` 1）にして、本編を進めつつ寄り道と行き来もする。`recover_ops` 0（進めなくなったら、抜け出す操作を試さずに記録して再起動する。進行不能を見逃さないため） | S-02, S-03, S-01, H-01 |
+| `buttons`（ボタンの不具合） | random | 「画面を見て回る」だけ（`intent_progress` 0）。経験を使わない（`learn` false）。暗いボタンも押す（`dim_factor` 0.3）。ボタンを押す重みを上げる（`weights.click` 10） | S-05, V-07, S-01 |
+| `gacha`（ガチャプレイ） | fuzz | イレギュラーな操作と、反応を待たずに次を押す操作を多めに（`irregular_prob` 0.3、`trigger_prob` 0.6）。経験を使わない | C-01〜04, H-01, L-01 |
+| `rta`（最短で進める） | random | 「本編を進める」だけ。進行につながった操作を強く優先し（`progress_bonus` 20）、巻き戻しを避け（`rewind_factor` 0.02）、寄り道をほとんどしない（`progress_detour_factor` 0.05） | S-02, S-03 |
+| `aging`（放置） | aging | なし（操作しない） | H-01, L-01, C-01 |
+
+- `yomawari.toml` の `[purpose.<名前>]` で、組み込みの目的を上書きしたり、新しい目的を足したりできる（`description` / `mode` / `focus` / `fuzz`）。`fuzz` は `[fuzz]` に重ねる（`weights` は項目ごと）
+- レポートの「サマリ」に目的とその説明、重点的に見るルールを載せる。深刻度ごとに、focus のルールの指摘を focus の順で先に並べ、見出しに「（重点）」を付ける
+- 「本編を進める」の重みが 0 の目的（`buttons`）は、ランの最初のプレイから「画面を見て回る」にする
+- `learn` が false の目的では、random モードでも進め方の経験を重みに掛けない（経験の記録は続ける）
+
 #### プレイの目的
-人のテストプレイは、「今回は本編を先へ進める」「今回はメニューを一通り触る」のように、目的を持って遊ぶ。ハーネスも random モードでは、起動したときとタイトルに戻ったとき（1回の「プレイ」の始まり）に、目的を1つ選ぶ。ランの最初のプレイは「本編を進める」にする（夜間のランは起動が1回だけのことが多く、まず先へ進めることを優先する）。fuzz モードでは選ばない。
+人のテストプレイは、「今回は本編を先へ進める」「今回はメニューを一通り触る」のように、目的を持って遊ぶ。ハーネスも random モードでは、起動したときとタイトルに戻ったとき（1回の「プレイ」の始まり）に、目的を1つ選ぶ。ランの最初のプレイは「本編を進める」にする（夜間のランは起動が1回だけのことが多く、まず先へ進めることを優先する）。ただし、ランの目的で `intent_progress` が 0 のときは重みどおりに選ぶ。fuzz モードでは選ばない。
 
 | 目的 | 選ぶ重み | 操作の選び方 |
 |---|---|---|

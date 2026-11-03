@@ -18,6 +18,7 @@ CONFIG_NAME = "yomawari.toml"
 # [run] の既定値。yomawari.example.toml と揃える
 RUN_DEFAULTS: dict[str, Any] = {
     "hours": 8.0,
+    "purpose": "play",  # ランの目的（yomawari/purpose.py）。--purpose で変えられる
     "seed": "auto",
     "open_report": True,
     "keep_runs_days": 14,
@@ -85,6 +86,8 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "explore_detour_factor": 3.0,
     # S-02 / S-03（ゲームは動いているが進まない）のとき、再起動する前に、抜け出す操作をこの回数まで試す
     "recover_ops": 8,
+    # random モードで、進め方の経験（進行につながった操作を優先する）を使う。目的（purpose）で変える
+    "learn": True,
     "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")
@@ -190,6 +193,12 @@ class Config:
         out = self.section("fuzz", FUZZ_DEFAULTS)
         out["weights"] = {**FUZZ_DEFAULTS["weights"], **dict(out["weights"])}
         return out
+
+    @property
+    def purposes(self) -> dict[str, Any]:
+        """[purpose.<名前>] の上書き（yomawari/purpose.py）。"""
+        raw = self.doc.get("purpose", {})
+        return raw.unwrap() if hasattr(raw, "unwrap") else dict(raw)
 
     @property
     def judge(self) -> dict[str, Any]:

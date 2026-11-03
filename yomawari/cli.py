@@ -30,6 +30,8 @@ from .detect.engine import Rule, RuleError, load_rules
 from .fuzz.roles import RoleBook, load_role_hints
 from .platform import Platform, get_platform
 from .profile import apply_rules, load_spec
+from .purpose import MODES, PurposeError
+from .purpose import resolve as resolve_purpose
 from .savestate import SaveState, resolve_target
 from .sensors.window import ClientArea
 from .state import GameState
@@ -163,18 +165,30 @@ def run(
     build: str | None = typer.Option(None, "--build", "-b", help="登録済みビルドの名前"),
     build_path: Path | None = typer.Option(None, "--build-path", help="その場限りで使うビルドのパス（登録しない）"),
     hours: float | None = typer.Option(None, "--hours", help="実行時間（時間）。既定は yomawari.toml の run.hours"),
-    mode: str = typer.Option(
-        "fuzz", "--mode",
-        help="fuzz（通常の操作 + イレギュラー操作）| random（通常の操作のみ）| aging（操作せず観測のみ）",
+    purpose: str | None = typer.Option(
+        None, "--purpose", "-p",
+        help="ランの目的: play（通常のプレイ）| stuck（進行不能を探す）| buttons（ボタンの不具合）| gacha（ガチャプレイ）"
+             "| rta（最短で進める）| aging（放置）、または yomawari.toml で足した目的。既定は yomawari.toml の run.purpose（play）",
+    ),
+    mode: str | None = typer.Option(
+        None, "--mode",
+        help="目的の mode を上書きする: fuzz（通常の操作 + イレギュラー操作）| random（通常の操作のみ）| aging（操作せず観測のみ）",
     ),
     seed: str | None = typer.Option(None, "--seed", help="乱数シード。既定は yomawari.toml の run.seed"),
     no_open: bool = typer.Option(False, "--no-open", help="終了後にレポートを開かない"),
 ) -> None:
     """ビルドを起動して監視し、report.md を出力する。"""
-    if mode not in ("fuzz", "aging", "random"):
+    if mode is not None and mode not in MODES:
         err.print(f"[red]--mode が不正です: {mode}[/]")
         raise typer.Exit(EXIT_HARNESS_ERROR)
     cfg = _config(ctx)
+    try:
+        goal = resolve_purpose(str(purpose or cfg.run["purpose"]), cfg.purposes)
+    except PurposeError as e:
+        err.print(f"[red]{e}[/]")
+        raise typer.Exit(EXIT_HARNESS_ERROR) from None
+    mode = mode or goal.mode
+    console.print(f"目的: {goal.name}（{goal.description}）／モード: {mode}")
     plat = get_platform()
     rules = load_rules(cfg.rules_path)
     b = cfg.resolve_build(build, build_path)
@@ -197,12 +211,13 @@ def run(
         hours=float(hours if hours is not None else rc["hours"]),
         mode=mode,
         seed=str(seed if seed is not None else rc["seed"]),
+        purpose=goal,
     )
     live = Live(Text("起動中…"), console=console, refresh_per_second=2) if console.is_terminal else None
     harness = Harness(
         b, exe, plat, rules, cfg.rules_path, cfg.runs_dir, rc, cfg.sensors,
         on_status=(lambda s: live.update(_status_text(s))) if live else None,
-        fuzz_cfg=cfg.fuzz,
+        fuzz_cfg=goal.apply(cfg.fuzz),
         spec=spec,
         roles=roles,
     )

@@ -35,6 +35,7 @@ from .input.pointer import Pointer
 from .platform import Platform
 from .profile import GameSpec
 from .post.report import RunSummary, write_report
+from .purpose import Purpose
 from .savestate import SaveState, resolve_target
 from .state import GameState
 from .sensors.crash import watch_crash_dir
@@ -49,6 +50,7 @@ class RunOptions:
     hours: float
     mode: str
     seed: str
+    purpose: Purpose | None = None  # ランの目的。fuzz_cfg にはすでに重ねてある
 
 
 @dataclass
@@ -330,7 +332,7 @@ class Harness:
                 # 進め方の経験は、ボタンの役割と同じファイル（runs/_experience/<ゲーム>.json）に覚える
                 experience=Experience(self.roles.path),
             )
-            if opts.mode == "random":
+            if opts.mode == "random" and self.fuzz_cfg["learn"]:
                 # 進行につながった操作を優先し、巻き戻した操作を後回しにする。fuzz モードでは掛けない（いつもの道に偏らないように）
                 exp, fc = self._fuzz.experience, self.fuzz_cfg
                 run = self._fuzz
@@ -410,6 +412,9 @@ class Harness:
                 duration_sec=time.monotonic() - self._started,
                 mode=opts.mode,
                 seed=seed,
+                purpose=opts.purpose.name if opts.purpose else None,
+                purpose_description=opts.purpose.description if opts.purpose else "",
+                focus=list(opts.purpose.focus) if opts.purpose else [],
                 launches=self.launches,
                 restarts=self.restarts,
                 interrupted=interrupted,
