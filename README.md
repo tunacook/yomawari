@@ -190,7 +190,7 @@ yomawari run -p gacha --seed 42             # 乱数シードを固定して再�
 | `rta` | 最短で進めたときの不具合 | 進行につながった操作を強く優先し、寄り道と巻き戻しを避ける | random | S-02, S-03 |
 | `aging` | 放置したときの不具合 | 操作せずに起動したままにする | aging | H-01, L-01, C-01 |
 
-ルールの ID は `rules.yaml` を参照。目的は `yomawari.toml` の `[purpose.<名前>]` で上書きしたり、新しく足したりできる（書き方は `yomawari.example.toml` のコメント）。`[purpose.<名前>.fuzz]` は `[fuzz]` の設定の上書きで、どの項目があるかも `yomawari.example.toml` に書いてある。目的ごとの動き方の考え方は [DESIGN.md §9「ランの目的」](DESIGN.md) を参照。
+ルールの ID は `rules.yaml` を参照。`buttons` と `gacha` は、ゲームのプロファイルに書いたゲームの流れ（`[[flow]]`。[DESIGN.md §9「ゲームの流れ」](DESIGN.md)）を使わず、それ以外は流れに沿って進める。目的は `yomawari.toml` の `[purpose.<名前>]` で上書きしたり、新しく足したりできる（書き方は `yomawari.example.toml` のコメント）。`[purpose.<名前>.fuzz]` は `[fuzz]` の設定の上書きで、どの項目があるかも `yomawari.example.toml` に書いてある。目的ごとの動き方の考え方は [DESIGN.md §9「ランの目的」](DESIGN.md) を参照。
 
 ### そのほかのコマンド
 `yomawari --help` で一覧が出る。主なもの:

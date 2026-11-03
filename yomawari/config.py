@@ -88,6 +88,11 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "recover_ops": 8,
     # random モードで、進め方の経験（進行につながった操作を優先する）を使う。目的（purpose）で変える
     "learn": True,
+    # ゲームの流れ（プロファイルの [[flow]]。fuzz/flow.py）に沿って進める。目的（purpose）で変える
+    "use_flow": True,
+    "flow_factor": 20.0,  # いまの手順で押すボタン・本文送り・選択肢の重みに掛ける
+    "flow_avoid_factor": 0.02,  # 流れの途中で押すと流れから外れるボタン（avoid）の重みに掛ける
+    "flow_idle_sec": 10.0,  # 流れのどの画面・scene でもない状態がこれだけ続いたら、流れが途切れたとする
     "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")
