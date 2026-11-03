@@ -511,3 +511,12 @@ def test_decider_does_not_bury_leave_under_many_buttons():
     # click 5 : move 2 : leave 1 なので、30回のうち抜ける操作は数回は出る（ボタン1つあたりで分けると 1/50 未満）
     assert picked.count("leave") >= 2, picked
     assert picked.count("move") >= 4, picked
+
+
+def test_verify_does_not_use_move_ops():
+    # 前に反応があっても、方向キー・Enter・ドラッグは応答確認に使わない（フォーカスで結果が変わる）
+    cfg = {**CFG, "trigger_prob": 1.0, "irregular_prob": 0.3}
+    _, _, _, events, _ = run_sim("fuzz", 2.0, title=LIST_TITLE, cfg=cfg)
+    verified = [e.data for e in events if e.kind == "op_result" and e.data["verify"]]
+    assert verified
+    assert not any(d["kind"] in ("drag", "wheel_down", "wheel_up") or d["label"].startswith("key ") for d in verified)
