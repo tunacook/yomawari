@@ -58,8 +58,9 @@ class SimGame:
     dead_settings: 設定ボタンは1回目だけ設定を開き、2回目からは押しても何も起きない
     """
 
-    def __init__(self, emit, title=TITLE, bugs=()):
+    def __init__(self, emit, title=TITLE, bugs=(), list_modal=True):
         self.emit = emit
+        self.list_modal = list_modal
         self.title = dict(title)
         self.bugs = set(bugs)
         self.screen = "title"
@@ -69,6 +70,7 @@ class SimGame:
         self.clicked = []
         self.offset = 0.0
         self.scrolled = 0
+        self.max_offset = 0.0
         self.list_closed = 0
         self.settings_opened = 0
 
@@ -84,13 +86,14 @@ class SimGame:
     def _show_list(self):
         slots = [{"name": "Slot", "rect": [0.2, 0.1 + 0.2 * i - self.offset, 0.8, 0.25 + 0.2 * i - self.offset]}
                  for i in range(LIST_SLOTS)]
-        self.emit("menu", name="ListUI", modal=True, buttons=slots)
+        self.emit("menu", name="ListUI", modal=self.list_modal, buttons=slots)
 
     def scroll_list(self, step):
         if self.screen != "list":
             return
         self.scrolled += 1
         self.offset = min(max(self.offset + 0.2 * step, 0), 0.2 * (LIST_SLOTS - 4))
+        self.max_offset = max(self.max_offset, self.offset)
         self._show_list()
 
     def key(self, name):
@@ -104,7 +107,8 @@ class SimGame:
             self.scroll_list(1 if name == "down" else -1)
 
     def wheel(self, amount):
-        self.scroll_list(-1 if amount < 0 else 1)
+        # pyautogui と同じく、負の値がホイールを下へ（下の項目が出てくる）
+        self.scroll_list(1 if amount < 0 else -1)
 
     def drag(self, dy):
         self.scroll_list(1 if dy < 0 else -1)
@@ -171,7 +175,7 @@ class SimDriver:
     def hotkey(self, *names): ...
 
 
-def run_sim(mode, seconds, bugs=(), title=TITLE, guard=None, cfg=CFG, seed="1", book=None):
+def run_sim(mode, seconds, bugs=(), title=TITLE, guard=None, cfg=CFG, seed="1", book=None, list_modal=True):
     rules = scaled_rules(0.05)  # S-01: 0.25秒、S-03: 0.5秒
     engine = Engine(rules)
     state = GameState()
@@ -185,7 +189,7 @@ def run_sim(mode, seconds, bugs=(), title=TITLE, guard=None, cfg=CFG, seed="1", 
         if "session" in holder:
             holder["session"].on_event(ev)
 
-    game = SimGame(lambda kind, **d: publish(Event("game", kind, d, 0)), title=title, bugs=bugs)
+    game = SimGame(lambda kind, **d: publish(Event("game", kind, d, 0)), title=title, bugs=bugs, list_modal=list_modal)
     run = FuzzRun(
         mode=mode, decider=RandomDecider(random.Random(seed), cfg["no_response_factor"]), guard=Guard(guard or {}, book=book),
         rng=random.Random(seed), cfg=cfg, response_timeout=float(rules["S-01"].param("timeout_sec")),
@@ -515,3 +519,26 @@ def test_decider_does_not_bury_leave_under_many_buttons():
     # click 5 : move 2 : leave 1 なので、30回のうち抜ける操作は数回は出る（ボタン1つあたりで分けると 1/50 未満）
     assert picked.count("leave") >= 2, picked
     assert picked.count("move") >= 4, picked
+
+
+def test_list_screen_is_searched_to_the_end():
+    # 見えているスロットが反応しないので、まだ見ていないスロットのある下へ、端まで動かして探す
+    game, run, issues, events, _ = run_sim("random", 6.0, title=LIST_TITLE)
+    _assert_searched(game, run, events)
+
+
+def test_non_modal_list_is_searched_to_the_end():
+    # モーダルでない一覧（Rachel の回想一覧）には、ランダムに動かす操作（move）は出ない。探す操作だけで端まで行く
+    game, run, issues, events, _ = run_sim("random", 6.0, title=LIST_TITLE, list_modal=False)
+    _assert_searched(game, run, events)
+    # 端まで見るまでは、見ていないスロットのある下へだけ動かす（見終わってスロットがどれも反応しなければ、ほかの向きも試す）
+    ops = [e.data["label"] for e in events if e.kind == "op"]
+    moves = [o for o in ops if o.split()[0] in ("drag", "wheel_down", "wheel_up", "key")]
+    assert moves[:3] and all(o in ("drag up", "wheel_down 3", "key down") for o in moves[:3])
+
+
+def _assert_searched(game, run, events):
+    # いちばん下のスロットの中心が描画領域に入るのは、0.2 ずつ動かして 1.4 のとき
+    assert game.max_offset >= 1.4 - 1e-9
+    assert {f"ListUI/Slot#{i}" for i in range(1, LIST_SLOTS)} <= run.seen
+    assert any(e.kind == "op" and e.data["kind"] in ("wheel_down", "drag", "key") for e in events)

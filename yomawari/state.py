@@ -115,6 +115,7 @@ class GameState:
     title_menu: str | None = None
     title_returns: int = 0
     resolution_changes: int = 0  # resolution の値（w / h / mode）が変わった回数
+    saves: int = 0  # セーブが始まった回数（押したボタンでセーブしたかを見るため。V-07）
     _played_since_title: bool = False
     _order: int = 0
 
@@ -208,6 +209,8 @@ class GameState:
 
     def _on_save(self, d: dict[str, Any], t: float) -> None:
         self.saving = d.get("phase") == "start"
+        if self.saving:
+            self.saves += 1
 
     def _on_load(self, d: dict[str, Any], t: float) -> None:
         self.loading = d.get("phase") == "start"

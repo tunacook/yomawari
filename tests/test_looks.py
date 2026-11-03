@@ -208,6 +208,22 @@ def test_v07_needs_another_screen_not_feedback():
     assert engine.feed(Event("harness", "op_result", {**base, "screen_changed": False}, 0)) == []
 
 
+def test_v07_skips_saving_into_empty_slot():
+    from yomawari.detect.engine import Engine
+
+    from .conftest import scaled_rules
+
+    engine = Engine(scaled_rules(1.0))
+    # 空きのセーブスロットはサムネイルがなく暗く写る。押してセーブが始まり、操作を止める幕（ボタンのないモーダル）が出た
+    d = {"kind": "click", "target": "SaveLoadUI/SaveLoadSlot (Clone)#1", "dim": True, "responded": True,
+         "screen_changed": True, "saved": True, "interfered": False, "heartbeat_age": 0.5}
+    assert engine.feed(Event("harness", "op_result", d, 0)) == []
+    st = GameState()
+    st.feed(Event("game", "save", {"phase": "start"}, 0))
+    st.feed(Event("game", "save", {"phase": "end"}, 0))
+    assert st.saves == 1
+
+
 def test_screens_ignore_toasts_and_line():
     st = GameState()
     feed = lambda kind, **d: st.feed(Event("game", kind, d, 0))

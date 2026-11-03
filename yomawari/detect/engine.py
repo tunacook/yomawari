@@ -405,6 +405,7 @@ class DimButtonRespondedDetector(Detector):
 
     暗いのに別の画面に進めるのは、見た目と動作が食い違っている（アンロックされていないのに回想が開ける、など）。
     押せないことを知らせる演出（震える、ボタンのない通知が出る）で画面の状態が変わっただけでは出さない。
+    押してセーブが始まったときも出さない（空きのセーブスロットはサムネイルがなく暗く写るが、セーブするのが正しい操作）。
     暗いかどうかはファジングのループが押す前に画面の明るさで決め、op_result の dim で、
     別の画面が出たかは screen_changed で伝える（fuzz/looks.py、GameState.screens）。
     """
@@ -419,6 +420,9 @@ class DimButtonRespondedDetector(Detector):
         if ev.kind != "op_result" or d.get("kind") != "click" or not d.get("dim"):
             return []
         if not d.get("screen_changed") or d.get("interfered") or not _alive(ev, self.alive):
+            return []
+        if d.get("saved"):
+            # 空きのセーブスロットは、サムネイルがなくてほかより暗く写るが、押してセーブするのが正しい操作
             return []
         target = str(d.get("target"))
         if target in self.seen:

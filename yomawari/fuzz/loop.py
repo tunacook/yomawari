@@ -39,6 +39,7 @@ from .ops import (
     normal_candidates,
     state_key,
 )
+from .search import REVEAL, blind_candidates, leads, search_candidates, searchable_menus, stuck_rows
 
 # イレギュラー操作を差し込むきっかけにするゲームのイベント
 TRIGGERS = {"transition", "line", "choices", "save", "load", "scene"}
@@ -71,6 +72,10 @@ class FuzzRun:
     dim_history: dict[str, bool] = field(default_factory=dict)  # ボタン（label）→ 前に測ったとき暗かったか
     newly_bright: set[str] = field(default_factory=set)  # 前は暗かったのに明るくなり、まだ押していないボタン
     screen_weights: dict[str, float] = field(default_factory=dict)  # プロファイルの [screens.<menu>] weight
+    # 画面の外を探す（fuzz/search.py）。ランのあいだ覚えておく
+    seen: set[str] = field(default_factory=set)  # 一度でも見えたボタンの label
+    silent: set[str] = field(default_factory=set)  # 最後に押したとき反応しなかったボタンの label
+    search_miss: Counter[str] = field(default_factory=Counter)  # "<menu>/<name>:<向き>" → 動かしても続けて反応しなかった回数
     stopped_reason: str | None = None
 
     def summary(self) -> str:
@@ -112,6 +117,7 @@ class FuzzSession:
         self._looked: Any = None  # 見た目を比べたときの signature
         self._dim: set[str] = set()
         self._explore = False  # 見えている並びがすべて暗い（画面の外を探したい）
+        self._search: dict[str, list[str]] = {}  # 探す操作の label → それが向かう "<menu>/<name>:<向き>"
         self._title_returns = state.title_returns
         self._resolution_changes = state.resolution_changes
 
@@ -199,6 +205,8 @@ class FuzzSession:
             self.state, self.run.guard, self.cfg["weights"], allow_exit, self.run.screen_weights,
             self._factors(), float(self.cfg["explore_factor"]) if self._explore else 1.0,
         )
+        if cands:
+            cands += self._search_candidates()
         top = self.state.top_modal()
         if top is not None and not top.buttons and not self.state.busy:
             self._modal_since = self._modal_since or now
@@ -222,6 +230,40 @@ class FuzzSession:
             await self._external(op)
         else:
             await self._normal(op, key, verify)
+
+    def _search_candidates(self) -> list[Op]:
+        """まだ見ていないボタンが画面の外にある向きへ動かす操作（fuzz/search.py）。"""
+        run = self.run
+        for m in searchable_menus(self.state):
+            run.seen |= {b.label for b in m.visible_buttons}
+        self._search = {}
+        found = [
+            lead for lead in leads(self.state, run.seen)
+            if run.search_miss[f"{lead.menu}/{lead.name}:{lead.direction}"] < int(self.cfg["search_give_up"])
+        ]
+        stuck = self._quiet() | run.silent
+        if not found:
+            # どの向きに項目があるか分からない（画面の外の矩形が来ない、ページ送りの一覧など）。見えている並びが
+            # どれも押せそうにないときだけ、すべての向きへ動かして押せるものを探す
+            ops = []
+            for menu, _name, point in stuck_rows(self.state, stuck):
+                w = (float(self.cfg["weights"]["click"]) * run.screen_weights.get(menu, 1.0)
+                     * float(self.cfg["search_factor"]) * float(self.cfg["explore_factor"]))
+                ops += blind_candidates(point, w)
+            return ops
+        weights: dict[str, float] = {}
+        for lead in found:
+            w = float(self.cfg["weights"]["click"]) * run.screen_weights.get(lead.menu, 1.0) * float(self.cfg["search_factor"])
+            if all(label in stuck for label in lead.visible):
+                w *= float(self.cfg["explore_factor"])  # 見えているものに押せそうなものがない。探すほうを先にする
+            weights[f"{lead.menu}/{lead.name}"] = w
+        ops = search_candidates(found, weights)
+        for op in ops:
+            self._search[op.label] = [
+                f"{lead.menu}/{lead.name}:{lead.direction}" for lead in found
+                if (op.kind, op.arg) in REVEAL[lead.direction]
+            ]
+        return ops
 
     def _quiet(self) -> set[str]:
         """押しても反応しないと見込んでいるボタン（暗い、文字で空と分かる）の label。"""
@@ -287,6 +329,7 @@ class FuzzSession:
     async def _normal(self, op: Op, key: str, verify: bool) -> None:
         before = self.state.signature()
         screens_before = self.state.screens()
+        saves_before = self.state.saves
         # 反応しないと見込んでいるボタンは、何も起きないことを確かめるだけなので、待つ時間を短くする
         quiet = op.target is not None and op.target.label in self._quiet()
         started = time.monotonic()
@@ -311,6 +354,14 @@ class FuzzSession:
             self.run.responsive.add((key, op.label))
         else:
             self.run.stats["no_response"] += 1
+        if op.target is not None and op.target.kind == "button":
+            (self.run.silent.discard if responded else self.run.silent.add)(op.target.label)
+        if op.group == "search":
+            for k in self._search.get(op.label, []):
+                if responded:
+                    self.run.search_miss.pop(k, None)
+                else:
+                    self.run.search_miss[k] += 1
         hb_age = time.monotonic() - self.state.last_game_t if self.state.last_game_t is not None else None
         self.publish(
             Event(
@@ -321,6 +372,7 @@ class FuzzSession:
                     "type": op.target.type if op.target else None,
                     "dim": bool(op.target and op.target.label in self._dim),
                     "screen_changed": screen_changed,
+                    "saved": self.state.saves != saves_before,  # 押してセーブが始まった（空きのスロットにセーブした）
                     "quiet": quiet,
                     "responded": responded,
                     "waited": round(waited, 3),
