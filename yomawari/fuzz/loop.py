@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+from fnmatch import fnmatchcase
 import random
 import time
 from collections import Counter, deque
@@ -41,6 +42,7 @@ from .ops import (
     normal_candidates,
     state_key,
 )
+from .flow import FlowTracker, matches
 from .search import REVEAL, Lead, blind_candidates, known_leads, leads, search_candidates, searchable_menus, stuck_rows
 
 # プレイの目的（random モード）→ レポートでの呼び方
@@ -79,9 +81,11 @@ class FuzzRun:
     dim_history: dict[str, bool] = field(default_factory=dict)  # ボタン（label）→ 前に測ったとき暗かったか
     newly_bright: set[str] = field(default_factory=set)  # 前は暗かったのに明るくなり、まだ押していないボタン
     screen_weights: dict[str, float] = field(default_factory=dict)  # プロファイルの [screens.<menu>] weight
+    flow: FlowTracker = field(default_factory=lambda: FlowTracker([]))  # ゲームの流れ（プロファイルの [[flow]]）
     # 画面の外を探す（fuzz/search.py）。ランのあいだ覚えておく
     seen: set[str] = field(default_factory=set)  # 一度でも見えたボタンの label
     silent: set[str] = field(default_factory=set)  # 最後に押したとき反応しなかったボタンの label
+    answered: set[str] = field(default_factory=set)  # 押して反応があったことのあるボタンの label
     search_miss: Counter[str] = field(default_factory=Counter)  # "<menu>/<name>:<向き>" → 動かしても続けて反応しなかった回数
     # menu → それを開いたボタンの label（ハーネスがボタンを押して開いた寄り道の画面）。ここにない menu はゲームが開いたもの
     opened_by: dict[str, str] = field(default_factory=dict)
@@ -173,6 +177,7 @@ class FuzzSession:
             if key is not None:
                 self.run.guard.book.confirm(key, "to_title", f"タイトル画面（{self.state.title_menu}）が再び出た")
             self._credit("rewind")
+            self.run.flow.title_returned()
             self._end_play()
             self._choose_intent("タイトルに戻った")
         if self.state.resolution_changes != self._resolution_changes:
@@ -279,6 +284,7 @@ class FuzzSession:
                 cands = [op for op in cands if op.group != "move" or op.label == "key enter"]
             cands += search
         cands = self._apply_intent(cands)
+        cands = self._apply_flow(cands, now)
         top = self.state.top_modal()
         if top is not None and not top.buttons and not self.state.busy:
             self._modal_since = self._modal_since or now
@@ -334,6 +340,54 @@ class FuzzSession:
             f"新しく届いた本文・scene・選択肢 {reached} 件"
         )
         run.intent = None
+
+    def _apply_flow(self, cands: list[Op], now: float) -> list[Op]:
+        """ゲームの流れ（プロファイルの [[flow]]）に沿って、いまの手順の操作を優先し、流れから外れる操作を後回しにする。
+
+        「画面を見て回る」プレイと、use_flow が false の目的（buttons / gacha）では使わない。押しても反応しないと
+        見込んでいるボタン（暗い・ロック中と同じ見た目）は、手順のボタンでも優先しない（一覧から開示済みを探すため）。
+        """
+        run, cfg = self.run, self.cfg
+        tracker = run.flow
+        if not tracker.flows or not cfg["use_flow"] or run.intent == "explore":
+            return cands
+        before = (tracker.active.name if tracker.active else None, tracker.index)
+        step = tracker.update(self.state, run.opened_by, now, float(cfg["flow_idle_sec"]))
+        after = (tracker.active.name if tracker.active else None, tracker.index)
+        if after != before:
+            self._note_flow(before, after)
+        flow = tracker.active
+        if flow is None:
+            return cands
+        boost, low = float(cfg["flow_factor"]), float(cfg["flow_avoid_factor"])
+        quiet = self._quiet() | run.silent
+        out = []
+        for op in cands:
+            t = op.target
+            f = 1.0
+            if t is not None and flow.avoid and matches(t.label, t.name, flow.avoid):
+                f = low
+            elif step is not None:
+                if op.kind == "advance" and step.advance:
+                    f = boost
+                elif t is not None and t.kind == "choice" and step.choose is not None:
+                    if not step.choose or any(fnmatchcase(t.text or "", p) for p in step.choose):
+                        f = boost
+                elif (t is not None and t.kind == "button" and t.label not in quiet and step.when.screen == t.menu
+                      and (matches(t.label, t.name, step.press) if step.press
+                           else not (step.advance or step.choose is not None))):
+                    f = boost
+            out.append(dataclasses.replace(op, weight=op.weight * f) if f != 1.0 else op)
+        return out
+
+    def _note_flow(self, before: tuple[str | None, int], after: tuple[str | None, int]) -> None:
+        """流れを始めた・手順を進めたことを events.jsonl に残す（「ハーネスの記録」には、ランの終わりにまとめて書く）。"""
+        tracker = self.run.flow
+        step = tracker.step
+        self.publish(Event("harness", "flow", {
+            "flow": after[0], "step": after[1] + 1 if after[0] else None,
+            "note": step.note if step else None, "from": {"flow": before[0], "step": before[1] + 1},
+        }, self.launch))
 
     def _apply_intent(self, cands: list[Op]) -> list[Op]:
         """寄り道を始める操作（本文を読んでいるときの右クリック・ホイール上、本文中に出ている操作のボタン）の重みを、
@@ -495,8 +549,10 @@ class FuzzSession:
         self.run.notes.append(f"{text}（起動 #{self.launch}）")
 
     def _quiet(self) -> set[str]:
-        """押しても反応しないと見込んでいるボタン（暗い、文字で空と分かる）の label。"""
-        return self._dim | self._locked_alike() | inactive(self.state.targets(), self.run.inactive_words)
+        """押しても反応しないと見込んでいるボタン（暗い、文字で空と分かる、押しても一度も反応しなかったもの・それと
+        同じ見た目のもの）の label。一度も反応しなかったボタンは S-05 の対象でないので、押し直しても待つ時間は短くてよい。"""
+        return (self._dim | self._locked_alike() | (self.run.silent - self.run.answered)
+                | inactive(self.state.targets(), self.run.inactive_words))
 
     def _judge_behind(self, measured: dict[str, Values], rects: dict[str, Rect]) -> None:
         """画面の見た目から、後ろに下がった画面を判定する。
@@ -519,8 +575,8 @@ class FuzzSession:
             for label, v in values.items():
                 by_menu.setdefault(menu, {})[label] = v
                 base = run.look_base.get(label)
-                if base is None or max(abs(a - b) for a, b in zip(base[0], rects[label])) > 0.005:
-                    continue  # 手前にあったときに、同じ位置で測っていない
+                if base is None or not _same_place(base[0], rects[label], float(self.cfg["behind_move_ratio"])):
+                    continue  # 手前にあったときに、同じ位置で測っていない（スクロールした）
                 compared[menu] += 1
                 changed[menu] += not alike(v, base[1], ratio, gap)
         behind = {name for name in self.state.behind if name in self.state.menus}
@@ -655,6 +711,9 @@ class FuzzSession:
         timeout = self.run.response_timeout
         if quiet:
             timeout = min(timeout, float(self.cfg["quiet_wait_sec"]))
+        if op.group in ("move", "search", "return") and not verify:
+            # 一覧を動かす操作は、効けば見た目がすぐ変わる（応答確認のときは S-01 の時間まで待つ）
+            timeout = min(timeout, float(self.cfg["move_wait_sec"]))
         while time.monotonic() - started < timeout:
             if self.state.signature() != before:
                 break
@@ -667,12 +726,17 @@ class FuzzSession:
         screen_changed = responded and self.state.screens() != screens_before
         self.run.stats["normal"] += 1
         self.run.decider.feedback(key, op, responded)
+        if op.target is not None:
+            t = op.target
+            self.run.flow.pressed(t.label, t.name, responded, t.text if t.kind == "choice" else None)
         if responded:
             self.run.responsive.add((key, op.label))
         else:
             self.run.stats["no_response"] += 1
         if op.target is not None and op.target.kind == "button":
             (self.run.silent.discard if responded else self.run.silent.add)(op.target.label)
+            if responded:
+                self.run.answered.add(op.target.label)
             if not responded:
                 for gkey, values in self._values.items():
                     if op.target.label in values:
@@ -851,3 +915,10 @@ class FuzzSession:
             p.key(str(op.arg), times=int(self.cfg["rapid_count"]))
             return None
         raise ValueError(f"未知の操作です: {k}")
+
+
+def _same_place(a: Rect, b: Rect, ratio: float) -> bool:
+    """同じ位置のボタンとみなせる: ずれが、ボタンの幅・高さの ratio 倍以内（開いたあとの小さな動きは同じ位置とする）。"""
+    w, h = max(a[2] - a[0], 1e-6), max(a[3] - a[1], 1e-6)
+    return (abs(a[0] - b[0]) <= w * ratio and abs(a[2] - b[2]) <= w * ratio
+            and abs(a[1] - b[1]) <= h * ratio and abs(a[3] - b[3]) <= h * ratio)

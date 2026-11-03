@@ -2,7 +2,7 @@
 
 ゲームのリポジトリに置く yomawari.profile.toml と、yomawari.toml の同じ節を、
 コードの既定値 → プロファイル → yomawari.toml の順に重ねる（あとのものが上書き。配列は足し合わせる）。
-扱う節は [guard.roles]、[guard.buttons]、[screens.<menu>]、[rules.<ID>]。
+扱う節は [guard.roles]、[guard.buttons]、[screens.<menu>]、[rules.<ID>]、[[flow]]（ゲームの流れ。fuzz/flow.py）。
 """
 
 from __future__ import annotations
@@ -14,9 +14,10 @@ from typing import Any
 
 from .config import GUARD_KINDS, GUARD_ROLE_DEFAULTS, BuildConfig, Config, ConfigError
 from .detect.engine import Rule
+from .fuzz.flow import Flow, parse_flows
 
 SCREEN_KEYS = ("weight",)
-PROFILE_SECTIONS = ("guard", "screens", "rules")
+PROFILE_SECTIONS = ("guard", "screens", "rules", "flow")
 
 
 @dataclass
@@ -25,6 +26,7 @@ class GameSpec:
     guard_roles: dict[str, str] = field(default_factory=lambda: dict(GUARD_ROLE_DEFAULTS))
     screen_weights: dict[str, float] = field(default_factory=dict)
     rules: dict[str, dict[str, Any]] = field(default_factory=dict)  # ルールID → params の上書き
+    flows: list[Flow] = field(default_factory=list)  # ゲームの流れ（[[flow]]）
     profile_path: Path | None = None
 
 
@@ -90,6 +92,7 @@ def build_spec(profile: dict[str, Any], local: dict[str, Any], profile_path: Pat
         if not isinstance(params, dict):
             raise ConfigError(f"rules.{rid} は表にしてください")
         spec.rules[rid] = dict(params)
+    spec.flows = parse_flows(doc.get("flow"))
     return spec
 
 

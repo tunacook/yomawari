@@ -58,11 +58,13 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "behind_ratio": 0.6,
     "behind_min_gap": 0.02,
     "behind_share": 0.6,
+    # 手前にあったときと位置を比べるとき、ずれがボタンの幅・高さのこの倍以内なら同じ位置とする（開いたあとの小さな動き）
+    "behind_move_ratio": 0.15,
     "dim_factor": 0.05,
     "new_bright_factor": 20.0,  # 前に見たときは暗かったのに明るくなったボタン（新しくアンロックされたもの）の重みに掛ける
     "explore_factor": 3.0,  # 見えている並びがどれも押せそうにない・明るさに差がないとき、探す操作（fuzz/search.py）の重みに掛ける
     "hover_wait_sec": 0.3,  # 明るさを測る前に、カーソルをボタンのない場所へ動かしてから待つ時間（ホバーの演出が戻るまで）
-    "quiet_wait_sec": 1.0,  # 暗い・空のボタン（反応しないと見込んでいるもの）を押したあと、反応を待つ時間
+    "quiet_wait_sec": 1.0,  # 暗い・空のボタン、押しても一度も反応しなかったボタン（反応しないと見込んでいるもの）を押したあと、反応を待つ時間
     # 同じ名前の並びで、まだ見ていないボタンが画面の外にある向きへ動かす操作（fuzz/search.py）の重み。
     # [fuzz.weights] click × 画面の重み × search_factor。見えているものがすべて暗い・押しても反応しなかった・明るさに差がないときは explore_factor も掛ける
     "search_factor": 1.0,
@@ -86,8 +88,15 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "explore_detour_factor": 3.0,
     # S-02 / S-03（ゲームは動いているが進まない）のとき、再起動する前に、抜け出す操作をこの回数まで試す
     "recover_ops": 8,
+    # 一覧を動かす操作（ドラッグ・ホイール・方向キー）の反応を待つ時間。効けば見た目がすぐ変わる。応答確認では S-01 の時間まで待つ
+    "move_wait_sec": 1.0,
     # random モードで、進め方の経験（進行につながった操作を優先する）を使う。目的（purpose）で変える
     "learn": True,
+    # ゲームの流れ（プロファイルの [[flow]]。fuzz/flow.py）に沿って進める。目的（purpose）で変える
+    "use_flow": True,
+    "flow_factor": 20.0,  # いまの手順で押すボタン・本文送り・選択肢の重みに掛ける
+    "flow_avoid_factor": 0.02,  # 流れの途中で押すと流れから外れるボタン（avoid）の重みに掛ける
+    "flow_idle_sec": 10.0,  # 流れのどの画面・scene でもない状態がこれだけ続いたら、流れが途切れたとする
     "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")

@@ -26,6 +26,7 @@ from .detect.engine import Engine, Rule, RuleError
 from .events import Event, Issue, now_wall
 from .fuzz.decider import RandomDecider
 from .fuzz.experience import Experience
+from .fuzz.flow import FlowTracker
 from .fuzz.guard import Guard
 from .fuzz.loop import FuzzRun, FuzzSession
 from .fuzz.looks import load_inactive_words
@@ -328,6 +329,7 @@ class Harness:
                 cfg=self.fuzz_cfg,
                 response_timeout=float(self.rules["S-01"].param("timeout_sec")),
                 screen_weights=self.spec.screen_weights,
+                flow=FlowTracker(self.spec.flows),
                 inactive_words=load_inactive_words(self.rules_path),
                 # 進め方の経験は、ボタンの役割と同じファイル（runs/_experience/<ゲーム>.json）に覚える
                 experience=Experience(self.roles.path),
@@ -391,6 +393,7 @@ class Harness:
             if self._fuzz is not None:
                 self.notes += self._fuzz.notes
                 self.notes += self._fuzz.experience.new
+                self.notes += self._fuzz.flow.summary()
                 self.notes.append(self._fuzz.summary())
                 try:
                     self._fuzz.experience.save()
