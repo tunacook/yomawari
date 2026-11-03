@@ -572,8 +572,8 @@ class FuzzSession:
             for label, v in values.items():
                 by_menu.setdefault(menu, {})[label] = v
                 base = run.look_base.get(label)
-                if base is None or max(abs(a - b) for a, b in zip(base[0], rects[label])) > 0.005:
-                    continue  # 手前にあったときに、同じ位置で測っていない
+                if base is None or not _same_place(base[0], rects[label], float(self.cfg["behind_move_ratio"])):
+                    continue  # 手前にあったときに、同じ位置で測っていない（スクロールした）
                 compared[menu] += 1
                 changed[menu] += not alike(v, base[1], ratio, gap)
         behind = {name for name in self.state.behind if name in self.state.menus}
@@ -708,6 +708,9 @@ class FuzzSession:
         timeout = self.run.response_timeout
         if quiet:
             timeout = min(timeout, float(self.cfg["quiet_wait_sec"]))
+        if op.group in ("move", "search", "return") and not verify:
+            # 一覧を動かす操作は、効けば見た目がすぐ変わる（応答確認のときは S-01 の時間まで待つ）
+            timeout = min(timeout, float(self.cfg["move_wait_sec"]))
         while time.monotonic() - started < timeout:
             if self.state.signature() != before:
                 break
@@ -907,3 +910,10 @@ class FuzzSession:
             p.key(str(op.arg), times=int(self.cfg["rapid_count"]))
             return None
         raise ValueError(f"未知の操作です: {k}")
+
+
+def _same_place(a: Rect, b: Rect, ratio: float) -> bool:
+    """同じ位置のボタンとみなせる: ずれが、ボタンの幅・高さの ratio 倍以内（開いたあとの小さな動きは同じ位置とする）。"""
+    w, h = max(a[2] - a[0], 1e-6), max(a[3] - a[1], 1e-6)
+    return (abs(a[0] - b[0]) <= w * ratio and abs(a[2] - b[2]) <= w * ratio
+            and abs(a[1] - b[1]) <= h * ratio and abs(a[3] - b[3]) <= h * ratio)

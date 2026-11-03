@@ -343,3 +343,42 @@ def test_screen_that_changed_look_in_place_is_behind():
     moved = {k: (r[0], r[1] + 0.1, r[2], r[3] + 0.1) for k, r in rects.items()}
     s._judge_behind({"MemoryListUI/Slot": dict(zip(labels, later))}, moved)
     assert st.behind == set()
+
+
+def test_behind_tolerates_small_slide():
+    # run 2327: 回想に入る前に一覧を測ったとき、一覧はまだ少し動いていた（高さの 7%）。同じ位置として比べ、後ろに下がったと判定する
+    import random
+
+    from yomawari.config import FUZZ_DEFAULTS
+    from yomawari.events import Event
+    from yomawari.fuzz.decider import RandomDecider
+    from yomawari.fuzz.guard import Guard
+    from yomawari.fuzz.loop import FuzzRun, FuzzSession
+    from yomawari.input.pointer import Pointer
+    from yomawari.sensors.window import ScreenRect, WindowInfo
+    from yomawari.state import GameState
+
+    from .test_window import FakeWindows
+
+    st = GameState()
+    slots = [{"name": "Slot", "rect": [0.208 + 0.25 * i, 0.259, 0.443 + 0.25 * i, 0.49]} for i in range(4)]
+    st.feed(Event("game", "menu", {"name": "MemoryListUI", "modal": True, "buttons": slots}, 0))
+    st.feed(Event("game", "menu", {"name": "MemorySummaryUI", "modal": False,
+                                   "buttons": [{"name": "Start", "rect": [0.42, 0.76, 0.61, 0.84]}]}, 0))
+    cfg = {**FUZZ_DEFAULTS, "hover_wait_sec": 0}
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                  rng=random.Random(1), cfg=cfg, response_timeout=0.1)
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
+    s = FuzzSession(run, st, Pointer(windows, None, 1, st, activate_wait=0), lambda ev: None, 0, lambda _: None)
+    labels = ["MemoryListUI/Slot"] + [f"MemoryListUI/Slot#{i}" for i in range(1, 4)]
+    now = {t.label: t.rect for t in st.menus["MemoryListUI"].buttons}
+    earlier = {k: (r[0], r[1] + 0.017, r[2], r[3] + 0.017) for k, r in now.items()}
+    run.look_base = {k: (earlier[k], v) for k, v in zip(labels, [(0.134, 0.232), (0.13, 0.21), (0.095, 0.169), (0.076, 0.181)])}
+    s._judge_behind({"MemoryListUI/Slot": dict(zip(labels, [(0.261, 0.683), (0.199, 0.752), (0.053, 0.102), (0.024, 0.124)]))}, now)
+    assert st.behind == {"MemoryListUI"}
+    # 大きく動いた（スクロールした）ものは比べない
+    st.behind = set()
+    far = {k: (r[0], r[1] + 0.1, r[2], r[3] + 0.1) for k, r in now.items()}
+    run.look_base = {k: (far[k], v) for k, v in zip(labels, [(0.134, 0.232), (0.13, 0.21), (0.095, 0.169), (0.076, 0.181)])}
+    s._judge_behind({"MemoryListUI/Slot": dict(zip(labels, [(0.261, 0.683), (0.199, 0.752), (0.053, 0.102), (0.024, 0.124)]))}, now)
+    assert st.behind == set()
