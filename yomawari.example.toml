@@ -13,6 +13,7 @@ watermark_mask = { anchor = "bottom-right", w = 220, h = 40 }   # Development Bu
 # save_dir = "~/Library/Application Support/com.MyCompany.Rachel"
 # prefs_domain = "com.MyCompany.Rachel"
 # initial_save = "fixtures/saves/start"        # テスト用初期セーブ（ラン前に配置）
+# profile = "~/work/Rachel/yomawari.profile.toml"  # ゲームのプロファイル（ゲームのリポジトリでコミットするもの）
 
 [run]
 hours = 8
@@ -37,7 +38,19 @@ allow_fullscreen_switch = true
 [exclude]
 dark_labels = ["ch1_blackout"]   # 意図的な暗転・長い静止演出（フェーズ3〜）
 
-[guard.buttons]               # 押したあとの扱い（DESIGN.md §9）。"<menu>/<ボタン>" は yomawari inspect で調べる
+# ゲーム固有の仕様（[guard.roles]・[guard.buttons]・[screens.<menu>]・[rules.<ID>]）は、ふつうはゲームのリポジトリの
+# yomawari.profile.toml に書き、[builds.<名前>] profile で参照する（DESIGN.md §9「ゲーム固有の仕様」③）。
+# ここに書いたものは、プロファイルの上に重なる（配列は足し合わせ、それ以外は上書き）
+
+[guard.roles]                 # ボタンの役割（menu の role）ごとの扱い。"normal" は通常の操作
+exit = "expect_exit"
+external = "external"
+to_title = "irregular_only"
+system_setting = "irregular_only"
+new_game = "normal"
+deny = "deny"
+
+[guard.buttons]               # role を出せないボタンだけ、名前で指定する。"<menu>/<ボタン>" は yomawari inspect で調べる
 expect_exit = []              # 押すと終了するボタン。終了コード 0 で終わるかを確かめ、再起動して続ける
 external = []                 # ブラウザなどを開くボタン。1回のランで1回だけ押す
 irregular_only = []           # タイトルへ戻る、解像度・言語の変更など。fuzz のイレギュラー操作のときだけ押す

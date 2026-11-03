@@ -68,24 +68,33 @@ def state_key(state: GameState) -> str:
     return "reading"
 
 
-def normal_candidates(state: GameState, guard: Guard, weights: dict[str, float], allow_exit: bool) -> list[Op]:
-    """通常の操作の候補。暗転などで待つべきときは空。"""
+def normal_candidates(
+    state: GameState, guard: Guard, weights: dict[str, float], allow_exit: bool,
+    screen_weights: dict[str, float] | None = None,
+) -> list[Op]:
+    """通常の操作の候補。暗転などで待つべきときは空。
+
+    locked のボタン（ゲームが押せないと伝えたもの）は入れない。screen_weights はプロファイルの
+    [screens.<menu>] weight で、その menu のボタンの重みに掛ける。
+    """
     if state.busy:
         return []
-    targets = state.targets()
+    targets = [t for t in state.targets() if not t.locked]
     ops: list[Op] = []
     click = float(weights["click"])
     for t in targets:
-        kind = guard.kind_of(t.key)
+        w = click * (screen_weights or {}).get(t.menu, 1.0)
+        kind = guard.kind_of(t)
         if kind is None:
-            ops.append(Op("click", t, weight=click, novelty=True, group="button"))
+            ops.append(Op("click", t, weight=w, novelty=True, group="button"))
         elif kind == "expect_exit" and allow_exit:
-            ops.append(Op("expect_exit", t, weight=click, novelty=True, group="button"))
+            ops.append(Op("expect_exit", t, weight=w, novelty=True, group="button"))
         elif kind == "external" and guard.external_available(t.key):
-            ops.append(Op("external", t, weight=click, novelty=True, group="button"))
+            ops.append(Op("external", t, weight=w, novelty=True, group="button"))
     top = state.top_modal()
     if top is not None and top.buttons:
-        ops.extend(modal_candidates(top.area, weights))
+        # 見えているボタンがない・すべて押せないときも、動かす・抜ける操作は試す
+        return ops + modal_candidates(top.area, weights)
     if targets:
         return ops
     if top is not None:
@@ -129,8 +138,11 @@ def irregular_candidates(state: GameState, guard: Guard, rapid_count: int) -> li
         Op("wheel_down", arg=3, irregular=True, novelty=True),
     ]
     for t in state.targets():
-        kind = guard.kind_of(t.key)
-        if kind is None:
+        kind = guard.kind_of(t)
+        if kind is None and t.locked:
+            # 押せないボタンは、押しても壊れないことだけを確かめる
+            ops.append(Op("click", t, irregular=True, novelty=True))
+        elif kind is None:
             ops.append(Op("double_click", t, irregular=True, novelty=True))
         elif kind == "irregular_only":
             ops.append(Op("click", t, irregular=True, novelty=True))

@@ -26,6 +26,10 @@ def _rect(v: Any) -> Rect | None:
     return (x0, y0, x1, y1)
 
 
+def _opt_str(v: Any) -> str | None:
+    return str(v) if v else None
+
+
 @dataclass(frozen=True)
 class Target:
     """押せるもの。kind は button（menu のボタン）か choice（選択肢）。"""
@@ -37,6 +41,9 @@ class Target:
     text: str | None = None
     index: int | None = None
     nth: int = 0  # 同じ menu に同じ名前のボタンが複数あるとき、何番目か（セーブスロットなど）
+    type: str | None = None  # button / toggle / dropdown / slider / input / other（DESIGN.md §3）
+    role: str | None = None  # exit / external / to_title / system_setting / new_game / deny
+    locked: bool = False  # ゲームが「いまは押せない（押しても何も起きないのが仕様）」と伝えたもの
 
     @property
     def key(self) -> str:
@@ -141,7 +148,10 @@ class GameState:
             r = _rect(b.get("rect")) if isinstance(b, dict) else None
             if r is not None:
                 bname = str(b.get("name"))
-                buttons.append(Target("button", name, bname, r, nth=seen.get(bname, 0)))
+                buttons.append(Target(
+                    "button", name, bname, r, nth=seen.get(bname, 0),
+                    type=_opt_str(b.get("type")), role=_opt_str(b.get("role")), locked=bool(b.get("locked")),
+                ))
                 seen[bname] = seen.get(bname, 0) + 1
         prev = self.menus.get(name)
         if prev is None:

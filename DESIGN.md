@@ -166,6 +166,7 @@ yomawari/
 ├─ yomawari/
 │   ├─ cli.py            # typer エントリポイント
 │   ├─ config.py         # yomawari.toml の読み書き、ビルド解決、対話登録
+│   ├─ profile.py        # ゲームのプロファイルと yomawari.toml の [guard] / [screens] / [rules] を重ねる
 │   ├─ watchdog.py       # 別プロセス。ハーネス本体とゲームの起動・再起動・時間予算・復元
 │   ├─ launcher.py       # ビルド起動、.app の実行ファイル解決、引数付与
 │   ├─ bus.py            # asyncio イベントバス
@@ -188,7 +189,7 @@ yomawari/
 │   │   ├─ loop.py       # トリガー → 操作 → 反応の確認（op / op_result イベントを出す）
 │   │   ├─ ops.py        # 操作の種類と、状態から候補を作る（UI 上の通常の操作・イレギュラー操作）
 │   │   ├─ ops_os.py     # OS上の操作カタログ（フェーズ3）
-│   │   ├─ guard.py      # [guard.buttons] の区分
+│   │   ├─ guard.py      # ボタンの区分（[guard.buttons] の名前 → [guard.roles] の役割）
 │   │   ├─ decider.py    # Decider: random（状態×操作の試行回数）/ local(Ollama) / jev(将来)
 │   │   └─ experience.py # 経験の蓄積（集計ファイルの読み書き）と体験レポート
 │   ├─ detect/
@@ -276,6 +277,7 @@ default_build = "mac_dev"
 path = "~/Builds/Rachel_Dev/Rachel.app"
 args = ["-screen-fullscreen", "0", "-screen-width", "1280", "-screen-height", "720"]
 watermark_mask = { anchor = "bottom-right", w = 220, h = 40 }   # Development Build の透かし
+profile = "~/work/Rachel/yomawari.profile.toml"                  # ゲームのプロファイル（§9「ゲーム固有の仕様」③）
 
 [run]
 hours = 8
@@ -291,11 +293,8 @@ allow_fullscreen_switch = true
 [exclude]
 dark_labels = ["ch1_blackout"]   # 意図的な暗転・長い静止演出
 
-[guard.buttons]               # §9 ガード。"<menu の name>/<ボタンの name>"
-expect_exit = ["TitleUI/QuitButton", "RClickMenuUI/ToExit"]
-external = ["TitleUI/WebSiteButton"]
-irregular_only = ["RClickMenuUI/ToTitle", "ExSettingsUI/ResolutionDropdown"]
-deny = []
+[guard.buttons]               # §9 ガード。ふつうはプロファイルに書く。ここに書くとそのマシンだけで足せる
+deny = []                     # "<menu の name>/<ボタンの name>"
 
 [fuzz]                        # §9 ファジング
 op_interval_sec = 0.5         # 通常の操作の間隔
@@ -489,7 +488,7 @@ class Decider(Protocol):
 
 | 対象 | ① で読み取る部品 | ① で拾えないとき |
 |---|---|---|
-| スクロールで隠れた項目 | `ScrollRect`、`RectMask2D`、`Mask` | ③ の `scroll`（方向キー・ドラッグ・ホイールなど、先を表示する手段）と、画面の外のボタンを押さないための矩形の切り取りは ① の範囲でだけ効く |
+| スクロールで隠れた項目 | `ScrollRect`、`RectMask2D`、`Mask` | ハーネスは、モーダルな画面ではいつもドラッグ・ホイール・方向キーを試し（§9「状態ごとの通常の操作」）、中心が描画領域の外のボタンは押さない。マスクで隠れているが描画領域の中にあるボタンは、① でしか除けない |
 | ボタンの種類 | `Button`、`Toggle`、`Dropdown` / `TMP_Dropdown`、`Slider`、`InputField` / `TMP_InputField` | `other` になる。押しても並びが変わらないものは ③ の `no_response_ok` に書く |
 | 開いたドロップダウンのリスト | `Dropdown` / `TMP_Dropdown` の `IsExpanded` と、それが作る Dropdown List | ③ の `no_response_ok` で誤検知だけを防ぐ。リストの中まで操作したいなら、② に「いま開いているポップアップと項目」を伝えるインターフェースを足す |
 
@@ -554,17 +553,19 @@ profile = "~/work/Rachel/yomawari.profile.toml"
 
 [screens.MemoryListUI]                  # menu の name ごと
 weight = 0.5                            # この画面のボタンの重みに掛ける
-# scroll = ["key:down", "drag"]         # ① の scroll で足りないときの、先を表示する手段
 # no_response_ok = ["MemoryListGridSlot"]  # 押して反応がなくても正常。② を実装できないときの代わり
 
 [rules.L-01]                            # rules.yaml のパラメータのうち、ゲーム固有のもの
 ignore_patterns = ["<既知で無害なエラーの正規表現>"]
 ```
 
-- プロファイルには、ゲームの中の名前（UI・ボタン・GameObject の名前）をなるべく書かない。ボタンの押せる・押せない・役割は ① と ② で伝え、プロファイルにはテストの方針（役割ごとの押し方、画面ごとの重み、許容するもの）だけを書く。名前を書くのは `[screens.<menu>]` と、最後の手段の `[guard.buttons]` / `no_response_ok` / `scroll` だけ
+- プロファイルには、ゲームの中の名前（UI・ボタン・GameObject の名前）をなるべく書かない。ボタンの押せる・押せない・役割は ① と ② で伝え、プロファイルにはテストの方針（役割ごとの押し方、画面ごとの重み、許容するもの）だけを書く。名前を書くのは `[screens.<menu>]` と、最後の手段の `[guard.buttons]` / `no_response_ok` だけ
 - エンジンごとの記述例（Unity + Naninovel、ティラノスクリプト、Ren'Py）は `examples/profiles/` に置く
-- 読む順: `rules.yaml` / コードの既定値 → プロファイル → `yomawari.toml`（あとのものが上書き。配列は足し合わせる）
-- `rules.yaml` には、どのゲームにも共通の判定基準だけを残す。今 `rules.yaml` にある S-05 の `ignore_patterns` の既定値（`Toggle` などの名前）は、① の `type` に置き換えて消す
+- 読む順: `rules.yaml` / コードの既定値 → プロファイル → `yomawari.toml`（あとのものが上書き。配列は足し合わせる）。`yomawari.toml` に同じ節（`[guard.*]`・`[screens.*]`・`[rules.*]`）を書けば、そのマシンだけで足せる
+- プロファイルに書けるのは `[guard.roles]`・`[guard.buttons]`・`[screens.<menu>]`（`weight`・`no_response_ok`）・`[rules.<ID>]` だけ。知らない節・項目・役割・区分、`rules.yaml` にないルールやパラメータはエラーにする（書き間違いで黙って効かないのを防ぐ）
+- `no_response_ok` は、S-05 の `ignore_patterns` に `^<menu>/<name>(#n)?$` として足す
+- 画面を動かす手段（ドラッグ・方向キーなど）はプロファイルに書かない。モーダルな画面では、ハーネスがいつも試す
+- `rules.yaml` には、どのゲームにも共通の判定基準だけを残す。S-05 は種類（`type`）で除く（`ignore_types`）。`ignore_patterns` の名前の既定値（`Toggle` など）は、`type` を出さない古いパッケージのビルド向けで、パッケージが `type` を出すようになったら消す
 - プロファイルに書くのは「どう遊ぶか・何を許容するか」まで。謎解きや選択の正解は書かない（§1「やらないこと」）
 
 ### 経験の蓄積

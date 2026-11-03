@@ -9,7 +9,7 @@ import random
 
 import pytest
 
-from yomawari.config import FUZZ_DEFAULTS, Config, ConfigError
+from yomawari.config import FUZZ_DEFAULTS, GUARD_ROLE_DEFAULTS, Config, ConfigError
 from yomawari.detect.engine import Engine
 from yomawari.events import Event
 from yomawari.fuzz.decider import RandomDecider
@@ -17,6 +17,7 @@ from yomawari.fuzz.guard import Guard
 from yomawari.fuzz.loop import FuzzRun, FuzzSession
 from yomawari.fuzz.ops import Op, irregular_candidates, normal_candidates, state_key
 from yomawari.input.pointer import Pointer
+from yomawari.profile import GameSpec, build_spec
 from yomawari.sensors.window import ScreenRect, WindowInfo
 from yomawari.state import GameState, Target
 
@@ -345,11 +346,12 @@ def test_s01_needs_live_heartbeat():
 def test_guard_config(tmp_path):
     p = tmp_path / "yomawari.toml"
     p.write_text('[guard.buttons]\nexpect_exit = ["TitleUI/QuitButton"]\n')
-    assert Config(p).guard_buttons["expect_exit"] == ["TitleUI/QuitButton"]
-    assert Config(p).guard_buttons["deny"] == []
+    spec = build_spec({}, Config(p).doc.unwrap())
+    assert spec.guard_buttons["expect_exit"] == ["TitleUI/QuitButton"]
+    assert spec.guard_buttons["deny"] == []
     p.write_text('[guard.buttons]\nnever = ["A/B"]\n')
     with pytest.raises(ConfigError):
-        Config(p).guard_buttons
+        build_spec({}, Config(p).doc.unwrap())
     p.write_text('[fuzz.weights]\nadvance = 5\n')
     assert Config(p).fuzz["weights"] == {**FUZZ_DEFAULTS["weights"], "advance": 5}
 
@@ -412,7 +414,7 @@ def test_harness_random_mode_clicks_mock_game(tmp_path, mock_app, fake_platform)
     h = Harness(
         build, exe, _WindowedPlatform(fake_platform), scaled_rules(0.05), RULES_PATH, tmp_path / "runs",
         {**RUN_DEFAULTS, "quit_timeout_sec": 2.0, "max_restarts": 0}, sensors,
-        fuzz_cfg=CFG, guard_buttons={"deny": ["TitleUI/NewGameButton"]}, driver_factory=factory,
+        fuzz_cfg=CFG, spec=GameSpec(guard_buttons={"deny": ["TitleUI/NewGameButton"]}), driver_factory=factory,
     )
     r = asyncio.run(h.run(RunOptions(hours=3 / 3600, mode="random", seed="1")))
 
@@ -431,7 +433,9 @@ def test_example_toml_matches_fuzz_defaults():
 
     c = Config(ROOT / "yomawari.example.toml")
     assert c.fuzz == FUZZ_DEFAULTS
-    assert c.guard_buttons == {"expect_exit": [], "external": [], "irregular_only": [], "deny": []}
+    spec = build_spec({}, c.doc.unwrap())
+    assert spec.guard_buttons == {"expect_exit": [], "external": [], "irregular_only": [], "deny": []}
+    assert spec.guard_roles == GUARD_ROLE_DEFAULTS
 
 
 def test_choice_label_uses_text():
