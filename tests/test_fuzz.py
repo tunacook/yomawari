@@ -568,3 +568,37 @@ def _assert_searched(game, run, events):
     assert game.max_offset >= 1.4 - 1e-9
     assert {f"ListUI/Slot#{i}" for i in range(1, LIST_SLOTS)} <= run.seen
     assert any(e.kind == "op" and e.data["kind"] in ("wheel_down", "drag", "key") for e in events)
+
+
+def test_reading_with_hud_button_still_advances():
+    # 回想中のように、本文を読んでいる途中で操作のボタン（「本編へ戻る」）が出ている。ボタンだけでなく本文送りも候補に入れる
+    st = GameState()
+    feed = lambda kind, **d: st.feed(Event("game", kind, d, 0))
+    feed("scene", name="memories/m1")
+    # 最初は画面の外から滑り込んでくる（hidden）。見えるようになってから本文が来る
+    feed("menu", name="MemoryScenarioPlaying", modal=False,
+         buttons=[{"name": "OpenDialog", "rect": [0, -0.18, 0.23, -0.1], "text": "本編へ戻る", "hidden": True}])
+    feed("menu", name="MemoryScenarioPlaying", modal=False,
+         buttons=[{"name": "OpenDialog", "rect": [0, 0.0, 0.23, 0.08], "text": "本編へ戻る"}])
+    assert not st.reading_with_buttons()  # まだ本文が来ていない
+    feed("line", line_id="memories/m1:1", text="a")
+    # ボタンの位置が動いて出し直されても、本文より前から出ているボタンのまま
+    feed("menu", name="MemoryScenarioPlaying", modal=False,
+         buttons=[{"name": "OpenDialog", "rect": [0, 0.01, 0.23, 0.09], "text": "本編へ戻る"}])
+    assert st.reading_with_buttons()
+    ops = normal_candidates(st, Guard({}), FUZZ_DEFAULTS["weights"], allow_exit=False)
+    labels = {op.label for op in ops}
+    assert {"advance", "click MemoryScenarioPlaying/OpenDialog"} <= labels
+    # 本文のあとにボタンのある画面が出た（タイトルに戻った、ボタンで一覧を開いた）ときは、本文を読んでいる途中ではない
+    feed("menu", name="TitleUI", modal=False, buttons=[{"name": "NewGameButton", "rect": [0.1, 0.5, 0.3, 0.6]}])
+    assert not st.reading_with_buttons()
+    assert "advance" not in {op.label for op in normal_candidates(st, Guard({}), FUZZ_DEFAULTS["weights"], False)}
+    feed("menu_close", name="TitleUI")
+    # 選択肢が出ているときも足さない
+    feed("choices", items=[{"id": "c1", "text": "はい", "rect": [0.4, 0.4, 0.6, 0.5]}])
+    assert not st.reading_with_buttons()
+    # モーダル（右クリックメニュー）が出ているときも足さない
+    feed("choices_done")
+    assert st.reading_with_buttons()
+    feed("menu", name="RClickMenuUI", modal=True, buttons=[{"name": "ToSave", "rect": [0.1, 0.1, 0.2, 0.2]}])
+    assert not st.reading_with_buttons()

@@ -97,11 +97,16 @@ def normal_candidates(
     if top is not None and top.buttons:
         # 見えているボタンがない・すべて押せないときも、動かす・抜ける操作は試す
         return ops + modal_candidates(top.area, weights)
-    if targets:
+    if targets and not state.reading_with_buttons():
         return ops
     if top is not None:
         # ボタンのないモーダル（暗転の幕など）。抜け出す操作は loop が時間を見て足す
         return []
+    # 本文を読んでいる。操作のボタン（回想中の「本編へ戻る」など）が出ていても、本文送りを並べて候補に入れる
+    return ops + reading_candidates(weights)
+
+
+def reading_candidates(weights: dict[str, float]) -> list[Op]:
     return [
         Op("advance", weight=float(weights["advance"])),
         Op("right_click", weight=float(weights["right_click"])),

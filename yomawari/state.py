@@ -78,6 +78,7 @@ class Menu:
     modal: bool
     buttons: list[Target]
     order: int  # 表示された順番（大きいほど新しい）
+    shown: int = 0  # 見えているボタンを持ち始めたときの、イベントの通し番号（GameState._seq）
 
     @property
     def visible_buttons(self) -> list[Target]:
@@ -118,6 +119,8 @@ class GameState:
     saves: int = 0  # セーブが始まった回数（押したボタンでセーブしたかを見るため。V-07）
     _played_since_title: bool = False
     _order: int = 0
+    _seq: int = 0  # ゲームのイベントの通し番号
+    _line_seq: int = -1  # 最後に line が来たときの _seq
 
     def feed(self, ev: Event) -> None:
         if ev.source == "harness" and ev.kind == "launch":
@@ -127,6 +130,7 @@ class GameState:
         if ev.source != "game":
             return
         self.last_game_t = ev.t
+        self._seq += 1
         d = ev.data
         handler = getattr(self, f"_on_{ev.kind}", None)
         if handler is not None:
@@ -151,6 +155,7 @@ class GameState:
         self.line = {k: d.get(k) for k in ("label", "line_id", "speaker", "text")}
         self.line_done = False
         self.last_progress_t = t
+        self._line_seq = self._seq
         if self.title_menu is not None and self.title_menu not in self.menus:
             self._played_since_title = True
 
@@ -182,7 +187,10 @@ class GameState:
             self._played_since_title = False
         if prev is None:
             self._order += 1
-        self.menus[name] = Menu(name, bool(d.get("modal")), buttons, prev.order if prev else self._order)
+        menu = Menu(name, bool(d.get("modal")), buttons, prev.order if prev else self._order)
+        # 見えているボタンを持ち始めたときを覚える（ボタンの位置が動いて出し直されても変えない）
+        menu.shown = prev.shown if prev is not None and prev.visible_buttons else self._seq
+        self.menus[name] = menu
 
     def _on_menu_close(self, d: dict[str, Any], t: float) -> None:
         self.menus.pop(str(d.get("name")), None)
@@ -221,6 +229,17 @@ class GameState:
     def busy(self) -> bool:
         """暗転・セーブ・ロードの途中。通常の操作は待つ。"""
         return bool(self.transitions) or self.saving or self.loading
+
+    def reading_with_buttons(self) -> bool:
+        """本文を読んでいる途中で、操作のボタンが画面に出ている（回想中の「本編へ戻る」など）。
+
+        モーダルがなく、ボタンのある menu がすべて、最後の本文（line）より前から出ている。ボタンのある画面が本文より
+        あとに出た（タイトルに戻った、ボタンで一覧を開いた）ときは、本文を読んでいる途中ではない。
+        """
+        if self.line is None or self.choices or self.top_modal() is not None:
+            return False
+        shown = [m.shown for m in self.menus.values() if m.visible_buttons]
+        return bool(shown) and max(shown) < self._line_seq
 
     def top_modal(self) -> Menu | None:
         modals = [m for m in self.menus.values() if m.modal]
