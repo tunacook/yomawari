@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..events import Event
-from ..input.pointer import Pointer, PointerError
+from ..input.pointer import InputBlocked, Pointer, PointerError
 from ..state import GameState, Rect
 from .decider import Decider
 from .experience import Experience, Press
@@ -106,6 +106,41 @@ class FuzzRun:
     intent: str | None = None
     plays: int = 0
     stopped_reason: str | None = None
+    # OS が入力を受け付けなかった（画面のロック・ゲームを前面にできない）。いま続いているもの (理由, 始まりの時刻)
+    blocked_since: tuple[str, float] | None = None
+    blocked: list[tuple[str, float, float]] = field(default_factory=list)  # 終わったもの (理由, 始まり, 終わり)。時刻は time.time()
+
+    def block(self, reason: str, now: float) -> bool:
+        """入力を受け付けなかった。新しく始まったら True。"""
+        if self.blocked_since is not None and self.blocked_since[0] == reason:
+            return False
+        self.unblock(now)
+        self.blocked_since = (reason, now)
+        return True
+
+    def unblock(self, now: float) -> tuple[str, float] | None:
+        """入力を受け付けるようになった。続いていたものがあれば (理由, 秒数)。"""
+        if self.blocked_since is None:
+            return None
+        reason, since = self.blocked_since
+        self.blocked.append((reason, since, now))
+        self.blocked_since = None
+        return reason, now - since
+
+    def blocked_notes(self, now: float) -> list[str]:
+        spans = self.blocked + ([(*self.blocked_since, now)] if self.blocked_since else [])
+        # 外部を開く操作のあとなど、すぐ戻ったものは載せない
+        spans = [x for x in spans if x[2] - x[1] >= float(self.cfg["blocked_note_sec"])]
+        if not spans:
+            return []
+        total = sum(e - s for _r, s, e in spans)
+        detail = "、".join(
+            f"{time.strftime('%H:%M:%S', time.localtime(s))}〜{time.strftime('%H:%M:%S', time.localtime(e))}（{r}）"
+            for r, s, e in spans[-5:]
+        )
+        return [f"OS がゲームへの入力を受け付けず、計 {_duration(total)} 操作できなかった（{len(spans)} 回: {detail}"
+                f"{' ほか' if len(spans) > 5 else ''}）。このあいだはゲームの不具合を探せていない。画面をロック・スリープ"
+                "させずに回す（画面を暗くするだけにする）"]
 
     def summary(self) -> str:
         s = self.stats
@@ -863,9 +898,15 @@ class FuzzSession:
 
     async def _do(self, op: Op, trigger: str | None = None) -> bool:
         """op を実行して op イベントを出す。押せなければ op_error を出して False。"""
+        blocked = False
         async with self._lock:
             try:
                 pos = await asyncio.to_thread(self._input, op)
+            except InputBlocked as e:
+                self.run.stats["error"] += 1
+                if self.run.block(str(e), time.time()):
+                    self.publish(Event("harness", "input_blocked", {**op.to_json(), "error": str(e)}, self.launch))
+                blocked = True
             except PointerError as e:
                 self.run.stats["error"] += 1
                 self.publish(Event("harness", "op_error", {**op.to_json(), "error": str(e)}, self.launch))
@@ -874,6 +915,14 @@ class FuzzSession:
                 self.run.stopped_reason = f"{type(e).__name__}: {e}"
                 self.publish(Event("harness", "op_stopped", {**op.to_json(), "error": self.run.stopped_reason}, self.launch))
                 return False
+        if blocked:
+            # 人が画面を戻すまで続くので、試す間隔をあける（何千回も試して events.jsonl を埋めないように）
+            await asyncio.sleep(float(self.cfg["blocked_wait_sec"]))
+            return False
+        resumed = self.run.unblock(time.time())
+        if resumed is not None:
+            self.publish(Event("harness", "input_resumed", {"reason": resumed[0], "sec": round(resumed[1], 1)},
+                               self.launch))
         self.run.recent.append(op.label)
         if op.target is not None:
             self.run.labels.add(op.target.label)
@@ -922,3 +971,8 @@ def _same_place(a: Rect, b: Rect, ratio: float) -> bool:
     w, h = max(a[2] - a[0], 1e-6), max(a[3] - a[1], 1e-6)
     return (abs(a[0] - b[0]) <= w * ratio and abs(a[2] - b[2]) <= w * ratio
             and abs(a[1] - b[1]) <= h * ratio and abs(a[3] - b[3]) <= h * ratio)
+
+
+def _duration(sec: float) -> str:
+    sec = int(sec)
+    return f"{sec // 3600} 時間 {sec % 3600 // 60} 分" if sec >= 3600 else f"{sec // 60} 分 {sec % 60} 秒"

@@ -1,3 +1,5 @@
+import random
+
 import pytest
 
 from yomawari.input.pointer import Pointer, PointerError
@@ -127,3 +129,31 @@ def test_parse_lsappinfo_pid():
 
     assert parse_lsappinfo_pid('"pid"=91521\n') == 91521
     assert parse_lsappinfo_pid("") is None
+
+
+def test_locked_screen_blocks_input_and_is_noted():
+    # 画面がロックされていると、OS が入力を受け付けない。前面にしようとせず InputBlocked にし、続いた時間を記録に書く
+    import pytest
+
+    from yomawari.config import FUZZ_DEFAULTS
+    from yomawari.fuzz.decider import RandomDecider
+    from yomawari.fuzz.guard import Guard
+    from yomawari.fuzz.loop import FuzzRun
+    from yomawari.input.pointer import InputBlocked, Pointer
+    from yomawari.state import GameState
+
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=2)
+    windows.screen_locked = lambda: True
+    p = Pointer(windows, None, 1, GameState(), activate_wait=0)
+    with pytest.raises(InputBlocked, match="ロック"):
+        p.ensure_front()
+    assert windows.activated == []
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1)), guard=Guard({}),
+                  rng=random.Random(1), cfg=dict(FUZZ_DEFAULTS), response_timeout=5)
+    assert run.block("画面がロックされています", 1000.0)
+    assert not run.block("画面がロックされています", 1005.0)  # 続いているあいだは1回と数える
+    assert run.unblock(1000.0 + 3 * 3600) == ("画面がロックされています", 3 * 3600)
+    run.block("ゲームを前面にできません", 20000.0)
+    run.unblock(20003.0)  # すぐ戻ったもの（外部を開く操作のあとなど）は載せない
+    notes = run.blocked_notes(30000.0)
+    assert len(notes) == 1 and "計 3 時間 0 分" in notes[0] and "1 回" in notes[0]

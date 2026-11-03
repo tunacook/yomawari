@@ -154,6 +154,8 @@ def _status_text(s: dict[str, Any]) -> Text:
         line += f"  scene: {s['scene']}"
     if s.get("ops") is not None:
         line += f"  ops: {s['ops']}"
+    if s.get("blocked"):
+        line += f"\n           操作できません: {s['blocked']}（画面のロックを解除し、ゲームを前面に戻すと続けます）"
     if s["last"]:
         line += f"\n           last: {s['last'][:100]}"
     return Text(line)

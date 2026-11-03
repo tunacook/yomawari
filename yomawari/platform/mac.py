@@ -310,6 +310,26 @@ class MacPlatform:
             return None
         return parse_lsappinfo_pid(out)
 
+    def screen_locked(self) -> bool | None:
+        try:
+            import Quartz
+
+            d = Quartz.CGSessionCopyCurrentDictionary()
+        except Exception:
+            return None
+        if d is None:
+            return None
+        return bool(d.get("CGSSessionScreenIsLocked", False))
+
+    def keep_awake(self, pid: int) -> subprocess.Popen[bytes] | None:
+        # -d 画面 / -i アイドル / -m ディスク / -s AC 電源時のシステム / -u ユーザーが操作している扱い。
+        # -w で、pid のプロセス（ハーネス）が終われば caffeinate も終わる
+        try:
+            return subprocess.Popen(["caffeinate", "-dimsu", "-w", str(pid)],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            return None
+
     def activate(self, pid: int) -> None:
         from AppKit import NSApplicationActivateAllWindows, NSRunningApplication
 

@@ -7,6 +7,7 @@ fuzz / random モードでは、起動ごとに FuzzSession（fuzz/loop.py）を
 from __future__ import annotations
 
 import asyncio
+import os
 import platform as pyplatform
 import random
 import signal
@@ -209,8 +210,17 @@ class Harness:
                 "last": f"{last.rule_id} {last.detail}" if last else "",
                 "scene": self.state.scene,
                 "ops": (self._fuzz.stats["normal"] + self._fuzz.stats["irregular"]) if self._fuzz else None,
+                "blocked": self._fuzz.blocked_since[0] if self._fuzz and self._fuzz.blocked_since else None,
             }
         )
+
+    def _keep_awake(self) -> subprocess.Popen[bytes] | None:
+        """ランのあいだ、画面とシステムのスリープを防ぐ。画面が消える・ロックされると、OS がゲームへの入力を受け付けない。"""
+        keep = getattr(self.platform, "keep_awake", None)
+        proc = keep(os.getpid()) if keep is not None else None
+        if proc is None:
+            self.notes.append("画面とシステムのスリープを防げませんでした。画面が消える・ロックされると操作できません")
+        return proc
 
     # --- 1回の起動 ---
 
@@ -359,6 +369,7 @@ class Harness:
         main_task = asyncio.current_task()
         assert main_task is not None
         loop.add_signal_handler(signal.SIGTERM, main_task.cancel)
+        awake = self._keep_awake()
         try:
             if saves.pending():
                 self.notes += ["前回のランの未復元の退避を見つけたため復元しました"] + saves.restore()
@@ -385,6 +396,8 @@ class Harness:
             self.notes.append("中断の指示（Ctrl+C / SIGTERM）を受けて終了しました")
         finally:
             loop.remove_signal_handler(signal.SIGTERM)
+            if awake is not None:
+                awake.terminate()
             if backed_up:
                 try:
                     self.notes += saves.restore()
@@ -395,6 +408,7 @@ class Harness:
                 self.notes += self._fuzz.experience.new
                 self.notes += self._fuzz.flow.summary()
                 self.notes.append(self._fuzz.summary())
+                self.notes += self._fuzz.blocked_notes(time.time())
                 try:
                     self._fuzz.experience.save()
                 except OSError as e:
