@@ -44,6 +44,7 @@ class Target:
     type: str | None = None  # button / toggle / dropdown / slider / input / other（DESIGN.md §3）
     role: str | None = None  # exit / external / to_title / system_setting / new_game / deny
     locked: bool = False  # ゲームが「いまは押せない（押しても何も起きないのが仕様）」と伝えたもの
+    hidden: bool = False  # ゲームが「スクロール領域のマスクで隠れている」と伝えたもの
 
     @property
     def key(self) -> str:
@@ -62,7 +63,10 @@ class Target:
 
     @property
     def visible(self) -> bool:
-        """中心が描画領域の中にあるか。スクロールで隠れた項目は、ゲームが矩形を画面の外のまま出してくることがある。"""
+        """見えているか。ゲームが hidden と伝えたもののほか、中心が描画領域の外にあるもの（hidden を出さない
+        古いパッケージやエンジンでは、スクロールで隠れた項目の矩形が画面の外のまま来る）も見えていないとする。"""
+        if self.hidden:
+            return False
         cx, cy = (self.rect[0] + self.rect[2]) / 2, (self.rect[1] + self.rect[3]) / 2
         return 0 <= cx <= 1 and 0 <= cy <= 1
 
@@ -151,6 +155,7 @@ class GameState:
                 buttons.append(Target(
                     "button", name, bname, r, nth=seen.get(bname, 0),
                     type=_opt_str(b.get("type")), role=_opt_str(b.get("role")), locked=bool(b.get("locked")),
+                    hidden=bool(b.get("hidden")),
                 ))
                 seen[bname] = seen.get(bname, 0) + 1
         prev = self.menus.get(name)

@@ -13,6 +13,13 @@
 
 Naninovel 1.21 以上が入っていると、`Yomawari.Naninovel` が `scene` / `line` / `line_done` / `choices` / `choices_done` / `menu` / `menu_close` / `transition` / `save` / `load` も出す。ゲームへの組み込み手順はリポジトリの `docs/game-integration.md`。
 
+## ボタンの役割と状態を伝える
+
+`menu` のボタンには、種類（`type`）、役割（`role`）、押せない（`locked`）、スクロール領域で隠れている（`hidden`）が付く（`DESIGN.md` §9「ゲーム固有の仕様」）。種類と隠れているかは自動で読み取る。役割と押せないかは、標準の部品から分からないときだけゲーム側で伝える。
+
+- 役割: ボタンと同じ GameObject に `YomawariButtonRole` を付け、Inspector で役割を選ぶ（終了・外部リンク・タイトルへ・画面や言語の設定・ニューゲーム・押さない）。Naninovel の `TitleExitButton`・`ControlPanelTitleButton`・`TitleNewGameButton` と、言語・解像度・画面モード・画質の設定の Dropdown は、付けなくても役割が出る
+- 押せない: ボタンと同じ GameObject のコンポーネントに `IYomawariButtonState` を実装し、押せないあいだ `YomawariLocked` で `true` を返す（例: 劇中でアンロックされるまで押せないスロット）
+
 ## 導入
 
 `Packages/manifest.json` の `dependencies` に追加する。`#` の後ろはタグかコミット。

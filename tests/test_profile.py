@@ -141,3 +141,14 @@ def test_s05_ignores_types():
     for _ in range(3):
         out += engine.feed(Event("harness", "op_result", {**miss, "type": "button"}, 0))
     assert [i.rule_id for i in out] == ["S-05"]
+
+
+def test_hidden_buttons_keep_numbering():
+    # パッケージはマスクで隠れたボタンも hidden で並びに残す。番号は隠れたボタンも含めて数える
+    st = _state([
+        {"name": "Slot", "rect": [0.1, 0.1, 0.2, 0.2], "type": "button"},
+        {"name": "Slot", "rect": [0.1, 0.8, 0.2, 0.9], "hidden": True},
+        {"name": "Slot", "rect": [0.3, 0.1, 0.4, 0.2]},
+    ], name="ListUI", modal=True)
+    assert [t.label for t in st.targets()] == ["ListUI/Slot", "ListUI/Slot#2"]
+    assert st.targets()[0].type == "button"
