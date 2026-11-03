@@ -586,7 +586,17 @@ def test_reading_with_hud_button_still_advances():
          buttons=[{"name": "OpenDialog", "rect": [0, 0.0, 0.23, 0.08], "text": "本編へ戻る"}])
     assert not st.reading_with_buttons()  # まだ本文が来ていない
     feed("line", line_id="memories/m1:1", text="a")
-    # ボタンの位置が動いて出し直されても、本文より前から出ているボタンのまま
+    # ボタンの位置が動いて出し直されても、開いている間に本文が進んだ画面のまま
+    feed("menu", name="MemoryScenarioPlaying", modal=False,
+         buttons=[{"name": "OpenDialog", "rect": [0, 0.01, 0.23, 0.09], "text": "本編へ戻る"}])
+    assert st.reading_with_buttons()
+    # 確認ダイアログを開いている間はボタンが見えなくなり、「引き続き読む」で閉じるとまた見える。本文を読んでいる途中のまま
+    # （run 2050 では、閉じたあとのボタンを本文のあとに出たものとみなし、本文を送らずにダイアログを開き直していた）
+    feed("menu", name="MemoryScenarioPlayingDialogUI", modal=True,
+         buttons=[{"name": "ReturnScenarioCancelButton", "rect": [0.4, 0.5, 0.6, 0.6]}])
+    feed("menu", name="MemoryScenarioPlaying", modal=False, buttons=[])
+    assert not st.reading_with_buttons()  # ダイアログ（モーダル）が出ている
+    feed("menu_close", name="MemoryScenarioPlayingDialogUI")
     feed("menu", name="MemoryScenarioPlaying", modal=False,
          buttons=[{"name": "OpenDialog", "rect": [0, 0.01, 0.23, 0.09], "text": "本編へ戻る"}])
     assert st.reading_with_buttons()
@@ -606,6 +616,15 @@ def test_reading_with_hud_button_still_advances():
     assert st.reading_with_buttons()
     feed("menu", name="RClickMenuUI", modal=True, buttons=[{"name": "ToSave", "rect": [0.1, 0.1, 0.2, 0.2]}])
     assert not st.reading_with_buttons()
+    feed("menu_close", name="RClickMenuUI")
+    assert st.reading_with_buttons()
+    # 閉じて開き直した画面は、また本文が進むまで読んでいる途中とはみなさない
+    feed("menu_close", name="MemoryScenarioPlaying")
+    feed("menu", name="MemoryScenarioPlaying", modal=False,
+         buttons=[{"name": "OpenDialog", "rect": [0, 0.01, 0.23, 0.09], "text": "本編へ戻る"}])
+    assert not st.reading_with_buttons()
+    feed("line", line_id="memories/m1:2", text="b")
+    assert st.reading_with_buttons()
 
 
 def test_fully_covered_modal_is_not_top():
