@@ -123,7 +123,7 @@ def test_dim_buttons_are_tried_later_and_noted():
     shot = _shot([(slots[2].rect, 230)] + [(s.rect, 46) for i, s in enumerate(slots) if i != 2])
     s, st, run, windows, mouse, events = _list_session(slots, shot)
     asyncio.run(s._look())
-    assert s._dim == {"MemoryListUI/Slot", "MemoryListUI/Slot#1", "MemoryListUI/Slot#3"} and not s._explore
+    assert s._dim == {"MemoryListUI/Slot", "MemoryListUI/Slot#1", "MemoryListUI/Slot#3"}
     # 撮る前に、カーソルをボタンのない場所（右上の隅）へ逃がした
     assert mouse.moves == [(995.0, 2.5)]
     ops = normal_candidates(st, run.guard, CFG["weights"], False, None, s._factors())
@@ -140,27 +140,32 @@ def test_dim_buttons_are_tried_later_and_noted():
     assert s._dim == set()
 
 
-def test_all_dark_after_scroll_explores_and_newly_bright_goes_first():
+def test_compare_within_one_shot_and_newly_bright_goes_first():
     slots = [_slot(i) for i in range(4)]
     s, st, run, windows, mouse, events = _list_session(slots, _shot([(slots[0].rect, 230)] +
                                                                     [(x.rect, 46) for x in slots[1:]]))
     asyncio.run(s._look())
-    # スクロールして、明るい Slot が隠れ、見えている分がすべて暗くなった。前に見た明るいものと比べるので、暗いと分かる
+    assert s._dim == {x.label for x in slots[1:]}
+    # スクロールして明るい Slot が隠れ、見えている分がすべて同じ暗さになった。同じ画像の中で比べるので、暗いとはしない
+    # （半透明の UI は後ろの絵で明るさが変わるので、前に撮った画像とは比べない）
     _show(st, slots, hidden={0})
     windows.shot = _shot([(x.rect, 46) for x in slots])
     asyncio.run(s._look())
-    assert s._dim == {x.label for x in slots[1:]} and s._explore
-    ops = normal_candidates(st, run.guard, CFG["weights"], False, None, s._factors(),
-                            CFG["explore_factor"] if s._explore else 1.0)
-    moves = [op for op in ops if op.group == "move"]
-    assert moves and all(op.weight == CFG["weights"]["move"] * CFG["explore_factor"] for op in moves)
-    # 思い出を手に入れたあとに戻ると、暗かった #3 が明るい。先に押す
+    assert s._dim == set() and run.newly_bright == set()  # ほかに暗いものがないので「明るくなった」ともしない
+    # 思い出を手に入れたあとに戻ると、暗かった #3 が明るい（ほかはまだ暗い）。先に押す
     _show(st, slots)
     windows.shot = _shot([(slots[0].rect, 230), (slots[3].rect, 230)] + [(x.rect, 46) for x in slots[1:3]])
     asyncio.run(s._look())
     assert run.newly_bright == {"MemoryListUI/Slot#3"}
     assert s._factors()["MemoryListUI/Slot#3"] == CFG["new_bright_factor"]
-    assert any("明るくなった" in n for n in run.notes)
+    assert sum("明るくなった" in n for n in run.notes) == 1
+    # 押したら外し、また暗くなって明るくなっても、ランで2回目は先に押さない
+    run.newly_bright.discard("MemoryListUI/Slot#3")
+    windows.shot = _shot([(slots[0].rect, 230)] + [(x.rect, 46) for x in slots[1:]])
+    asyncio.run(s._look())
+    windows.shot = _shot([(slots[0].rect, 230), (slots[3].rect, 230)] + [(x.rect, 46) for x in slots[1:3]])
+    asyncio.run(s._look())
+    assert run.newly_bright == set() and sum("明るくなった" in n for n in run.notes) == 1
 
 
 def test_covered_buttons_are_not_targets():

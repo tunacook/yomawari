@@ -71,14 +71,12 @@ def state_key(state: GameState) -> str:
 def normal_candidates(
     state: GameState, guard: Guard, weights: dict[str, float], allow_exit: bool,
     screen_weights: dict[str, float] | None = None, factors: dict[str, float] | None = None,
-    move_factor: float = 1.0,
 ) -> list[Op]:
     """通常の操作の候補。暗転などで待つべきときは空。
 
     locked のボタン（ゲームが押せないと伝えたもの）は入れない。screen_weights はプロファイルの
     [screens.<menu>] weight で、その menu のボタンの重みに掛ける。factors はボタン（label）ごとに重みに掛けるもの
-    （暗い・空のボタンは小さく、新しく明るくなったボタンは大きく。fuzz/looks.py）。move_factor はモーダルな画面で
-    動かす操作（スクロールなど）の重みに掛ける（見えているボタンがすべて暗く、画面の外を探したいとき）。
+    （暗い・空のボタンは小さく、新しく明るくなったボタンは大きく。fuzz/looks.py）。画面の外を探す操作は fuzz/search.py。
     """
     if state.busy:
         return []
@@ -98,7 +96,7 @@ def normal_candidates(
     top = state.top_modal()
     if top is not None and top.buttons:
         # 見えているボタンがない・すべて押せないときも、動かす・抜ける操作は試す
-        return ops + modal_candidates(top.area, weights, move_factor)
+        return ops + modal_candidates(top.area, weights)
     if targets:
         return ops
     if top is not None:
@@ -112,12 +110,12 @@ def normal_candidates(
 
 
 def modal_candidates(
-    area: tuple[float, float, float, float] | None, weights: dict[str, float], move_factor: float = 1.0,
+    area: tuple[float, float, float, float] | None, weights: dict[str, float],
 ) -> list[Op]:
     """ボタンのあるモーダルな画面で、ボタンを押す以外に試す操作（動かす・抜ける）。"""
     x0, y0, x1, y1 = area or (0.0, 0.0, 1.0, 1.0)
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    move, leave = float(weights["move"]) * move_factor, float(weights["leave"])
+    move, leave = float(weights["move"]), float(weights["leave"])
     ops = [Op("drag", arg=d, weight=move, novelty=True, group="move", point=(cx, cy))
            for d in ("up", "down", "left", "right")]
     ops += [Op(k, arg=3, weight=move, novelty=True, group="move", point=(cx, cy)) for k in ("wheel_down", "wheel_up")]

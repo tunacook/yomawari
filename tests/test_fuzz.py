@@ -233,6 +233,10 @@ def test_random_mode_reaches_reading_and_advances():
     assert not issues, [i.detail for i in issues]
     assert run.stats["normal"] > 0 and run.stats["irregular"] == 0
     assert any(e.kind == "op_result" and e.data["kind"] == "advance" and e.data["responded"] for e in events)
+    # 本文送りで新しい行に届いたことを、進行につながった操作として数えている（fuzz/experience.py）
+    adv = run.experience.ops["reading"]["advance"]
+    assert adv["tries"] > 0 and 0 < adv["progress"] <= adv["tries"]
+    assert run.experience.ops["menus:TitleUI"]["click TitleUI/NewGameButton"]["progress"] == 1
 
 
 def test_fuzz_mode_stuck_after_rapid_click_is_s01_or_s02():

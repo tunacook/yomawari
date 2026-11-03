@@ -53,7 +53,7 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "dim_min_gap": 0.1,
     "dim_factor": 0.05,
     "new_bright_factor": 20.0,  # 前に見たときは暗かったのに明るくなったボタン（新しくアンロックされたもの）の重みに掛ける
-    "explore_factor": 3.0,  # 見えている並びがすべて暗いとき、モーダルな画面で動かす操作（スクロールなど）の重みに掛ける
+    "explore_factor": 3.0,  # 見えている並びがどれも押せそうにないとき、探す操作（fuzz/search.py）の重みに掛ける
     "hover_wait_sec": 0.3,  # 明るさを測る前に、カーソルをボタンのない場所へ動かしてから待つ時間（ホバーの演出が戻るまで）
     "quiet_wait_sec": 1.0,  # 暗い・空のボタン（反応しないと見込んでいるもの）を押したあと、反応を待つ時間
     # 同じ名前の並びで、まだ見ていないボタンが画面の外にある向きへ動かす操作（fuzz/search.py）の重み。
@@ -62,6 +62,11 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "search_give_up": 6,  # その向きへ動かしても続けてこの回数反応しなければ、動かせないとみなしてやめる
     # ゲームが開いた画面で、見えているものがどれも押せないとき、向きを決めずに動かして探す回数の上限（開き直すと数え直す）
     "blind_search_limit": 30,
+    # 進め方の経験（DESIGN.md §9「経験の蓄積」）。押してから progress_window_sec のうちに、まだ見ていない本文・scene・選択肢に
+    # 届いたら「進行につながった」、ロードかタイトル戻りが始まったら「巻き戻した」と数え、random モードで重みに掛ける
+    "progress_window_sec": 3.0,
+    "progress_bonus": 5.0,  # 押すといつも進行につながる操作の重みに掛ける（割合に応じて 1〜この値）
+    "rewind_factor": 0.1,  # 押すといつも巻き戻す操作の重みに掛ける（割合に応じて 1〜この値）
     "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")

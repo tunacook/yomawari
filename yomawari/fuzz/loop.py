@@ -30,6 +30,7 @@ from ..events import Event
 from ..input.pointer import Pointer, PointerError
 from ..state import GameState
 from .decider import Decider
+from .experience import Experience, Press
 from .guard import Guard
 from .looks import brightest, dark, groups, inactive, measure
 from .ops import (
@@ -68,7 +69,7 @@ class FuzzRun:
     inactive_words: list[str] = field(default_factory=list)  # rules.yaml の inactive_hints.text
     # 見た目（fuzz/looks.py）。ランのあいだ覚えておく
     dim_seen: set[str] = field(default_factory=set)  # 暗いボタンがあると記録した並び
-    bright_ref: dict[str, tuple[float, float]] = field(default_factory=dict)  # 並び → これまででいちばん明るいもの
+    bright_noted: set[str] = field(default_factory=set)  # 新しく明るくなったとして先に押したボタン（ランで1回だけ）
     dim_history: dict[str, bool] = field(default_factory=dict)  # ボタン（label）→ 前に測ったとき暗かったか
     newly_bright: set[str] = field(default_factory=set)  # 前は暗かったのに明るくなり、まだ押していないボタン
     screen_weights: dict[str, float] = field(default_factory=dict)  # プロファイルの [screens.<menu>] weight
@@ -80,6 +81,10 @@ class FuzzRun:
     opened_by: dict[str, str] = field(default_factory=dict)
     blind_tries: Counter[str] = field(default_factory=Counter)  # menu → 向きを決めずに探した回数（開き直すと 0 に戻す）
     search_noted: set[str] = field(default_factory=set)  # 「ハーネスの記録」に書いた探し方（menu ごと）
+    # 進め方の経験（fuzz/experience.py）
+    experience: Experience = field(default_factory=Experience)
+    presses: deque[Press] = field(default_factory=lambda: deque(maxlen=20))  # 最近押した操作
+    opened_press: dict[str, Press] = field(default_factory=dict)  # 寄り道の画面 → それを開いた操作
     stopped_reason: str | None = None
 
     def summary(self) -> str:
@@ -120,7 +125,6 @@ class FuzzSession:
         self._exiting = False
         self._looked: Any = None  # 見た目を比べたときの signature
         self._dim: set[str] = set()
-        self._explore = False  # 見えている並びがすべて暗い（画面の外を探したい）
         self._search: dict[str, list[str]] = {}  # 探す操作の label → それが向かう "<menu>/<name>:<向き>"
         self._blind: dict[str, list[str]] = {}  # 向きを決めずに探す操作の label → その menu
         self._title_returns = state.title_returns
@@ -145,15 +149,44 @@ class FuzzSession:
             key = self.recent_press()
             if key is not None:
                 self.run.guard.book.confirm(key, "to_title", f"タイトル画面（{self.state.title_menu}）が再び出た")
+            self._credit("rewind")
         if self.state.resolution_changes != self._resolution_changes:
             self._resolution_changes = self.state.resolution_changes
             key = self.recent_press()
             if key is not None:
                 self.run.guard.book.confirm(key, "system_setting", f"解像度・画面モードが {self.state.resolution} に変わった")
 
+    def _progress(self, ev: Event) -> None:
+        """まだ見ていない本文・scene・選択肢に届いたら進行、ロードが始まったら巻き戻しとして、直前の操作に数える。"""
+        if ev.launch != self.launch:
+            return
+        d = ev.data
+        place = None
+        if ev.kind == "line" and d.get("line_id") is not None:
+            place = f"line:{d.get('line_id')}"
+        elif ev.kind == "scene" and d.get("name"):
+            place = f"scene:{d.get('name')}"
+        elif ev.kind == "choices" and d.get("items"):
+            # 選択肢の id は表示のたびに変わるので、本文で表す
+            place = "choices:" + "|".join(str(c.get("text")) for c in d["items"] if isinstance(c, dict))
+        if place is not None and self.run.experience.reach(place):
+            self._credit("progress")
+        elif ev.kind == "load" and d.get("phase") == "start":
+            self._credit("rewind")
+
+    def _credit(self, kind: str) -> None:
+        """progress_window_sec のうちに押した最後の操作と、いま開いている寄り道の画面を開いた操作に数える。"""
+        run = self.run
+        now = time.monotonic()
+        window = float(self.cfg["progress_window_sec"])
+        presses = [p for p in run.presses if now - p.t <= window][-1:]
+        presses += [p for name, p in run.opened_press.items() if name in self.state.menus and p not in presses]
+        run.experience.credit(presses, kind)
+
     def on_event(self, ev: Event) -> None:
         if ev.source == "game":
             self._observe(ev)
+            self._progress(ev)
         if self.run.mode != "fuzz" or ev.source != "game" or ev.kind not in TRIGGERS or ev.launch != self.launch:
             return
         if ev.kind in ("transition", "save", "load") and ev.data.get("phase") != "start":
@@ -208,7 +241,7 @@ class FuzzSession:
         allow_exit = now - (self.run.last_exit_t or self.run.started) >= float(self.cfg["exit_min_interval_sec"])
         cands = normal_candidates(
             self.state, self.run.guard, self.cfg["weights"], allow_exit, self.run.screen_weights,
-            self._factors(), float(self.cfg["explore_factor"]) if self._explore else 1.0,
+            self._factors(),
         )
         if cands:
             cands += self._search_candidates()
@@ -243,6 +276,7 @@ class FuzzSession:
             run.seen |= {b.label for b in m.visible_buttons}
         for name in [n for n in run.opened_by if n not in self.state.menus]:
             del run.opened_by[name]  # 閉じた
+            run.opened_press.pop(name, None)
         self._search, self._blind = {}, {}
         found = [
             lead for lead in leads(self.state, run.seen)
@@ -311,10 +345,11 @@ class FuzzSession:
     async def _look(self) -> None:
         """画面が落ち着いたら、同じ種類に見えるボタンの並びの明るさを比べ、暗いものを覚える（押す順番を後回しにする）。
 
-        前は暗かったのに明るくなったボタン（新しくアンロックされたもの）は、先に押す。見えている並びがすべて暗いときは、
-        画面の外に明るいものがないかを探すため、動かす操作（スクロールなど）を増やす。
+        比べる相手は、同じときに撮った画像の中の、同じ並びでいちばん明るいもの。ランのあいだに見たいちばん明るいものとは
+        比べない（半透明の UI は後ろの絵で明るさが変わり、別のときに撮ったものとは比べられないため）。
+        前は暗かったのに、ほかに暗いものが残っている並びで明るくなったボタン（新しくアンロックされたもの）は、ランで1回だけ先に押す。
         """
-        self._dim, self._explore = set(), False
+        self._dim = set()
         targets = self.state.targets()
         if float(self.cfg["dim_factor"]) >= 1 or not groups(targets):
             return  # 無効にしている、または同じ種類に見えるボタンが並んでいない
@@ -327,17 +362,14 @@ class FuzzSession:
         run = self.run
         record: dict[str, Any] = {}
         for gkey, values in measure(targets, shot).items():
-            top = brightest(values)
-            ref = run.bright_ref.get(gkey, (0.0, 0.0))
-            ref = (max(ref[0], top[0]), max(ref[1], top[1]))
-            run.bright_ref[gkey] = ref
+            ref = brightest(values)
             dk = dark(values, ref, float(self.cfg["dim_ratio"]), float(self.cfg["dim_min_gap"]))
             self._dim |= dk
-            if dk and len(dk) == len(values):
-                self._explore = True
-            for label in values:
+            # 並びがすべて同じ明るさなら、暗い・明るいは分からないので、前の記録を残す
+            for label in values if dk else ():
                 now = label in dk
-                if run.dim_history.get(label) and not now and label not in run.newly_bright:
+                if run.dim_history.get(label) and not now and label not in run.bright_noted:
+                    run.bright_noted.add(label)
                     run.newly_bright.add(label)
                     run.notes.append(f"`{label}` は前に見たときは暗かったのに明るくなったので、先に押す（起動 #{self.launch}）")
                 run.dim_history[label] = now
@@ -353,7 +385,7 @@ class FuzzSession:
             }
         if record:
             # 明るさの判定をあとから確かめられるように残す（events.jsonl）
-            self.publish(Event("harness", "looks", {"groups": record, "explore": self._explore}, self.launch))
+            self.publish(Event("harness", "looks", {"groups": record}, self.launch))
 
     async def _normal(self, op: Op, key: str, verify: bool) -> None:
         before = self.state.signature()
@@ -362,8 +394,12 @@ class FuzzSession:
         # 反応しないと見込んでいるボタンは、何も起きないことを確かめるだけなので、待つ時間を短くする
         quiet = op.target is not None and op.target.label in self._quiet()
         started = time.monotonic()
+        press = Press(key, op.label, started)
+        self.run.presses.append(press)
         if not await self._do(op):
+            self.run.presses.remove(press)
             return
+        self.run.experience.pressed(key, op.label)
         timeout = self.run.response_timeout
         if quiet:
             timeout = min(timeout, float(self.cfg["quiet_wait_sec"]))
@@ -390,6 +426,7 @@ class FuzzSession:
             for name in self.state.screens()[1] - screens_before[1]:
                 if name in self.state.menus:
                     self.run.opened_by[name] = op.target.label
+                    self.run.opened_press[name] = press
                     self.run.blind_tries.pop(name, None)
         if op.group == "search":
             for menu in self._blind.get(op.label, []):
