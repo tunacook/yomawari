@@ -50,6 +50,7 @@ class FuzzRun:
     labels: set[str] = field(default_factory=set)
     recent: deque[str] = field(default_factory=lambda: deque(maxlen=10))
     responsive: set[tuple[str, str]] = field(default_factory=set)  # (状態, 操作) のうち、反応があったもの
+    screen_weights: dict[str, float] = field(default_factory=dict)  # プロファイルの [screens.<menu>] weight
     stopped_reason: str | None = None
 
     def summary(self) -> str:
@@ -141,7 +142,7 @@ class FuzzSession:
             return
 
         allow_exit = now - (self.run.last_exit_t or self.run.started) >= float(self.cfg["exit_min_interval_sec"])
-        cands = normal_candidates(self.state, self.run.guard, self.cfg["weights"], allow_exit)
+        cands = normal_candidates(self.state, self.run.guard, self.cfg["weights"], allow_exit, self.run.screen_weights)
         top = self.state.top_modal()
         if top is not None and not top.buttons and not self.state.busy:
             self._modal_since = self._modal_since or now
@@ -191,6 +192,7 @@ class FuzzSession:
                 {
                     **op.to_json(),
                     "target": op.target.label if op.target else None,  # 同じ名前のボタンは #n で分けて数える
+                    "type": op.target.type if op.target else None,
                     "responded": responded,
                     "waited": round(waited, 3),
                     "verify": verify,

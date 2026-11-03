@@ -28,6 +28,7 @@ from . import launcher
 from .config import BuildConfig, Config, ConfigError, find_config_path, normalize_path_input, stdin_is_tty
 from .detect.engine import Rule, RuleError, load_rules
 from .platform import Platform, get_platform
+from .profile import apply_rules, load_spec
 from .savestate import SaveState, resolve_target
 from .sensors.window import ClientArea
 from .state import GameState
@@ -182,6 +183,10 @@ def run(
     if exe is None:
         _print_msgs(msgs)
         raise typer.Exit(EXIT_HARNESS_ERROR)
+    spec = load_spec(cfg, b)
+    rules = apply_rules(rules, spec)
+    if spec.profile_path:
+        console.print(f"プロファイル: {spec.profile_path}")
 
     rc = cfg.run
     opts = RunOptions(
@@ -194,7 +199,7 @@ def run(
         b, exe, plat, rules, cfg.rules_path, cfg.runs_dir, rc, cfg.sensors,
         on_status=(lambda s: live.update(_status_text(s))) if live else None,
         fuzz_cfg=cfg.fuzz,
-        guard_buttons=cfg.guard_buttons,
+        spec=spec,
     )
     if live:
         with live:

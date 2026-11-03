@@ -96,9 +96,12 @@ rules:
     title: ボタンを押しても反応しない
     description: >-
       menu のボタン（矩形の中心）を押しても画面の状態が変わらない回が、同じボタンで続く。
-      押しても menu の並びが変わらないもの（トグル、ドロップダウンなど）は ignore_patterns で除く
+      押しても menu の並びが変わらない種類（トグル、ドロップダウンなど）は ignore_types で除く
     params:
       consecutive: 3
       heartbeat_alive_sec: 3
-      # "<menu>/<ボタン>" に対する正規表現。ゲームごとに追記する
+      # ボタンの種類（menu の type）。押しても並びが変わらないもの
+      ignore_types: ["toggle", "dropdown", "slider", "input"]
+      # "<menu>/<ボタン>" に対する正規表現。ゲーム固有のものはプロファイルの [screens.<menu>] no_response_ok に書く。
+      # 名前の既定値は、type を出さない古いパッケージのビルド向け。パッケージが type を出すようになったら消す
       ignore_patterns: ["Toggle", "Dropdown", "Slider"]

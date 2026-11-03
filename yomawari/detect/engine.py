@@ -354,6 +354,7 @@ class ButtonNoResponseDetector(Detector):
         self.consecutive = int(rule.param("consecutive"))
         self.alive = float(rule.param("heartbeat_alive_sec"))
         self.ignore = [re.compile(p) for p in rule.param("ignore_patterns")]
+        self.ignore_types = set(rule.param("ignore_types"))
         self.misses: dict[str, int] = {}
 
     def on_event(self, ev: Event) -> list[Issue]:
@@ -361,7 +362,7 @@ class ButtonNoResponseDetector(Detector):
         if ev.kind != "op_result" or d.get("kind") != "click" or d.get("irregular") or d.get("interfered"):
             return []
         target = str(d.get("target"))
-        if any(p.search(target) for p in self.ignore):
+        if d.get("type") in self.ignore_types or any(p.search(target) for p in self.ignore):
             return []
         if d.get("responded"):
             self.misses.pop(target, None)

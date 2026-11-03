@@ -49,6 +49,15 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")
+# ボタンの役割（menu の role）→ 区分の既定値（DESIGN.md §9 ガード）。"normal" は通常の操作。yomawari.example.toml と揃える
+GUARD_ROLE_DEFAULTS: dict[str, str] = {
+    "exit": "expect_exit",
+    "external": "external",
+    "to_title": "irregular_only",
+    "system_setting": "irregular_only",
+    "new_game": "normal",
+    "deny": "deny",
+}
 
 
 class ConfigError(ValueError):
@@ -65,6 +74,7 @@ class BuildConfig:
     save_dir: Path | None = None
     prefs_domain: str | None = None
     initial_save: Path | None = None
+    profile: Path | None = None  # ゲームのプロファイル（yomawari.profile.toml）
     registered: bool = True  # --build-path でその場限りに使うものは False
 
 
@@ -143,21 +153,6 @@ class Config:
         return out
 
     @property
-    def guard_buttons(self) -> dict[str, list[str]]:
-        """[guard.buttons] の区分 → "<menu>/<ボタン>" の一覧。"""
-        raw = self.doc.get("guard", {}).get("buttons", {})
-        out: dict[str, list[str]] = {}
-        for k in GUARD_KINDS:
-            v = raw.get(k, [])
-            if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
-                raise ConfigError(f"guard.buttons.{k} は文字列の配列にしてください")
-            out[k] = [str(x) for x in v]
-        unknown = set(raw.keys()) - set(GUARD_KINDS)
-        if unknown:
-            raise ConfigError(f"guard.buttons に不明な区分があります: {', '.join(sorted(unknown))}")
-        return out
-
-    @property
     def judge(self) -> dict[str, Any]:
         raw = self.doc.get("judge", {})
         return raw.unwrap() if hasattr(raw, "unwrap") else dict(raw)
@@ -185,6 +180,7 @@ class Config:
             save_dir=opt_path("save_dir"),
             prefs_domain=raw.get("prefs_domain"),
             initial_save=opt_path("initial_save"),
+            profile=opt_path("profile"),
         )
 
     def resolve_build(self, build: str | None, build_path: Path | None) -> BuildConfig | None:

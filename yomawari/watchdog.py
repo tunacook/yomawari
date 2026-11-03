@@ -30,6 +30,7 @@ from .fuzz.loop import FuzzRun, FuzzSession
 from .input.base import InputDriver
 from .input.pointer import Pointer
 from .platform import Platform
+from .profile import GameSpec
 from .post.report import RunSummary, write_report
 from .savestate import SaveState, resolve_target
 from .state import GameState
@@ -82,7 +83,7 @@ class Harness:
         sensor_cfg: dict[str, Any],
         on_status: StatusCallback | None = None,
         fuzz_cfg: dict[str, Any] | None = None,
-        guard_buttons: dict[str, list[str]] | None = None,
+        spec: GameSpec | None = None,
         driver_factory: Callable[[], InputDriver] | None = None,
     ) -> None:
         self.build = build
@@ -95,7 +96,7 @@ class Harness:
         self.sensor_cfg = sensor_cfg
         self.on_status = on_status
         self.fuzz_cfg = fuzz_cfg or {}
-        self.guard_buttons = guard_buttons or {}
+        self.spec = spec or GameSpec()
         self.driver_factory = driver_factory
         self.engine = Engine(rules)
         self.state = GameState()
@@ -292,10 +293,11 @@ class Harness:
             self._fuzz = FuzzRun(
                 mode=opts.mode,
                 decider=RandomDecider(random.Random(seed), float(self.fuzz_cfg["no_response_factor"])),
-                guard=Guard(self.guard_buttons),
+                guard=Guard(self.spec.guard_buttons, self.spec.guard_roles),
                 rng=random.Random(f"{seed}:trigger"),
                 cfg=self.fuzz_cfg,
                 response_timeout=float(self.rules["S-01"].param("timeout_sec")),
+                screen_weights=self.spec.screen_weights,
             )
             if self.driver_factory is None:
                 from .input.mouse_kb import PyAutoGuiDriver
