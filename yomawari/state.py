@@ -242,7 +242,9 @@ class GameState:
         return bool(shown) and max(shown) < self._line_seq
 
     def top_modal(self) -> Menu | None:
-        modals = [m for m in self.menus.values() if m.modal]
+        """いちばん新しいモーダル。ボタンがすべてほかの UI に覆われているモーダルは、手前に出ていないので除く
+        （ゲームが開いた選択画面と同時に右クリックメニューが開き、選択画面の下に隠れたときなど）。"""
+        modals = [m for m in self.menus.values() if m.modal and not (m.buttons and all(b.covered for b in m.buttons))]
         return max(modals, key=lambda m: m.order) if modals else None
 
     def targets(self) -> list[Target]:

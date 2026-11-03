@@ -181,9 +181,11 @@ def test_covered_buttons_are_not_targets():
         {"name": "CloseButton", "rect": [0.1, 0.3, 0.2, 0.4], "covered": True},
     ]}, 0))
     assert st.signature() != before and st.targets() == []
-    # 全部覆われていても、モーダルの画面なので動かす・抜ける操作は試す
+    # 全部覆われたモーダルは手前に出ていないので、その画面に向けた動かす・抜ける操作（Esc など）はしない。
+    # 覆っている UI に押せるボタンもなければ、本文を読んでいるときと同じ操作になる
+    assert st.top_modal() is None
     ops = normal_candidates(st, Guard({}), FUZZ_DEFAULTS["weights"], False)
-    assert ops and all(op.target is None for op in ops) and {op.group for op in ops} == {"move", "leave"}
+    assert ops and all(op.target is None for op in ops) and not {op.group for op in ops} & {"move", "leave"}
 
 
 def test_v07_dim_button_that_responds():

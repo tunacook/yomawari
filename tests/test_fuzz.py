@@ -378,13 +378,17 @@ def test_s02_counts_advances_until_progress():
     engine = Engine(scaled_rules(1.0))
     adv = {"kind": "advance", "label": "advance", "responded": False, "interfered": False,
            "heartbeat_age": 0.5, "recent": [], "state": {"line_id": "a:1.0"}}
-    for _ in range(19):
+    for _ in range(9):
         assert engine.feed(Event("harness", "op_result", adv, 0)) == []
     engine.feed(Event("game", "line", {"line_id": "a:2.0"}, 0))  # 進んだら数え直す
     out = []
-    for _ in range(20):
-        out += engine.feed(Event("harness", "op_result", adv, 0))
+    # 進めなくなった原因の操作（回想一覧を Esc で閉じた）は、本文送りが続くと「直前の操作」から押し出される。前の操作として載せる
+    first = {**adv, "recent": ["click MemoryListUI/Slot#17", "wheel_down 3", "key esc", "advance"]}
+    out += engine.feed(Event("harness", "op_result", first, 0))
+    for _ in range(9):
+        out += engine.feed(Event("harness", "op_result", {**adv, "recent": ["advance"] * 10}, 0))
     assert [i.rule_id for i in out] == ["S-02"]
+    assert "10 回" in out[0].detail and "`wheel_down 3` → `key esc`" in out[0].detail
 
 
 # --- ハーネス全体（モックゲーム） ---
@@ -602,3 +606,26 @@ def test_reading_with_hud_button_still_advances():
     assert st.reading_with_buttons()
     feed("menu", name="RClickMenuUI", modal=True, buttons=[{"name": "ToSave", "rect": [0.1, 0.1, 0.2, 0.2]}])
     assert not st.reading_with_buttons()
+
+
+def test_fully_covered_modal_is_not_top():
+    # ゲームが開いた選択画面（モーダルでない）と同時に右クリックメニュー（モーダル）が開き、選択画面の下に隠れた。
+    # 右クリックメニューを手前の画面とせず、選択画面のボタンを押す
+    st = GameState()
+    feed = lambda kind, **d: st.feed(Event("game", kind, d, 0))
+    feed("menu", name="MemoryListUI", modal=False, buttons=[{"name": "Slot", "rect": [0.1, 0.1, 0.3, 0.3]}])
+    feed("menu", name="RClickMenuUI", modal=True, buttons=[
+        {"name": "ToSave", "rect": [0.1, 0.1, 0.2, 0.2], "covered": True},
+        {"name": "ToLoad", "rect": [0.1, 0.3, 0.2, 0.4], "covered": True},
+    ])
+    assert st.top_modal() is None
+    assert [t.label for t in st.targets()] == ["MemoryListUI/Slot"]
+    # 一部だけ覆われているモーダルは、手前のまま
+    feed("menu", name="RClickMenuUI", modal=True, buttons=[
+        {"name": "ToSave", "rect": [0.1, 0.1, 0.2, 0.2], "covered": True},
+        {"name": "ToLoad", "rect": [0.1, 0.3, 0.2, 0.4]},
+    ])
+    assert st.top_modal().name == "RClickMenuUI"
+    # ボタンのないモーダル（暗転の幕）も手前のまま
+    feed("menu", name="CurtainUI", modal=True, buttons=[])
+    assert st.top_modal().name == "CurtainUI"

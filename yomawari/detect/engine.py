@@ -294,6 +294,7 @@ class AdvanceStallDetector(Detector):
         self.clicks = int(rule.param("clicks"))
         self.alive = float(rule.param("heartbeat_alive_sec"))
         self.count = 0
+        self.lead: list[str] = []  # 進まなくなる前の操作（本文送りが続くと「直前の操作」から押し出されるため）
 
     def on_event(self, ev: Event) -> list[Issue]:
         if ev.kind == "launch" or (ev.source == "game" and ev.kind in self.PROGRESS):
@@ -303,13 +304,16 @@ class AdvanceStallDetector(Detector):
         if ev.kind != "op_result" or d.get("kind") != "advance" or d.get("interfered") or not _alive(ev, self.alive):
             return []
         self.count += 1
+        if self.count == 1:
+            self.lead = [str(x) for x in (d.get("recent") or [])[:-1]][-5:]
         if self.count < self.clicks:
             return []
         self.count = 0
         st = d.get("state") or {}
+        lead = f"。本文送りを続ける前の操作（古い順）: {' → '.join(f'`{x}`' for x in self.lead)}" if self.lead else ""
         return [
             self.issue(
-                f"本文を {self.clicks} 回送っても進みません（行 {st.get('line_id')}）",
+                f"本文を {self.clicks} 回送っても進みません（行 {st.get('line_id')}）{lead}",
                 key=str(st.get("line_id")), launch=ev.launch, t=ev.t, wall=ev.wall,
                 recent=d.get("recent"), state=st,
             )

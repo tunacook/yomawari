@@ -80,7 +80,9 @@ rules:
     description: 本文を送るクリックを続けても line / choices / scene が来ない
     on_detect: restart
     params:
-      clicks: 20
+      # 反応のない本文送りは S-01 の timeout_sec（5 秒）ずつ待つので、10 回で約 50 秒。20 回（約 100 秒）では、
+      # 進めなくなってから気づくまでが長すぎた（Rachel で、回想一覧を閉じて進めなくなってから 80 秒たっても出なかった）
+      clicks: 10
       heartbeat_alive_sec: 3
 
   - id: S-03
