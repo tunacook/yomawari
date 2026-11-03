@@ -257,6 +257,14 @@ class GameState:
             self.busy,
         )
 
+    def screens(self) -> tuple[str | None, frozenset[str]]:
+        """画面の切り替わりを見るための要約: (scene, ボタンのある menu かモーダルな menu の名前)。
+
+        signature と違い、本文の位置・ボタンのない通知（トーストなど）・ボタンの並びの変化は含めない。
+        押せないことを知らせる演出では変わらず、別の画面が開いた・閉じたときに変わる。
+        """
+        return self.scene, frozenset(m.name for m in self.menus.values() if m.buttons or m.modal)
+
     def snapshot(self) -> dict[str, Any]:
         top = self.top_modal()
         return {

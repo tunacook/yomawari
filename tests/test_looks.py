@@ -125,10 +125,44 @@ def test_v07_dim_button_that_responds():
     from .conftest import scaled_rules
 
     engine = Engine(scaled_rules(1.0))
-    ok = {"kind": "click", "target": "MemoryListUI/Slot#3", "dim": True, "responded": True,
+    ok = {"kind": "click", "target": "MemoryListUI/Slot#3", "dim": True, "responded": True, "screen_changed": True,
           "interfered": False, "heartbeat_age": 0.5}
     out = engine.feed(Event("harness", "op_result", ok, 0))
     assert [i.rule_id for i in out] == ["V-07"] and "Slot#3" in out[0].detail
     assert engine.feed(Event("harness", "op_result", ok, 0)) == []  # 同じボタンは1回だけ
-    assert engine.feed(Event("harness", "op_result", {**ok, "target": "A/B", "responded": False}, 0)) == []
+    assert engine.feed(Event("harness", "op_result", {**ok, "target": "A/B", "responded": False, "screen_changed": False}, 0)) == []
     assert engine.feed(Event("harness", "op_result", {**ok, "target": "A/C", "dim": False}, 0)) == []
+
+
+def test_v07_needs_another_screen_not_feedback():
+    from yomawari.detect.engine import Engine
+
+    from .conftest import scaled_rules
+
+    engine = Engine(scaled_rules(1.0))
+    base = {"kind": "click", "target": "MemoryListUI/Slot#5", "dim": True, "responded": True,
+            "interfered": False, "heartbeat_age": 0.5}
+    # 押せないことを知らせる演出（通知が出た）で画面の状態は変わったが、別の画面は出ていない
+    assert engine.feed(Event("harness", "op_result", {**base, "screen_changed": False}, 0)) == []
+
+
+def test_screens_ignore_toasts_and_line():
+    st = GameState()
+    feed = lambda kind, **d: st.feed(Event("game", kind, d, 0))
+    feed("menu", name="MemoryListUI", modal=True, buttons=[{"name": "Slot", "rect": [0.1, 0.1, 0.2, 0.2]}])
+    before = st.screens()
+    feed("menu", name="MemoryFragmentNotifyUI", modal=False, buttons=[])  # ボタンのない通知
+    feed("line", line_id="s1:2")
+    assert st.screens() == before
+    feed("menu", name="MemorySummaryUI", modal=True, buttons=[{"name": "Play", "rect": [0.4, 0.4, 0.6, 0.5]}])
+    assert st.screens() != before
+
+
+def test_op_result_tells_screen_changed():
+    from .test_fuzz import run_sim
+
+    _, _, _, events, _ = run_sim("random", 1.5)
+    res = [e.data for e in events if e.kind == "op_result" and e.data.get("target")]
+    # タイトルのボタン（設定・ニューゲーム）と設定の戻るボタンは、どれも画面を切り替える
+    assert [d for d in res if d["responded"]] and all(d["screen_changed"] for d in res if d["responded"])
+    assert all(not d["screen_changed"] for d in res if not d["responded"])

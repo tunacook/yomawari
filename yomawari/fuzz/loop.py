@@ -242,6 +242,7 @@ class FuzzSession:
 
     async def _normal(self, op: Op, key: str, verify: bool) -> None:
         before = self.state.signature()
+        screens_before = self.state.screens()
         started = time.monotonic()
         if not await self._do(op):
             return
@@ -254,6 +255,8 @@ class FuzzSession:
         responded = self.state.signature() != before
         if not responded and op.target is not None and op.target.kind == "button":
             await self._check_front(op.target.key)
+        # 別の画面に切り替わったか（ボタンのある menu・モーダルが開いた／閉じた、scene が変わった）。V-07 が使う
+        screen_changed = responded and self.state.screens() != screens_before
         self.run.stats["normal"] += 1
         self.run.decider.feedback(key, op, responded)
         if responded:
@@ -269,6 +272,7 @@ class FuzzSession:
                     "target": op.target.label if op.target else None,  # 同じ名前のボタンは #n で分けて数える
                     "type": op.target.type if op.target else None,
                     "dim": bool(op.target and op.target.label in self._dim),
+                    "screen_changed": screen_changed,
                     "responded": responded,
                     "waited": round(waited, 3),
                     "verify": verify,

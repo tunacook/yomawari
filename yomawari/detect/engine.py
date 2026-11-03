@@ -397,10 +397,12 @@ class ButtonNoResponseDetector(Detector):
 
 
 class DimButtonRespondedDetector(Detector):
-    """V-07: ほかの同じ種類のボタンより暗い（今は押せないように見える）ボタンを押したら、画面が変わった。
+    """V-07: ほかの同じ種類のボタンより暗い（今は押せないように見える）ボタンを押したら、別の画面が出た。
 
-    暗いのに押せるのは、見た目と動作が食い違っている（アンロックされていないのに開ける、など）。
-    暗いかどうかはファジングのループが押す前に画面の明るさで決め、op_result の dim で伝える（fuzz/looks.py）。
+    暗いのに別の画面に進めるのは、見た目と動作が食い違っている（アンロックされていないのに回想が開ける、など）。
+    押せないことを知らせる演出（震える、ボタンのない通知が出る）で画面の状態が変わっただけでは出さない。
+    暗いかどうかはファジングのループが押す前に画面の明るさで決め、op_result の dim で、
+    別の画面が出たかは screen_changed で伝える（fuzz/looks.py、GameState.screens）。
     """
 
     def __init__(self, rule: Rule) -> None:
@@ -412,7 +414,7 @@ class DimButtonRespondedDetector(Detector):
         d = ev.data
         if ev.kind != "op_result" or d.get("kind") != "click" or not d.get("dim"):
             return []
-        if not d.get("responded") or d.get("interfered") or not _alive(ev, self.alive):
+        if not d.get("screen_changed") or d.get("interfered") or not _alive(ev, self.alive):
             return []
         target = str(d.get("target"))
         if target in self.seen:
@@ -420,7 +422,8 @@ class DimButtonRespondedDetector(Detector):
         self.seen.add(target)
         return [
             self.issue(
-                f"{target} はほかの同じ種類のボタンより暗い（押せないように見える）のに、押すと画面が変わりました",
+                f"{target} はほかの同じ種類のボタンより暗い（押せないように見える）のに、押すと別の画面が出ました"
+                f"（{', '.join((d.get('state') or {}).get('menus') or []) or 'menu なし'}）",
                 key=target, launch=ev.launch, t=ev.t, wall=ev.wall,
                 recent=d.get("recent"), state=d.get("state"),
             )
