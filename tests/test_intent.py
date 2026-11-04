@@ -54,7 +54,7 @@ def test_first_play_is_progress_and_title_return_chooses_again():
 
 
 def test_first_play_follows_weights_when_progress_is_zero():
-    # 目的（purpose）が「本編を進める」を選ばないもの（buttons など）なら、最初のプレイから見て回る
+    # 目的（purpose）が「本編を進める」を選ばないもの（intent_progress 0）なら、最初のプレイから見て回る
     _, _, run, _ = _session(cfg={**CFG, "intent_progress": 0.0, "intent_explore": 1.0})
     assert run.intent == "explore"
 

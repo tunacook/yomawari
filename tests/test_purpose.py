@@ -19,15 +19,23 @@ def test_default_is_play_and_every_builtin_resolves():
         cfg = p.apply(FUZZ_DEFAULTS)
         assert set(FUZZ_DEFAULTS) <= set(cfg)  # 知らない項目で上書きしていない（綴りの誤りがない）
         assert set(cfg) == set(FUZZ_DEFAULTS)
+        if p.burst is not None:
+            assert set(p.burst.apply(cfg)) == set(FUZZ_DEFAULTS)  # 区間の上書きも [fuzz] にある項目だけ
     # 進行不能を探すときは、抜け出す操作を試さずに記録する
     assert resolve("stuck").apply(FUZZ_DEFAULTS)["recover_ops"] == 0
 
 
 def test_apply_merges_weights_per_item():
-    cfg = resolve("buttons").apply(FUZZ_DEFAULTS)
+    # buttons / gacha は、通常のプレイで進めながら、ある地点で区間（ボタンの網羅・ガチャプレイ）に切り替える
+    p = resolve("buttons")
+    base = p.apply(FUZZ_DEFAULTS)
+    assert base["learn"] is True and base["weights"]["click"] == FUZZ_DEFAULTS["weights"]["click"]
+    cfg = p.burst.apply(base)
     assert cfg["weights"]["click"] == 10
     assert cfg["weights"]["advance"] == FUZZ_DEFAULTS["weights"]["advance"]
-    assert cfg["learn"] is False
+    assert cfg["learn"] is False and p.burst.intent == "explore" and p.burst.mode == "random"
+    assert resolve("gacha").mode == "random" and resolve("gacha").burst.mode == "fuzz"
+    assert resolve("play").burst is None
     assert FUZZ_DEFAULTS["weights"]["click"] == 5  # 元の既定値は変えない
 
 
@@ -43,7 +51,9 @@ focus = ["S-02"]
 [purpose.stuck.fuzz]
 recover_ops = 8
 
-[purpose.buttons.fuzz]
+[purpose.buttons.burst]
+sec = 30
+[purpose.buttons.burst.fuzz]
 weights = { leave = 3 }
 
 [purpose.saveload]
@@ -57,7 +67,9 @@ fuzz = { intent_explore = 1, weights = { right_click = 5 } }
     found = purposes(cfg.purposes)
     assert found["stuck"].focus == ["S-02"]
     assert found["stuck"].fuzz["recover_ops"] == 8 and found["stuck"].fuzz["learn"] is True  # ほかの項目は残る
-    assert found["buttons"].fuzz["weights"] == {"click": 10, "leave": 3}
+    b = found["buttons"].burst
+    assert b.sec == 30 and b.prob == 0.3  # ほかの項目は残る
+    assert b.fuzz["weights"] == {"click": 10, "leave": 3}
     saveload = resolve(cfg.run["purpose"], cfg.purposes)
     assert saveload.mode == "random" and saveload.apply(cfg.fuzz)["weights"]["right_click"] == 5
 
@@ -67,6 +79,8 @@ def test_unknown_purpose_and_mode_are_errors():
         resolve("nothing")
     with pytest.raises(PurposeError, match="mode が不正"):
         purposes(tomlkit.parse('[x]\nmode = "walk"\n').unwrap())
+    with pytest.raises(PurposeError, match="burst に知らない項目"):
+        purposes(tomlkit.parse('[x.burst]\nseconds = 5\n').unwrap())
 
 
 def _issue(rule: str, title: str) -> Issue:
