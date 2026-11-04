@@ -70,6 +70,10 @@ class FakePlatform(MacPlatform):
     def open_file(self, path: Path) -> None:
         pass
 
+    def read_text(self, shot):
+        # 本物の画面を文字認識すると、そのときデスクトップに出ている文字で結果が変わるので、何も読まない
+        return []
+
 
 def scaled_rules(factor: float) -> dict[str, Rule]:
     """リポジトリの rules.yaml の時間系パラメータ（*_sec）だけを factor 倍する。
