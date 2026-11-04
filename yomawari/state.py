@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -121,6 +122,9 @@ class GameState:
     # 画面の見た目から、後ろに下がったと判定した menu（ハーネスが画像で判定して入れる。fuzz/loop.py の _look）。
     # 押せる候補から除く。閉じたら除く
     behind: set[str] = field(default_factory=set)
+    # ボタン（label）→ 画面から読んだ文字（OCR）。ボタンの文字は、UI の部品の作りに頼らず、人と同じく画面から読む。
+    # 出し直された menu にも引き継ぐ
+    read_text: dict[str, str] = field(default_factory=dict)
     _played_since_title: bool = False
     _order: int = 0
 
@@ -172,9 +176,11 @@ class GameState:
             r = _rect(b.get("rect")) if isinstance(b, dict) else None
             if r is not None:
                 bname = str(b.get("name"))
+                nth = seen.get(bname, 0)
+                label = f"{name}/{bname}#{nth}" if nth else f"{name}/{bname}"
                 buttons.append(Target(
-                    "button", name, bname, r, nth=seen.get(bname, 0),
-                    text=_opt_str(b.get("text")),
+                    "button", name, bname, r, nth=nth,
+                    text=self.read_text.get(label),  # ボタンの文字は画面から読む（パッケージの text は使わない）
                     type=_opt_str(b.get("type")), role=_opt_str(b.get("role")), locked=bool(b.get("locked")),
                     hidden=bool(b.get("hidden")), covered=bool(b.get("covered")),
                 ))
@@ -275,6 +281,12 @@ class GameState:
             if c.key == key:
                 return c
         return None
+
+    def set_read_text(self, texts: dict[str, str]) -> None:
+        """画面から読んだ文字を、いま出ているボタンに付ける。"""
+        self.read_text.update(texts)
+        for m in self.menus.values():
+            m.buttons = [dataclasses.replace(b, text=texts[b.label]) if b.label in texts else b for b in m.buttons]
 
     def signature(self) -> tuple[Any, ...]:
         """画面の状態の要約。操作のあとにこれが変われば「反応があった」とみなす。

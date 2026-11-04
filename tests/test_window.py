@@ -35,6 +35,10 @@ class FakeWindows:
         self.front = front
         self.activated = []
         self.shot = shot  # capture が返す Shot（None なら撮れない）
+        self.texts = []  # read_text が返す、画面から読んだ文字 [(文字, 確からしさ, 矩形)]
+
+    def read_text(self, shot):
+        return list(self.texts)
 
     def capture(self, rect):
         return self.shot

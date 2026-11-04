@@ -66,7 +66,7 @@ def test_fuzz_mode_has_no_intent():
 
 def _reading_with_hud(st, s):
     _game(s, st, "menu", name="MemoryScenarioPlaying", modal=False,
-          buttons=[{"name": "OpenDialog", "rect": [0, 0.0, 0.23, 0.08], "text": "本編へ戻る"}])
+          buttons=[{"name": "OpenDialog", "rect": [0, 0.0, 0.23, 0.08]}])
     _game(s, st, "line", line_id="memories/m1:1", text="a")
 
 

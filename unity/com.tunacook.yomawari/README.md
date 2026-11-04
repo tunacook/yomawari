@@ -15,7 +15,7 @@ Naninovel 1.21 以上が入っていると、`Yomawari.Naninovel` が `scene` / 
 
 ## ボタンについて出すこと
 
-`menu` のボタンには、種類（`type`）、文字（`text`）、役割（`role`）、スクロール領域で隠れている（`hidden`）、ほかの UI に覆われている（`covered`）が付く（`DESIGN.md` §3、§9「ゲーム固有の仕様」①）。どれもエンジンの標準の部品から自動で読み取り、ゲーム側で Yomawari のための部品を付ける必要はない（`DESIGN.md` §1）。
+`menu` のボタンには、種類（`type`）、役割（`role`）、スクロール領域で隠れている（`hidden`）、ほかの UI に覆われている（`covered`）が付く（`DESIGN.md` §3、§9「ゲーム固有の仕様」①）。ボタンの文字は出さず、ハーネスが画面から読む。どれもエンジンの標準の部品から自動で読み取り、ゲーム側で Yomawari のための部品を付ける必要はない（`DESIGN.md` §1）。
 
 - 文字: ボタンの子の `Text` / `TMP_Text` の文字列（改行を詰め、40 文字まで）。文字が画像に焼き込まれたボタンでは出ない
 - 役割: Naninovel の `TitleExitButton`（`exit`）、`ControlPanelTitleButton`（`to_title`）、`TitleNewGameButton`（`new_game`）と、言語・解像度・画面モード・画質の設定の Dropdown（`system_setting`）のときだけ出る。それ以外のボタンの役割は、ハーネスが文字・名前・見た目から推定し、押した結果で確定する（`DESIGN.md` §9「役割の推定と判定」）

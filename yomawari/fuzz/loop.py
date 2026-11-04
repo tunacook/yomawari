@@ -30,11 +30,13 @@ from typing import Any
 
 from ..events import Event
 from ..input.pointer import InputBlocked, Pointer, PointerError
+from ..sensors.screen import Shot
 from ..state import GameState, Rect
 from .decider import Decider
 from .experience import Experience, Press
 from .guard import Guard
 from .looks import Values, alike, brightest, dark, groups, inactive, measure
+from .reading import assign, unread
 from .ops import (
     Op,
     escape_candidates,
@@ -108,6 +110,11 @@ class FuzzRun:
     stopped_reason: str | None = None
     # OS が入力を受け付けなかった（画面のロック・ゲームを前面にできない）。いま続いているもの (理由, 始まりの時刻)
     blocked_since: tuple[str, float] | None = None
+    # 画面の文字を読む（fuzz/reading.py）
+    read_done: set[str] = field(default_factory=set)  # 画面から文字を読んだボタン（見た目が変わったら読み直す）
+    read_look: dict[str, tuple[float, float]] = field(default_factory=dict)  # 読んだときのボタンの明るさ
+    read_off: bool = False  # この OS では読めない
+    read_noted: bool = False
     blocked: list[tuple[str, float, float]] = field(default_factory=list)  # 終わったもの (理由, 始まり, 終わり)。時刻は time.time()
 
     def block(self, reason: str, now: float) -> bool:
@@ -687,17 +694,23 @@ class FuzzSession:
             b for name in sorted(self.state.behind) if name in self.state.menus
             for b in self.state.menus[name].visible_buttons
         ]
-        if float(self.cfg["dim_factor"]) >= 1 or not groups(targets):
-            return  # 無効にしている、または同じ種類に見えるボタンが並んでいない
+        run = self.run
+        looks = float(self.cfg["dim_factor"]) < 1 and bool(groups(targets))  # 同じ種類に見えるボタンが並んでいる
+        reading = bool(self.cfg["read_text"]) and not run.read_off
+        if not looks and not (reading and unread(self.state.targets(), run.read_done)):
+            return
         try:
             shot = await asyncio.to_thread(self.pointer.capture, float(self.cfg["hover_wait_sec"]))
         except PointerError:
             return
         if shot is None:
             return  # 画面収録の権限がないなど。見た目なしで続ける
-        run = self.run
+        measured = measure(targets, shot) if looks else {}
+        if reading:
+            await self._read_text(shot, measured)
+        if not looks:
+            return
         record: dict[str, Any] = {}
-        measured = measure(targets, shot)
         self._judge_behind(measured, {t.label: t.rect for t in targets})
         for gkey, values in measured.items():
             if gkey.split("/", 1)[0] in self.state.behind:
@@ -729,6 +742,38 @@ class FuzzSession:
         if record:
             # 明るさの判定をあとから確かめられるように残す（events.jsonl）
             self.publish(Event("harness", "looks", {"groups": record}, self.launch))
+
+    async def _read_text(self, shot: Shot, measured: dict[str, Values]) -> None:
+        """ボタンの文字を、撮った画像から読む（fuzz/reading.py）。読んだボタンは、見た目が変わるまで読み直さない。"""
+        run = self.run
+        ratio, gap = float(self.cfg["dim_ratio"]), float(self.cfg["dim_min_gap"])
+        now = {label: v for values in measured.values() for label, v in values.items()}
+        for label, v in now.items():
+            old = run.read_look.get(label)
+            if old is not None and not alike(v, old, ratio, gap):
+                run.read_done.discard(label)  # 見た目が変わった（開示された・中身が入れ替わった）ので読み直す
+        todo = unread(self.state.targets(), run.read_done)
+        if not todo:
+            return
+        read = getattr(self.pointer.platform, "read_text", None)
+        boxes = await asyncio.to_thread(read, shot) if read is not None else None
+        if boxes is None:
+            run.read_off = True
+            run.notes.append(f"画面の文字を読めない（この OS では未対応、または文字認識が使えない）ので、ボタンは名前と"
+                             f"見た目だけで扱った（起動 #{self.launch}）")
+            return
+        texts = assign(boxes, todo, float(self.cfg["read_text_min_conf"]))
+        for t in todo:
+            run.read_done.add(t.label)
+            if t.label in now:
+                run.read_look[t.label] = now[t.label]
+        if texts:
+            self.state.set_read_text(texts)
+            if not run.read_noted:
+                run.read_noted = True
+                run.notes.append(f"ボタンの文字を画面から読んだ（例: "
+                                 f"{', '.join(f'`{k}` 「{v}」' for k, v in list(texts.items())[:3])}）（起動 #{self.launch}）")
+        self.publish(Event("harness", "read_text", {"tried": len(todo), "texts": texts}, self.launch))
 
     async def _normal(self, op: Op, key: str, verify: bool) -> None:
         before = self.state.signature()

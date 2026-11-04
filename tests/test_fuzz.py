@@ -592,14 +592,14 @@ def test_reading_with_hud_button_still_advances():
     feed("scene", name="memories/m1")
     # 最初は画面の外から滑り込んでくる（hidden）。見えるようになってから本文が来る
     feed("menu", name="MemoryScenarioPlaying", modal=False,
-         buttons=[{"name": "OpenDialog", "rect": [0, -0.18, 0.23, -0.1], "text": "本編へ戻る", "hidden": True}])
+         buttons=[{"name": "OpenDialog", "rect": [0, -0.18, 0.23, -0.1], "hidden": True}])
     feed("menu", name="MemoryScenarioPlaying", modal=False,
-         buttons=[{"name": "OpenDialog", "rect": [0, 0.0, 0.23, 0.08], "text": "本編へ戻る"}])
+         buttons=[{"name": "OpenDialog", "rect": [0, 0.0, 0.23, 0.08]}])
     assert not st.reading_with_buttons()  # まだ本文が来ていない
     feed("line", line_id="memories/m1:1", text="a")
     # ボタンの位置が動いて出し直されても、開いている間に本文が進んだ画面のまま
     feed("menu", name="MemoryScenarioPlaying", modal=False,
-         buttons=[{"name": "OpenDialog", "rect": [0, 0.01, 0.23, 0.09], "text": "本編へ戻る"}])
+         buttons=[{"name": "OpenDialog", "rect": [0, 0.01, 0.23, 0.09]}])
     assert st.reading_with_buttons()
     # 確認ダイアログを開いている間はボタンが見えなくなり、「引き続き読む」で閉じるとまた見える。本文を読んでいる途中のまま
     # （run 2050 では、閉じたあとのボタンを本文のあとに出たものとみなし、本文を送らずにダイアログを開き直していた）
@@ -609,7 +609,7 @@ def test_reading_with_hud_button_still_advances():
     assert not st.reading_with_buttons()  # ダイアログ（モーダル）が出ている
     feed("menu_close", name="MemoryScenarioPlayingDialogUI")
     feed("menu", name="MemoryScenarioPlaying", modal=False,
-         buttons=[{"name": "OpenDialog", "rect": [0, 0.01, 0.23, 0.09], "text": "本編へ戻る"}])
+         buttons=[{"name": "OpenDialog", "rect": [0, 0.01, 0.23, 0.09]}])
     assert st.reading_with_buttons()
     ops = normal_candidates(st, Guard({}), FUZZ_DEFAULTS["weights"], allow_exit=False)
     labels = {op.label for op in ops}
@@ -632,7 +632,7 @@ def test_reading_with_hud_button_still_advances():
     # 閉じて開き直した画面は、また本文が進むまで読んでいる途中とはみなさない
     feed("menu_close", name="MemoryScenarioPlaying")
     feed("menu", name="MemoryScenarioPlaying", modal=False,
-         buttons=[{"name": "OpenDialog", "rect": [0, 0.01, 0.23, 0.09], "text": "本編へ戻る"}])
+         buttons=[{"name": "OpenDialog", "rect": [0, 0.01, 0.23, 0.09]}])
     assert not st.reading_with_buttons()
     feed("line", line_id="memories/m1:2", text="b")
     assert st.reading_with_buttons()

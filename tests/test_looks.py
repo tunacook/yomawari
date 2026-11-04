@@ -102,7 +102,7 @@ class _Mouse:
 
 def _show(st, slots, hidden=()):
     st.feed(Event("game", "menu", {"name": "MemoryListUI", "modal": True, "buttons": [
-        {"name": "Slot", "rect": list(x.rect), "text": f"00{i}", "hidden": i in hidden} for i, x in enumerate(slots)]}, 0))
+        {"name": "Slot", "rect": list(x.rect), "hidden": i in hidden} for i, x in enumerate(slots)]}, 0))
 
 
 def _list_session(slots, shot):
@@ -275,8 +275,9 @@ def test_quiet_buttons_wait_shorter():
     st = GameState()
     st.feed(Event("game", "resolution", {"w": 2000, "h": 1000}, 0))
     st.feed(Event("game", "menu", {"name": "SaveLoadUI", "modal": True, "buttons": [
-        {"name": "Slot", "rect": [0.1, 0.1 + 0.2 * i, 0.3, 0.25 + 0.2 * i], "text": f"{i + 1}. Empty"}
-        for i in range(3)]}, 0))
+        {"name": "Slot", "rect": [0.1, 0.1 + 0.2 * i, 0.3, 0.25 + 0.2 * i]} for i in range(3)]}, 0))
+    # 画面から読んだ文字（OCR）で空と分かる
+    st.set_read_text({"SaveLoadUI/Slot": "1. Empty", "SaveLoadUI/Slot#1": "2. Empty", "SaveLoadUI/Slot#2": "3. Empty"})
     windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
     run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
                   rng=random.Random(1), cfg=cfg, response_timeout=5.0, inactive_words=["Empty"])
@@ -326,7 +327,7 @@ def test_screen_that_changed_look_in_place_is_behind():
     s._judge_behind({"MemoryListUI/Slot": dict(zip(labels, front))}, rects)
     # 要約が出た。一覧のボタンは同じ位置のまま、見た目がまとめて変わった
     feed("menu", name="MemorySummaryUI", modal=False, buttons=[
-        {"name": "StartToMemoryScenario", "rect": [0.42, 0.76, 0.61, 0.84], "text": "この思い出を読む"},
+        {"name": "StartToMemoryScenario", "rect": [0.42, 0.76, 0.61, 0.84]},
         {"name": "CloseMemorySummary", "rect": [0.18, 0.77, 0.24, 0.82]},
     ])
     assert st.top_modal().name == "MemoryListUI"  # ゲームが知らせる印だけでは、一覧が手前のまま
@@ -397,3 +398,42 @@ def test_repressing_a_never_answered_button_waits_short():
     run.silent.add("MemoryListUI/Slot#2")
     run.answered.add("MemoryListUI/Slot#2")
     assert "MemoryListUI/Slot#2" not in s._quiet()
+
+
+def test_assign_read_text_to_buttons():
+    from yomawari.fuzz.reading import assign
+
+    slots = [_slot(i) for i in range(3)]
+    outer = Target("button", "MemoryListUI", "Panel", (0.0, 0.0, 1.0, 1.0))
+    r = slots[1].rect
+    boxes = [
+        ("夕方の", 0.9, (r[0] + 0.01, r[1] + 0.01, r[0] + 0.05, r[1] + 0.03)),
+        ("帰り道", 0.9, (r[0] + 0.06, r[1] + 0.01, r[0] + 0.1, r[1] + 0.03)),
+        ("ノイズ", 0.1, (r[0] + 0.01, r[1] + 0.05, r[0] + 0.05, r[1] + 0.07)),  # 確からしさが低い
+        ("見出し", 0.9, (0.9, 0.95, 0.95, 0.98)),  # どのスロットにも入らない
+    ]
+    texts = assign(boxes, slots + [outer], 0.3)
+    # 重なっているボタンでは小さい方（並びのスロット）に割り当てる。同じ行は左から
+    assert texts == {"MemoryListUI/Slot#1": "夕方の 帰り道", "MemoryListUI/Panel": "見出し"}
+
+
+def test_look_reads_button_text_from_screen_until_look_changes():
+    slots = [_slot(i) for i in range(3)]
+    shot = _shot([(x.rect, 120) for x in slots])
+    s, st, run, windows, mouse, events = _list_session(slots, shot)
+    r = slots[0].rect
+    windows.texts = [("屋上の猫", 0.9, (r[0] + 0.01, r[1] + 0.01, r[2] - 0.01, r[1] + 0.05))]
+    asyncio.run(s._look())
+    assert st.menus["MemoryListUI"].buttons[0].text == "屋上の猫"
+    assert [e.data["texts"] for e in events if e.kind == "read_text"] == [{"MemoryListUI/Slot": "屋上の猫"}]
+    assert any("屋上の猫" in n for n in run.notes)
+    # 出し直された menu にも引き継ぎ、見た目が変わらなければ読み直さない
+    _show(st, slots)
+    assert st.menus["MemoryListUI"].buttons[0].text == "屋上の猫"
+    asyncio.run(s._look())
+    assert len([e for e in events if e.kind == "read_text"]) == 1
+    # 見た目が変わった（開示された）ボタンは読み直す
+    windows.shot = _shot([(slots[0].rect, 250)] + [(x.rect, 120) for x in slots[1:]])
+    windows.texts = [("夕方の帰り道", 0.9, (r[0] + 0.01, r[1] + 0.01, r[2] - 0.01, r[1] + 0.05))]
+    asyncio.run(s._look())
+    assert st.menus["MemoryListUI"].buttons[0].text == "夕方の帰り道"

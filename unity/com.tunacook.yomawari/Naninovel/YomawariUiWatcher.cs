@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Reflection;
 using System.Text;
 using Naninovel;
 using Naninovel.UI;
@@ -12,7 +11,7 @@ namespace Yomawari
     /**
      * <summary>
      * 画面に出ている Naninovel の UI を 0.2 秒ごとに見て、変化があったときだけ出す。
-     * - menu / menu_close: IUIManager が管理する UI の表示・非表示と、その中の押せるボタン（name, rect, type, text, role, hidden, covered）
+     * - menu / menu_close: IUIManager が管理する UI の表示・非表示と、その中の押せるボタン（name, rect, type, role, hidden, covered）
      *   と、スクロール領域（scroll）。DESIGN.md §3、§9「ゲーム固有の仕様」①。ゲーム側に Yomawari 用の部品は求めない（§1）
      * - transition: ISceneTransitionUI / ILoadingUI の表示（start）と非表示（end）
      * - choices: 表示中の選択肢ボタン（id, text, rect, locked）
@@ -23,11 +22,6 @@ namespace Yomawari
     {
         const float Interval = 0.2f;
         const float SignatureGrid = 20f;
-        const int MaxText = 40;
-
-        // TextMeshPro を参照しなくて済むように、TMP_Text は型の名前で探して text を読む（見つからなければ uGUI の Text だけ）
-        static readonly System.Type tmpText = System.Type.GetType("TMPro.TMP_Text, Unity.TextMeshPro");
-        static readonly PropertyInfo tmpTextProp = tmpText?.GetProperty("text");
 
         class Shown
         {
@@ -118,7 +112,8 @@ namespace Yomawari
             else YomawariLog.Emit("menu_close", "\"name\":" + YomawariFormat.Str(s.Name));
         }
 
-        // 押せるボタン（Selectable で interactable なもの）の [{name, rect, type, text, role, hidden, covered}]。
+        // 押せるボタン（Selectable で interactable なもの）の [{name, rect, type, role, hidden, covered}]。
+        // ボタンの文字は出さない。ハーネスが画面から読む（DESIGN.md §9「画面の文字を読む」。UI の部品の作りに頼らないため）
         // covered は、中心をクリックしたときに EventSystem のレイキャストがほかの UI に先に当たるもの（上に重なった画面など）。
         // rect は祖先の RectMask2D / Mask と画面で切り取った見えている部分。中心が見えていないボタンは hidden にして、
         // 矩形は切り取らずに出す（ハーネスは同じ名前のボタンを出てきた順で数えるので、スクロールしても番号が変わらないように）
@@ -135,17 +130,15 @@ namespace Yomawari
                 var hidden = !Clip(rt, ref min, ref max);
                 var covered = !hidden && Covered(s, (min + max) / 2);
                 var role = Role(s);
-                var text = TextOf(s);
                 if (json.Length > 1) json.Append(',');
                 json.Append("{\"name\":").Append(YomawariFormat.Str(s.name))
                     .Append(",\"rect\":").Append(YomawariFormat.Rect(min.x, min.y, max.x, max.y, Screen.width, Screen.height))
                     .Append(",\"type\":").Append(YomawariFormat.Str(TypeOf(s)));
-                if (text != null) json.Append(",\"text\":").Append(YomawariFormat.Str(text));
                 if (role != null) json.Append(",\"role\":").Append(YomawariFormat.Str(role));
                 if (hidden) json.Append(",\"hidden\":true");
                 if (covered) json.Append(",\"covered\":true");
                 json.Append('}');
-                AppendSignature(sig, s.name + "|" + text + (hidden ? "~" : "") + (covered ? "^" : ""), min, max);
+                AppendSignature(sig, s.name + "|" + (hidden ? "~" : "") + (covered ? "^" : ""), min, max);
             }
             signature = sig.ToString();
             return json.Append(']').ToString();
@@ -202,23 +195,6 @@ namespace Yomawari
                 if (t.Name == "TMP_InputField") return "input";
             }
             return "other";
-        }
-
-        // ボタンの子の Text / TMP_Text の文字（役割の推定に使う。DESIGN.md §9「役割の推定と判定」）。
-        // 改行と前後の空白を詰め、MaxText 文字で切る。文字がなければ null
-        static string TextOf(Selectable s)
-        {
-            string raw = null;
-            var ui = s.GetComponentInChildren<UnityEngine.UI.Text>(false);
-            if (ui != null) raw = ui.text;
-            else if (tmpText != null && tmpTextProp != null)
-            {
-                var tmp = s.GetComponentInChildren(tmpText, false);
-                if (tmp != null) raw = tmpTextProp.GetValue(tmp) as string;
-            }
-            if (string.IsNullOrWhiteSpace(raw)) return null;
-            var t = string.Join(" ", raw.Split(new[] { '\n', '\r', '\t' }, System.StringSplitOptions.RemoveEmptyEntries)).Trim();
-            return t.Length > MaxText ? t.Substring(0, MaxText) : t;
         }
 
         // Naninovel の標準の部品から分かる役割（§9「ゲーム固有の仕様」①）。分からなければ null（ハーネスが推定する）
