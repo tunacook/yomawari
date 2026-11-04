@@ -178,6 +178,10 @@ def run(
     ),
     seed: str | None = typer.Option(None, "--seed", help="乱数シード。既定は yomawari.toml の run.seed"),
     no_open: bool = typer.Option(False, "--no-open", help="終了後にレポートを開かない"),
+    display_off: bool | None = typer.Option(
+        None, "--display-off/--no-display-off",
+        help="ゲームが起動したあと、画面（ディスプレイ）を消す（macOS: pmset displaysleepnow）。既定は yomawari.toml の run.display_off",
+    ),
 ) -> None:
     """ビルドを起動して監視し、report.md を出力する。"""
     if mode is not None and mode not in MODES:
@@ -213,11 +217,22 @@ def run(
     roles = RoleBook(load_role_hints(cfg.rules_path), cfg.runs_dir / "_experience" / f"{game}.json")
 
     rc = cfg.run
+    dark = bool(rc["display_off"] if display_off is None else display_off)
+    if dark:
+        lock = getattr(plat, "screen_lock_delay", lambda: None)()
+        console.print(f"ゲームが起動して {float(rc['display_off_delay_sec']):.0f} 秒後に、画面を消します")
+        if lock is not None and lock != "off":
+            when = "すぐ" if lock == "immediate" else lock.replace(" seconds", " 秒後に")
+            err.print(f"[yellow]注意: この Mac は画面が消えると{when}ロックされます。ロックされると操作できません"
+                      "（システム設定 > ロック画面 の「スクリーンセーバの開始後またはディスプレイがオフのときにパスワードを要求」を"
+                      "「しない」か長い時間にする）[/]")
     opts = RunOptions(
         hours=float(hours if hours is not None else rc["hours"]),
         mode=mode,
         seed=str(seed if seed is not None else rc["seed"]),
         purpose=goal,
+        display_off=dark,
+        display_off_delay_sec=float(rc["display_off_delay_sec"]),
     )
     live = Live(Text("起動中…"), console=console, refresh_per_second=2) if console.is_terminal else None
     harness = Harness(

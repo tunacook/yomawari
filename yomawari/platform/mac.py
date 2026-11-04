@@ -33,6 +33,16 @@ def parse_lsappinfo_pid(out: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def parse_screen_lock(out: str) -> str | None:
+    """sysadminctl -screenLock status の出力から、ロックまでの時間を読む。"""
+    m = re.search(r"screenLock delay is (immediate|\d+ seconds)", out)
+    if m:
+        return m.group(1)
+    if re.search(r"screenLock is off", out):
+        return "off"
+    return None
+
+
 def app_bundle_of(exe: str) -> str | None:
     """実行ファイルのパスから、いちばん外側の .app を返す（VS Code の Helper.app などは外側のアプリにまとめる）。"""
     head, sep, _ = exe.partition(".app/")
@@ -365,6 +375,20 @@ class MacPlatform:
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except OSError:
             return None
+
+    def display_off(self) -> bool:
+        try:
+            return subprocess.run(["pmset", "displaysleepnow"], capture_output=True, timeout=10).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def screen_lock_delay(self) -> str | None:
+        """`sysadminctl -screenLock status` の「screenLock delay is immediate」などから読む。"""
+        try:
+            r = subprocess.run(["sysadminctl", "-screenLock", "status"], capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return parse_screen_lock(r.stdout + r.stderr)
 
     def activate(self, pid: int) -> None:
         from AppKit import NSApplicationActivateAllWindows, NSRunningApplication

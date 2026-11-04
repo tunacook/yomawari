@@ -386,6 +386,7 @@ role_min_confidence = 0.7    # ボタンの見た目からの役割の推定（�
 - 時間予算、同一箇所での連続クラッシュ時の打ち切り
 - 終了時のセーブ・設定の復元。異常終了した場合は次回起動時に未復元を検出して復元
 - `caffeinate -dimsu -w <ハーネスの pid>` を起動して、ランのあいだ画面とシステムのスリープを防ぐ（`platform` の `keep_awake`）
+- `--display-off`（`run.display_off`）なら、ゲームが起動して `run.display_off_delay_sec` 秒後に画面を消す（macOS: `pmset displaysleepnow`。`platform` の `display_off`）。夜間に画面を点けたままにしないため。画面が消えてからロックされるまでの時間（`sysadminctl -screenLock status`。`platform` の `screen_lock_delay`）を開始時に見て、すぐロックされる設定なら注意を出し、「ハーネスの記録」にも書く。ロックされると入力を受け付けないので、その間は下の「操作できなかった時間」に出る
 - 画面のロック中（`platform` の `screen_locked`）とゲームを前面にできないときは、OS が入力を受け付けない。操作を試す間隔を `blocked_wait_sec` あけ、`blocked_note_sec` 以上続いた時間を「ハーネスの記録」に書く。`events.jsonl` には `input_blocked` / `input_resumed` を1回ずつ出す
 
 保存場所（macOS、ビルド）:

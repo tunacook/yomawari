@@ -24,6 +24,8 @@ RUN_DEFAULTS: dict[str, Any] = {
     "keep_runs_days": 14,
     "max_restarts": 20,
     "quit_timeout_sec": 10.0,
+    "display_off": False,  # ゲームが起動したあと、画面（ディスプレイ）を消す（macOS: pmset displaysleepnow）。--display-off
+    "display_off_delay_sec": 10.0,  # ゲームが起動してから画面を消すまでの時間
 }
 SENSOR_DEFAULTS: dict[str, Any] = {
     "log_poll_sec": 0.1,
