@@ -22,6 +22,7 @@ import asyncio
 import dataclasses
 from fnmatch import fnmatchcase
 import random
+import re
 import time
 from collections import Counter, deque
 from collections.abc import Callable
@@ -36,6 +37,7 @@ from .decider import Decider
 from .experience import Experience, Press
 from .guard import Guard
 from .looks import Values, alike, brightest, dark, groups, inactive, measure
+from .advisor import ChoiceAdvisor
 from .reading import assign, unread
 from .ops import (
     Op,
@@ -110,6 +112,12 @@ class FuzzRun:
     stopped_reason: str | None = None
     # OS が入力を受け付けなかった（画面のロック・ゲームを前面にできない）。いま続いているもの (理由, 始まりの時刻)
     blocked_since: tuple[str, float] | None = None
+    # 本文の文脈から、どれを先に試すかを AI に聞く（fuzz/advisor.py）。None なら聞かない
+    advisor: ChoiceAdvisor | None = None
+    lines: deque[str] = field(default_factory=lambda: deque(maxlen=100))  # 最近の本文
+    question: list[str] = field(default_factory=list)  # 流れを始めたときの、質問の前の本文
+    read_lines: list[str] = field(default_factory=list)  # 流れの途中で読んだ本文
+    advice_seen: set[Any] = field(default_factory=set)
     # 画面の文字を読む（fuzz/reading.py）
     read_done: set[str] = field(default_factory=set)  # 画面から文字を読んだボタン（見た目が変わったら読み直す）
     read_look: dict[str, tuple[float, float]] = field(default_factory=dict)  # 読んだときのボタンの明るさ
@@ -209,6 +217,17 @@ class FuzzSession:
             return None
         return lp[0]
 
+    def _remember_line(self, d: dict[str, Any]) -> None:
+        """本文を覚える（AI に文脈として渡す）。"""
+        text = " ".join(re.sub(r"<[^>]*>", "", str(d.get("text") or "")).split())  # <br> などのタグは詰める
+        if not text:
+            return
+        speaker = d.get("speaker")
+        line = f"{speaker}「{text}」" if speaker else text
+        self.run.lines.append(line)
+        if self.run.flow.active is not None and len(self.run.read_lines) < 200:
+            self.run.read_lines.append(line)
+
     def _observe(self, ev: Event) -> None:
         """タイトル画面の再表示と解像度の変化を、直前に押したボタンの役割として確定する。"""
         if ev.launch != self.launch:
@@ -259,6 +278,8 @@ class FuzzSession:
         if ev.source == "game":
             self._observe(ev)
             self._progress(ev)
+            if ev.kind == "line" and ev.launch == self.launch:
+                self._remember_line(ev.data)
         if self.run.mode != "fuzz" or ev.source != "game" or ev.kind not in TRIGGERS or ev.launch != self.launch:
             return
         if ev.kind in ("transition", "save", "load") and ev.data.get("phase") != "start":
@@ -401,6 +422,10 @@ class FuzzSession:
         flow = tracker.active
         if flow is None:
             return cands
+        if before[0] is None:
+            # 流れを始めた（同じ質問に戻ってきたときも）: 質問の前の本文を覚え、途中で読んだ本文を数え直す
+            run.question = list(run.lines)[-int(cfg["ai_context_lines"]):]
+            run.read_lines = []
         boost, low = float(cfg["flow_factor"]), float(cfg["flow_avoid_factor"])
         quiet = self._quiet() | run.silent
         done = tracker.done_steps()
@@ -426,6 +451,8 @@ class FuzzSession:
             tracker.note_exhausted()
             fresh = set(options.values())  # 試せる組み合わせをすべて試した。ほかの道もないので、どれも同じに戻す
         going = {o for o in fresh if tracker.tried(o)}
+        favored = self._advice(going or fresh, cands, options)
+        ai = float(cfg["ai_choice_factor"])
         out = []
         for op in cands:
             t = op.target
@@ -442,9 +469,38 @@ class FuzzSession:
                 if o not in fresh:
                     f = low
                 elif not going or o in going:
-                    f = boost
+                    f = boost * (ai if o in favored else 1.0)
             out.append(dataclasses.replace(op, weight=op.weight * f) if f != 1.0 else op)
         return out
+
+    def _advice(self, pick: set[str], cands: list[Op], options: dict[str, str]) -> set[str]:
+        """先に試す候補のうち、本文の文脈にいちばん合うと AI が答えたもの。答えがまだ・聞かない目的なら空。"""
+        run, tracker = self.run, self.run.flow
+        if run.advisor is None or not self.cfg["ai_choice"] or len(pick) < 2 or tracker.ctx is None:
+            return set()
+        texts: dict[str, str] = {}
+        for op in cands:
+            o, t = options.get(op.label), op.target
+            if o in pick and t is not None:
+                text = t.text if t.kind == "button" else o  # 選択肢の候補は本文そのもの
+                if text:
+                    texts[o] = text
+        if len(texts) < 2:
+            return set()  # 文字の分からない候補（アイコンだけなど）は比べられない
+        key = (tracker.ctx, tracker.index, tuple(tracker.path))
+        scores = run.advisor.scores(key, run.question, run.read_lines, texts)
+        if not scores:
+            return set()
+        best = max(scores.values())
+        favored = {o for o, v in scores.items() if v == best and v > 0}
+        seen = (key, tuple(sorted(texts.items())))
+        if seen not in run.advice_seen:
+            run.advice_seen.add(seen)
+            self.publish(Event("harness", "advice", {
+                "flow": tracker.ctx[0], "question": tracker.ctx[1], "step": tracker.index + 1,
+                "scores": {texts[o]: scores.get(o) for o in texts}, "favored": sorted(texts[o] for o in favored),
+            }, self.launch))
+        return favored
 
     def _note_flow(self, before: tuple[str | None, int], after: tuple[str | None, int]) -> None:
         """流れを始めた・手順を進めたことを events.jsonl に残す（「ハーネスの記録」には、ランの終わりにまとめて書く）。"""

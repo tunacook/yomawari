@@ -26,6 +26,7 @@ from .config import BuildConfig
 from .detect.engine import Engine, Rule, RuleError
 from .events import Event, Issue, now_wall
 from .fuzz.decider import RandomDecider
+from .fuzz.advisor import ChoiceAdvisor
 from .fuzz.experience import Experience
 from .fuzz.flow import FlowTracker
 from .fuzz.guard import Guard
@@ -93,6 +94,7 @@ class Harness:
         spec: GameSpec | None = None,
         driver_factory: Callable[[], InputDriver] | None = None,
         roles: RoleBook | None = None,
+        judge_cfg: dict[str, Any] | None = None,
     ) -> None:
         self.build = build
         self.exe = exe
@@ -105,6 +107,7 @@ class Harness:
         self.on_status = on_status
         self.fuzz_cfg = fuzz_cfg or {}
         self.spec = spec or GameSpec()
+        self.judge_cfg = judge_cfg  # [judge]（Ollama）。None なら AI に聞かない
         self.driver_factory = driver_factory
         self.roles = roles or RoleBook()
         self.engine = Engine(rules)
@@ -344,6 +347,9 @@ class Harness:
                 # 進め方の経験は、ボタンの役割と同じファイル（runs/_experience/<ゲーム>.json）に覚える
                 experience=Experience(self.roles.path),
             )
+            if self.fuzz_cfg["ai_choice"] and self.fuzz_cfg["use_flow"] and self.spec.flows and self.judge_cfg is not None:
+                # 流れの手順で選ぶものを、本文の文脈から AI に点数を付けさせる（fuzz/advisor.py）
+                self._fuzz.advisor = ChoiceAdvisor.from_judge(self.judge_cfg, float(self.fuzz_cfg["ai_timeout_sec"]))
             if opts.mode == "random" and self.fuzz_cfg["learn"]:
                 # 進行につながった操作を優先し、巻き戻した操作を後回しにする。fuzz モードでは掛けない（いつもの道に偏らないように）
                 exp, fc = self._fuzz.experience, self.fuzz_cfg
@@ -409,6 +415,9 @@ class Harness:
                 self.notes += self._fuzz.flow.summary()
                 self.notes.append(self._fuzz.summary())
                 self.notes += self._fuzz.blocked_notes(time.time())
+                if self._fuzz.advisor is not None:
+                    self.notes += self._fuzz.advisor.summary()
+                    self._fuzz.advisor.close()
                 try:
                     self._fuzz.experience.save()
                 except OSError as e:
