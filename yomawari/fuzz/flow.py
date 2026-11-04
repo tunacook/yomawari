@@ -10,6 +10,13 @@
 最後まで進めたとする。最後の手順が押す手順でない（本文を最後まで読むなど）ときは、その条件から外れたら最後まで
 進めたとする。流れのどの画面・scene にも当てはまらない状態が flow_idle_sec 続いたら、途切れたとする。
 
+試行錯誤: 同じ質問（流れを始めたときの本文の行）で流れをもう一度始めたら、前に選んだ組み合わせ（手順ごとに押した
+ボタン・選んだ選択肢の並び）は外れだったとみなす。人が「この思い出のこの言葉はだめだった」と覚えるように、
+組み合わせを木として覚え、まだ試していない枝を選ぶ。いまの枝（同じ思い出）にまだ試していないものが残っていれば
+そちらを先に試し、すべて試し終えた枝（言葉をすべて試した思い出）は後回しにする。一度済ませれば次からは要らない
+手順（思い出を読むと言葉が開示される、など）には once = true を書く。同じ選び方で一度済ませた once の手順は飛ばし、
+その手順のボタンを後回しにする（once の手順は、組み合わせには数えない）。
+
 条件は、画面（screen）・scene・選択肢が出ていること（choices）で書く。画面（screen）は、いま押せる画面（手前のモーダル、なければボタンの見えている画面）の名前で見る。ボタンの名前は
 "<menu>/<name>" か "<name>" で、* などのワイルドカードを使える。
 """
@@ -54,6 +61,7 @@ class Step:
     # 選択肢を選んで答える。文字のワイルドカードを書けば、その本文の選択肢だけ（空の配列ならどれでもよい）
     choose: tuple[str, ...] | None = None
     note: str = ""
+    once: bool = False  # 同じ選び方で一度済ませたら、次からは飛ばす手順
 
 
 @dataclass(frozen=True)
@@ -106,7 +114,7 @@ def _names(raw: Any, where: str) -> tuple[str, ...]:
     return tuple(raw)
 
 
-STEP_KEYS = ("screen", "scene", "by", "choices", "press", "advance", "choose", "note")
+STEP_KEYS = ("screen", "scene", "by", "choices", "press", "advance", "choose", "note", "once")
 
 
 def parse_flows(raw: Any) -> list[Flow]:
@@ -145,7 +153,7 @@ def parse_flows(raw: Any) -> list[Flow]:
                 cond_raw = {"choices": True}
             when = _cond(cond_raw, sw)
             steps.append(Step(when, _names(s.get("press"), f"{sw}.press"), bool(s.get("advance", False)),
-                              choose, str(s.get("note", ""))))
+                              choose, str(s.get("note", "")), bool(s.get("once", False))))
         if not steps:
             raise ConfigError(f"{where}（{name}）に steps がありません")
         flows.append(Flow(name, _cond(f.get("start"), f"{where}.start"), tuple(steps),
@@ -159,6 +167,11 @@ class FlowStats:
     completed: int = 0
     furthest: int = 0  # いちばん先まで進んだ手順（1 始まり）
     broken: list[str] = field(default_factory=list)  # 途切れた手順（直近のもの）
+    retried: int = 0  # 同じ質問でもう一度始めた（前の組み合わせが外れだった）回数
+
+
+Path = tuple[str, ...]  # 流れの中で選んだもの（押したボタンの label・選んだ選択肢の本文）の並び
+Ctx = tuple[str, str]  # (流れの名前, 始めたときの本文の行。なければ scene)
 
 
 class FlowTracker:
@@ -171,6 +184,14 @@ class FlowTracker:
         self.idle_since: float | None = None
         self.stats: dict[str, FlowStats] = {f.name: FlowStats() for f in flows}
         self.events: list[str] = []  # 「ハーネスの記録」向けに、流れを始めた・進めた・途切れたこと
+        # 試行錯誤
+        self.ctx: Ctx | None = None
+        self.path: list[str] = []
+        self.options: dict[tuple[Ctx, Path], set[str]] = {}  # 選んだものの並び → 次の手順で選べたもの
+        self.leaves: set[tuple[Ctx, Path]] = set()  # 最後まで進めた組み合わせ
+        self.done_once: set[tuple[str, int, Path]] = set()  # (流れ, 手順, 選んだものの並び) で済ませた once の手順
+        self.ctx_seen: set[Ctx] = set()
+        self.exhausted_noted: set[Ctx] = set()
 
     @property
     def step(self) -> Step | None:
@@ -183,11 +204,18 @@ class FlowTracker:
                 if f.start.match(state, opened_by):
                     self.active, self.index, self.idle_since = f, 0, None
                     self.stats[f.name].started += 1
+                    self.ctx = (f.name, (state.line or {}).get("line_id") or state.scene or "")
+                    self.path = []
+                    if self.ctx in self.ctx_seen:
+                        self.stats[f.name].retried += 1
+                    self.ctx_seen.add(self.ctx)
                     break
             else:
                 return None
         flow = self.active
         for i in range(self.index, len(flow.steps)):
+            if self.is_done(i):
+                continue  # 同じ選び方で一度済ませた手順（読んだ思い出をもう一度読む、など）は飛ばす
             if flow.steps[i].when.match(state, opened_by):
                 if i != self.index:
                     self.index = i
@@ -211,17 +239,76 @@ class FlowTracker:
                         "流れのどの画面でもなくなった")
         return None
 
+    def is_done(self, i: int) -> bool:
+        """手順 i が once で、いまの選び方で一度済ませたか。"""
+        flow = self.active
+        return (flow is not None and flow.steps[i].once
+                and (flow.name, i, tuple(self.path)) in self.done_once)
+
+    def done_steps(self) -> list[Step]:
+        """いまの選び方で済ませた once の手順（そのボタンは後回しにする）。"""
+        flow = self.active
+        return [s for i, s in enumerate(flow.steps) if self.is_done(i)] if flow is not None else []
+
+    def offer(self, options: list[str]) -> None:
+        """いまの手順で選べるもの（押しても反応しないと見込んでいるものを除く）を覚える。"""
+        if self.ctx is None or not options or (self.step is not None and self.step.once):
+            return
+        self.options.setdefault((self.ctx, tuple(self.path)), set()).update(options)
+
+    def exhausted(self, option: str) -> bool:
+        """いまの選び方に option を足した枝を、すべて試し終えたか（外れだった）。"""
+        return self.ctx is not None and self._exhausted(self.ctx, (*self.path, option), 0)
+
+    def _exhausted(self, ctx: Ctx, path: Path, depth: int) -> bool:
+        if (ctx, path) in self.leaves:
+            return True
+        opts = self.options.get((ctx, path))
+        if not opts or depth > 32:
+            return False
+        return all(self._exhausted(ctx, (*path, o), depth + 1) for o in opts)
+
+    def note_exhausted(self) -> None:
+        """いまの手順で選べるものの枝を、すべて試し終えた（同じ質問で、試せる組み合わせがもうない）。"""
+        if self.ctx is None or self.ctx in self.exhausted_noted:
+            return
+        self.exhausted_noted.add(self.ctx)
+        tried = sum(1 for c, _p in self.leaves if c == self.ctx)
+        self.events.append(
+            f"流れ「{self.ctx[0]}」の `{self.ctx[1]}` で、試せる組み合わせ（{tried} 通り）をすべて試しても先に進めなかった"
+            f"（手順 {self.index + 1}。まだ開示されていないものが答えか、進めない不具合の可能性がある）"
+        )
+
+    def tried(self, option: str) -> bool:
+        """いまの選び方に option を足した枝を、前に試しはじめたことがあるか（同じ思い出の、ほかの言葉を試すため）。"""
+        if self.ctx is None:
+            return False
+        p = (*self.path, option)
+        return (self.ctx, p) in self.options or (self.ctx, p) in self.leaves
+
     def pressed(self, label: str, name: str, responded: bool, choice_text: str | None = None) -> None:
-        """押した結果。最後の手順のボタン（選択肢）で反応があれば、最後まで進めたとする。"""
+        """押した結果。手順のボタン（選択肢）で反応があれば、選んだものとして覚える。最後の手順なら、最後まで進めたとする。"""
         flow, step = self.active, self.step
-        if flow is None or step is None or not responded or self.index != len(flow.steps) - 1:
+        if flow is None or step is None or not responded:
             return
         if choice_text is not None:
             if step.choose is None or (step.choose and not any(fnmatchcase(choice_text, p) for p in step.choose)):
                 return
-        elif step.press and not matches(label, name, step.press):
-            return
-        self._complete(f"`{label}`")
+            picked = choice_text
+        else:
+            if step.when.screen is not None and not label.startswith(step.when.screen + "/"):
+                return
+            if not step.press or not matches(label, name, step.press):
+                return
+            picked = label
+        if step.once:
+            self.done_once.add((flow.name, self.index, tuple(self.path)))
+        else:
+            self.path.append(picked)
+        if self.index == len(flow.steps) - 1:
+            if self.ctx is not None:
+                self.leaves.add((self.ctx, tuple(self.path)))
+            self._complete(f"`{label}`")
 
     def _complete(self, how: str) -> None:
         assert self.active is not None
@@ -253,7 +340,10 @@ class FlowTracker:
             if st.furthest:
                 s = f.steps[st.furthest - 1]
                 line += f"（{s.note or s.when}）"
+            if st.retried:
+                tried = sum(1 for c, _p in self.leaves if c[0] == f.name)
+                line += f"。同じ質問でもう一度始めた（前の組み合わせが外れだった）のは {st.retried} 回、試した組み合わせは {tried} 通り"
             if st.broken:
                 line += "。途切れたところ（直近）: " + " / ".join(st.broken)
             out.append(line)
-        return out
+        return out + [e for e in self.events if "すべて試しても" in e]
