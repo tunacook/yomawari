@@ -62,6 +62,16 @@ class Step:
     choose: tuple[str, ...] | None = None
     note: str = ""
     once: bool = False  # 同じ選び方で一度済ませたら、次からは飛ばす手順
+    text: tuple[str, ...] = ()  # 押すボタンを、画面に見える文字（画面から読んだもの）で書く。press と両方あればどちらか
+
+    @property
+    def targets(self) -> bool:
+        """押すボタンを書いた手順か。"""
+        return bool(self.press or self.text)
+
+    def presses(self, label: str, name: str, text: str | None) -> bool:
+        """ボタンが、この手順で押すボタンか（名前か、画面に見える文字で）。"""
+        return matches(label, name, self.press) or text_matches(text, self.text)
 
 
 @dataclass(frozen=True)
@@ -70,6 +80,10 @@ class Flow:
     start: Cond
     steps: tuple[Step, ...]
     avoid: tuple[str, ...] = ()  # 流れの途中で押すと流れから外れるボタン
+    avoid_text: tuple[str, ...] = ()  # 同じく、画面に見える文字で書いたもの
+
+    def avoids(self, label: str, name: str, text: str | None) -> bool:
+        return matches(label, name, self.avoid) or text_matches(text, self.avoid_text)
 
     def screens(self) -> set[str]:
         return {c.screen for c in (self.start, *(s.when for s in self.steps)) if c.screen}
@@ -87,6 +101,19 @@ def matches(target_label: str, target_name: str, patterns: tuple[str, ...]) -> b
     """ボタン（"<menu>/<name>#n" の label と、name）が、プロファイルに書いたボタンの名前のどれかに当てはまる。"""
     base = target_label.split("#", 1)[0]
     return any(fnmatchcase(base, p) or fnmatchcase(target_name, p) for p in patterns)
+
+
+def _squash(s: str) -> str:
+    return "".join(s.split())
+
+
+def text_matches(text: str | None, patterns: tuple[str, ...]) -> bool:
+    """画面に見える文字（画面から読んだもの）が、プロファイルに書いた文字のどれかに当てはまる（ワイルドカード可）。
+    画面から読んだ文字は、行の折り返しや字間で空白が入ることがあるので、空白を除いて比べる。"""
+    if not text or not patterns:
+        return False
+    t = _squash(text)
+    return any(fnmatchcase(t, _squash(p)) for p in patterns)
 
 
 def _cond(raw: Any, where: str) -> Cond:
@@ -114,7 +141,7 @@ def _names(raw: Any, where: str) -> tuple[str, ...]:
     return tuple(raw)
 
 
-STEP_KEYS = ("screen", "scene", "by", "choices", "press", "advance", "choose", "note", "once")
+STEP_KEYS = ("screen", "scene", "by", "choices", "press", "text", "advance", "choose", "note", "once")
 
 
 def parse_flows(raw: Any) -> list[Flow]:
@@ -128,9 +155,9 @@ def parse_flows(raw: Any) -> list[Flow]:
         where = f"flow[{n}]"
         if not isinstance(f, dict):
             raise ConfigError(f"{where} は表にしてください")
-        unknown = sorted(set(f) - {"name", "start", "steps", "avoid"})
+        unknown = sorted(set(f) - {"name", "start", "steps", "avoid", "avoid_text"})
         if unknown:
-            raise ConfigError(f"{where}: 知らない項目です: {', '.join(unknown)}（name / start / steps / avoid）")
+            raise ConfigError(f"{where}: 知らない項目です: {', '.join(unknown)}（name / start / steps / avoid / avoid_text）")
         name = str(f.get("name") or f"flow{n}")
         steps = []
         for i, s in enumerate(f.get("steps") or []):
@@ -153,11 +180,12 @@ def parse_flows(raw: Any) -> list[Flow]:
                 cond_raw = {"choices": True}
             when = _cond(cond_raw, sw)
             steps.append(Step(when, _names(s.get("press"), f"{sw}.press"), bool(s.get("advance", False)),
-                              choose, str(s.get("note", "")), bool(s.get("once", False))))
+                              choose, str(s.get("note", "")), bool(s.get("once", False)),
+                              _names(s.get("text"), f"{sw}.text")))
         if not steps:
             raise ConfigError(f"{where}（{name}）に steps がありません")
         flows.append(Flow(name, _cond(f.get("start"), f"{where}.start"), tuple(steps),
-                          _names(f.get("avoid"), f"{where}.avoid")))
+                          _names(f.get("avoid"), f"{where}.avoid"), _names(f.get("avoid_text"), f"{where}.avoid_text")))
     return flows
 
 
@@ -232,7 +260,7 @@ class FlowTracker:
                 self.idle_since = None
                 return flow.steps[i]
         last = flow.steps[-1]
-        if self.index == len(flow.steps) - 1 and not last.press and last.choose is None and last.when.screen is None:
+        if self.index == len(flow.steps) - 1 and not last.targets and last.choose is None and last.when.screen is None:
             # 最後の手順（本文を最後まで読むなど）の条件から外れた。押して終える手順がないので、ここで最後まで進めたとする
             self._complete("最後の手順の条件から外れた")
             return None
@@ -294,7 +322,8 @@ class FlowTracker:
         p = (*self.path, option)
         return (self.ctx, p) in self.options or (self.ctx, p) in self.leaves
 
-    def pressed(self, label: str, name: str, responded: bool, choice_text: str | None = None) -> None:
+    def pressed(self, label: str, name: str, responded: bool, choice_text: str | None = None,
+                text: str | None = None) -> None:
         """押した結果。手順のボタン（選択肢）で反応があれば、選んだものとして覚える。最後の手順なら、最後まで進めたとする。"""
         flow, step = self.active, self.step
         if flow is None or step is None or not responded:
@@ -306,7 +335,7 @@ class FlowTracker:
         else:
             if step.when.screen is not None and not label.startswith(step.when.screen + "/"):
                 return
-            if not step.press or not matches(label, name, step.press):
+            if not step.targets or not step.presses(label, name, text):
                 return
             picked = label
         if step.once:
