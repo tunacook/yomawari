@@ -205,3 +205,119 @@ steps = [
     _feed(st, "scene", name="main/s2")
     tracker.update(st, {}, 2, 10)
     assert tracker.active is None and tracker.stats["思い出を読む"].completed == 1
+
+
+TRIAL = """
+[[flow]]
+name = "質問に答える"
+start = { screen = "MemoryListUI", by = "game" }
+steps = [
+  { screen = "MemoryListUI", press = "MemoryListGridSlot*" },
+  { screen = "MemorySummaryUI", press = "StartToMemoryScenario", once = true },
+  { scene = "memories/*", advance = true, once = true },
+  { screen = "MemorySummaryUI", press = "ShowFragmentListButton" },
+  { screen = "MemoryFragmentListUI", press = "MemoryFragmentListSlot*" },
+  { screen = "FragmentSelectDialogUI", press = "Accept" },
+]
+"""
+FRAGS = [{"name": "MemoryFragmentListSlot(Clone)", "rect": [0.2 + 0.2 * i, 0.2, 0.35 + 0.2 * i, 0.3]} for i in range(2)]
+
+
+def _only(st, name, buttons):
+    for m in list(st.menus):
+        _feed(st, "menu_close", name=m)
+    _feed(st, "menu", name=name, modal=True, buttons=buttons)
+
+
+def _press(s, st, run, label):
+    w = _weights(s, st)
+    name = label.split("/", 1)[1].split("#", 1)[0]
+    run.flow.pressed(label, name, True)
+    return w
+
+
+def test_retrying_the_same_question_tries_other_answers():
+    # 同じ質問に戻ってきたら、外れた組み合わせを避ける。同じ思い出のまだ試していない言葉を先に試し、
+    # 言葉をすべて試した思い出は後回しにして、ほかの思い出へ。一度読んだ思い出は読み直さない
+    s, st, run, _ = _session()
+    run.flow = FlowTracker(parse_flows(tomllib.loads(TRIAL)["flow"]))
+    k, low = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"]
+    click = FUZZ_DEFAULTS["weights"]["click"]
+    slot = "MemoryListUI/MemoryListGridSlot (Clone)"
+    frag = "MemoryFragmentListUI/MemoryFragmentListSlot(Clone)"
+
+    def ask():
+        _feed(st, "scene", name="main/s6")
+        _feed(st, "line", line_id="main/s6:70", text="ねぇ、どこだって？")
+        _only(st, "MemoryListUI", LIST)
+
+    def answer(memory, fragment, read):
+        _press(s, st, run, memory)
+        _only(st, "MemorySummaryUI", SUMMARY)
+        w = _weights(s, st)
+        if read:
+            assert w["click MemorySummaryUI/StartToMemoryScenario"] == click * k
+            run.flow.pressed("MemorySummaryUI/StartToMemoryScenario", "StartToMemoryScenario", True)
+            for m in list(st.menus):
+                _feed(st, "menu_close", name=m)
+            _feed(st, "scene", name="memories/m1")
+            _feed(st, "line", line_id="memories/m1:1", text="a")
+            _weights(s, st)
+            _feed(st, "scene", name="main/s6")
+            _only(st, "MemorySummaryUI", SUMMARY)
+            w = _weights(s, st)
+        else:
+            # 読んだ思い出は読み直さず、言葉を選ぶ
+            assert w["click MemorySummaryUI/StartToMemoryScenario"] == pytest.approx(click * low)
+        assert w["click MemorySummaryUI/ShowFragmentListButton"] == click * k
+        run.flow.pressed("MemorySummaryUI/ShowFragmentListButton", "ShowFragmentListButton", True)
+        _only(st, "MemoryFragmentListUI", FRAGS)
+        w = _press(s, st, run, fragment)
+        _only(st, "FragmentSelectDialogUI", [{"name": "Accept", "rect": [0.5, 0.6, 0.7, 0.7]}])
+        _press(s, st, run, "FragmentSelectDialogUI/Accept")
+        assert run.flow.active is None
+        return w
+
+    ask()
+    w = _weights(s, st)
+    assert all(w[f"click {slot}{n}"] == click * k for n in ("", "#1", "#2"))
+    answer(slot, frag, read=True)
+    # 外れて同じ質問に戻った: 試しかけの思い出（slot）を先に、外れた言葉は後回し
+    ask()
+    w = _weights(s, st)
+    assert w[f"click {slot}"] == click * k and w[f"click {slot}#1"] == click
+    w = answer(slot, frag + "#1", read=False)
+    assert w[f"click {frag}"] == pytest.approx(click * low) and w[f"click {frag}#1"] == click * k
+    # 思い出 slot の言葉はすべて外れた: slot は後回しにして、ほかの思い出へ
+    ask()
+    w = _weights(s, st)
+    assert w[f"click {slot}"] == pytest.approx(click * low)
+    assert w[f"click {slot}#1"] == click * k and w[f"click {slot}#2"] == click * k
+    assert run.flow.stats["質問に答える"].retried == 2
+    assert any("もう一度始めた（前の組み合わせが外れだった）のは 2 回、試した組み合わせは 2 通り" in n
+               for n in run.flow.summary())
+
+
+def test_all_answers_tried_is_noted():
+    s, st, run, _ = _session()
+    run.flow = FlowTracker(parse_flows(tomllib.loads("""
+[[flow]]
+name = "選択肢で答える"
+start = { choices = true }
+steps = [{ choose = true }]
+""")["flow"]))
+    items = [{"id": "a", "text": "はい", "rect": [0.4, 0.4, 0.6, 0.5]}, {"id": "b", "text": "いいえ", "rect": [0.4, 0.5, 0.6, 0.6]}]
+    for text in ("はい", "いいえ"):
+        _feed(st, "line", line_id="main/s1:5", text="行く？")
+        _feed(st, "choices", items=items)
+        w = _weights(s, st)
+        if text == "いいえ":
+            assert w["click choices/はい"] == pytest.approx(FUZZ_DEFAULTS["weights"]["click"] * FUZZ_DEFAULTS["flow_avoid_factor"])
+        run.flow.pressed(f"choices/{text}", "a", True, text)
+        _feed(st, "choices_done")
+    _feed(st, "line", line_id="main/s1:5", text="行く？")
+    _feed(st, "choices", items=items)
+    w = _weights(s, st)
+    # どちらも外れた: どれも同じ重みに戻し、記録に書く
+    assert w["click choices/はい"] == w["click choices/いいえ"] == FUZZ_DEFAULTS["weights"]["click"] * FUZZ_DEFAULTS["flow_factor"]
+    assert any("2 通り）をすべて試しても先に進めなかった" in n for n in run.flow.summary())
