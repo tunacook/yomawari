@@ -321,3 +321,33 @@ steps = [{ choose = true }]
     # どちらも外れた: どれも同じ重みに戻し、記録に書く
     assert w["click choices/はい"] == w["click choices/いいえ"] == FUZZ_DEFAULTS["weights"]["click"] * FUZZ_DEFAULTS["flow_factor"]
     assert any("2 通り）をすべて試しても先に進めなかった" in n for n in run.flow.summary())
+
+
+def test_screen_step_wins_over_lingering_scene_step():
+    # run 0946: 思い出を読み終えて要約に戻っても、答えるまで scene が memories/… のまま。「思い出を読む」手順（scene だけ）に
+    # とどまらず、要約・言葉の一覧・確認ダイアログの手順に進み、答えたら最後まで進めたとする（試した組み合わせも覚える）
+    s, st, run, _ = _session()
+    run.flow = FlowTracker(parse_flows(tomllib.loads(TRIAL)["flow"]))
+    _feed(st, "scene", name="main/s4")
+    _feed(st, "line", line_id="main/s4:44", text="どこ？")
+    _only(st, "MemoryListUI", LIST)
+    _press(s, st, run, "MemoryListUI/MemoryListGridSlot (Clone)")
+    _only(st, "MemorySummaryUI", SUMMARY)
+    _press(s, st, run, "MemorySummaryUI/StartToMemoryScenario")
+    for m in list(st.menus):
+        _feed(st, "menu_close", name=m)
+    _feed(st, "scene", name="memories/m1")
+    _feed(st, "line", line_id="memories/m1:1", text="a")
+    _weights(s, st)
+    assert run.flow.index == 2
+    _only(st, "MemorySummaryUI", SUMMARY)  # scene は memories/m1 のまま
+    w = _weights(s, st)
+    assert run.flow.index == 3
+    assert w["click MemorySummaryUI/ShowFragmentListButton"] == FUZZ_DEFAULTS["weights"]["click"] * FUZZ_DEFAULTS["flow_factor"]
+    run.flow.pressed("MemorySummaryUI/ShowFragmentListButton", "ShowFragmentListButton", True)
+    _only(st, "MemoryFragmentListUI", FRAGS)
+    _press(s, st, run, "MemoryFragmentListUI/MemoryFragmentListSlot(Clone)#1")
+    _only(st, "FragmentSelectDialogUI", [{"name": "Accept", "rect": [0.5, 0.6, 0.7, 0.7]}])
+    _press(s, st, run, "FragmentSelectDialogUI/Accept")
+    assert run.flow.active is None and run.flow.stats["質問に答える"].completed == 1
+    assert len(run.flow.leaves) == 1
