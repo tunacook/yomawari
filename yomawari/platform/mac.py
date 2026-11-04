@@ -295,6 +295,42 @@ class MacPlatform:
             Quartz.CGImageGetWidth(img), Quartz.CGImageGetHeight(img), Quartz.CGImageGetBytesPerRow(img), bytes(data),
         )
 
+    def read_text(self, shot: Shot) -> list[tuple[str, float, tuple[float, float, float, float]]] | None:
+        """Vision（macOS 標準の文字認識）で、撮った画像の文字を読む。ネットワークには出さない。"""
+        try:
+            import Quartz
+            import Vision
+        except ImportError:
+            return None
+        if shot.order != "BGRA":
+            return None
+        provider = Quartz.CGDataProviderCreateWithData(None, shot.data, len(shot.data), None)
+        img = Quartz.CGImageCreate(
+            shot.width, shot.height, 8, 32, shot.bytes_per_row, Quartz.CGColorSpaceCreateDeviceRGB(),
+            Quartz.kCGBitmapByteOrder32Little | Quartz.kCGImageAlphaPremultipliedFirst, provider, None, False,
+            Quartz.kCGRenderingIntentDefault,
+        )
+        if img is None:
+            return None
+        req = Vision.VNRecognizeTextRequest.alloc().init()
+        req.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+        req.setRecognitionLanguages_(["ja-JP", "en-US"])
+        req.setUsesLanguageCorrection_(True)
+        handler = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(img, None)
+        ok, _err = handler.performRequests_error_([req], None)
+        if not ok:
+            return None
+        out = []
+        for obs in req.results() or []:
+            cands = obs.topCandidates_(1)
+            if not cands:
+                continue
+            bb = obs.boundingBox()  # 0〜1、原点は左下
+            x0, y0 = float(bb.origin.x), 1.0 - float(bb.origin.y + bb.size.height)
+            out.append((str(cands[0].string()), float(cands[0].confidence()),
+                        (x0, y0, x0 + float(bb.size.width), y0 + float(bb.size.height))))
+        return out
+
     def frontmost_pid(self) -> int | None:
         """前面のアプリの pid。
 

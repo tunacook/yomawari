@@ -100,9 +100,10 @@ def test_estimated_roles_decide_guard_kind():
     st.feed(Event("game", "menu", {"name": "TitleUI", "buttons": [
         {"name": "ToExit", "rect": [0.1, 0.1, 0.2, 0.2]},
         {"name": "TitleWebSiteButton", "rect": [0.1, 0.3, 0.2, 0.4]},
-        {"name": "Shop", "rect": [0.1, 0.5, 0.2, 0.6], "text": "ショップ"},
-        {"name": "Start", "rect": [0.1, 0.7, 0.2, 0.8], "text": "はじめから"},
+        {"name": "Shop", "rect": [0.1, 0.5, 0.2, 0.6]},
+        {"name": "Start", "rect": [0.1, 0.7, 0.2, 0.8]},
     ]}, 0))
+    st.set_read_text({"TitleUI/Shop": "ショップ", "TitleUI/Start": "はじめから"})  # 画面から読んだ文字
     ops = normal_candidates(st, Guard({}, book=RoleBook(HINTS)), WEIGHTS, allow_exit=True)
     kinds = {op.target.name: op.kind for op in ops if op.target}
     assert kinds == {"ToExit": "expect_exit", "TitleWebSiteButton": "external", "Start": "click"}  # deny は押さない
@@ -115,7 +116,11 @@ def test_state_counts_title_returns_and_resolution_changes():
     st = GameState()
     feed = lambda kind, **d: st.feed(Event("game", kind, d, 0))
     feed("resolution", w=1920, h=1080, mode="Windowed")
-    feed("menu", name="TitleUI", buttons=[{"name": "Start", "rect": [0.1, 0.1, 0.2, 0.2], "text": "はじめから"}])
+    # パッケージの text は使わず、画面から読んだ文字を付ける。出し直された menu にも引き継ぐ
+    feed("menu", name="TitleUI", buttons=[{"name": "Start", "rect": [0.1, 0.1, 0.2, 0.2], "text": "パッケージの文字"}])
+    assert st.menus["TitleUI"].buttons[0].text is None
+    st.set_read_text({"TitleUI/Start": "はじめから"})
+    feed("menu", name="TitleUI", buttons=[{"name": "Start", "rect": [0.1, 0.1, 0.2, 0.2]}])
     assert st.title_menu == "TitleUI" and st.menus["TitleUI"].buttons[0].text == "はじめから"
     feed("menu_close", name="TitleUI")
     feed("menu", name="TitleUI", buttons=[{"name": "Start", "rect": [0.1, 0.1, 0.2, 0.2]}])
