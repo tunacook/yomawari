@@ -222,6 +222,7 @@ def run(
         fuzz_cfg=goal.apply(cfg.fuzz),
         spec=spec,
         roles=roles,
+        judge_cfg=cfg.judge,
     )
     if live:
         with live:

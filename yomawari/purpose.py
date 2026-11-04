@@ -35,14 +35,14 @@ PURPOSE_DEFAULTS: dict[str, dict[str, Any]] = {
                        "別の画面へ飛ぶものを見る。進め方の経験は使わない",
         "mode": "random",
         "focus": ["S-05", "V-07", "S-01"],
-        "fuzz": {"intent_progress": 0.0, "intent_explore": 1.0, "learn": False, "use_flow": False, "dim_factor": 0.3,
+        "fuzz": {"intent_progress": 0.0, "intent_explore": 1.0, "learn": False, "use_flow": False, "ai_choice": False, "dim_factor": 0.3,
                  "weights": {"click": 10}},
     },
     "gacha": {
         "description": "ガチャプレイ。連打・タイミングをずらした入力・イレギュラーな操作を多めにして、落ちる・固まる操作を探す",
         "mode": "fuzz",
         "focus": ["C-01", "C-02", "C-03", "C-04", "H-01", "L-01"],
-        "fuzz": {"irregular_prob": 0.3, "trigger_prob": 0.6, "learn": False, "use_flow": False},
+        "fuzz": {"irregular_prob": 0.3, "trigger_prob": 0.6, "learn": False, "use_flow": False, "ai_choice": False},
     },
     "rta": {
         "description": "最短で進める。進行につながった操作を強く優先し、寄り道と巻き戻しを避ける。どこまで届いたかを記録する",
