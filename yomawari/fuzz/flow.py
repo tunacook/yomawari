@@ -217,6 +217,14 @@ class FlowTracker:
             if self.is_done(i):
                 continue  # 同じ選び方で一度済ませた手順（読んだ思い出をもう一度読む、など）は飛ばす
             if flow.steps[i].when.match(state, opened_by):
+                if flow.steps[i].when.screen is None:
+                    # scene だけで書いた手順（思い出を読む）は、あとの手順の画面が手前に出ていれば、そちらを先にする。
+                    # Rachel では、思い出を読み終えて要約に戻っても、答えるまで scene が memories/… のまま変わらない
+                    later = next((j for j in range(i + 1, len(flow.steps))
+                                  if flow.steps[j].when.screen is not None and not self.is_done(j)
+                                  and flow.steps[j].when.match(state, opened_by)), None)
+                    if later is not None:
+                        i = later
                 if i != self.index:
                     self.index = i
                 st = self.stats[flow.name]
