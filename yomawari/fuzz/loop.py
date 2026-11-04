@@ -112,6 +112,13 @@ class FuzzRun:
     stopped_reason: str | None = None
     # OS が入力を受け付けなかった（画面のロック・ゲームを前面にできない）。いま続いているもの (理由, 始まりの時刻)
     blocked_since: tuple[str, float] | None = None
+    # 通常のプレイの途中で、ある地点（初めて来た画面・scene）でときどき切り替える区間（purpose.py の Burst）
+    burst_plan: Any = None  # Burst。None なら切り替えない
+    burst_cfg: dict[str, Any] | None = None  # 区間の [fuzz] の設定
+    burst: tuple[str, float, float, int] | None = None  # いまの区間 (地点, 始めた時刻, 終える時刻, 始めたときの操作数)
+    burst_saved: tuple[dict[str, Any], str, str | None] | None = None  # 区間の前の (設定, mode, intent)
+    burst_seen: set[str] = field(default_factory=set)  # 見たことのある地点
+    bursts: list[tuple[str, float, int]] = field(default_factory=list)  # 終えた区間 (地点, 秒数, 操作数)
     # 本文の文脈から、どれを先に試すかを AI に聞く（fuzz/advisor.py）。None なら聞かない
     advisor: ChoiceAdvisor | None = None
     lines: deque[str] = field(default_factory=lambda: deque(maxlen=100))  # 最近の本文
@@ -157,6 +164,18 @@ class FuzzRun:
                 f"{' ほか' if len(spans) > 5 else ''}）。このあいだはゲームの不具合を探せていない。画面をロック・スリープ"
                 "させずに回す（画面を暗くするだけにする）"]
 
+    def burst_notes(self) -> list[str]:
+        """区間（ガチャプレイ・ボタンの網羅）の記録。"""
+        if self.burst_plan is None:
+            return []
+        if not self.bursts:
+            return [f"初めて来た画面・scene {len(self.burst_seen)} か所のどこでも、区間（{self.burst_plan.mode}）を始めなかった"]
+        total = sum(sec for _s, sec, _n in self.bursts)
+        spots = "、".join(f"{s}（{sec:.0f} 秒・{n} 回）" for s, sec, n in self.bursts[:10])
+        more = f" ほか {len(self.bursts) - 10} か所" if len(self.bursts) > 10 else ""
+        return [f"通常のプレイの途中で、初めて来た {len(self.burst_seen)} か所のうち {len(self.bursts)} か所で、区間"
+                f"（{self.burst_plan.mode}）に切り替えた（計 {total:.0f} 秒）: {spots}{more}"]
+
     def summary(self) -> str:
         s = self.stats
         return (
@@ -184,7 +203,6 @@ class FuzzSession:
         self.publish = publish
         self.launch = launch
         self.on_expect_exit = on_expect_exit
-        self.cfg = run.cfg
         self._lock = asyncio.Lock()
         self._verify_next = False
         self._irregular_t = -1.0
@@ -209,6 +227,11 @@ class FuzzSession:
 
     # --- イベント（バスから同期で呼ばれる） ---
 
+    @property
+    def cfg(self) -> dict[str, Any]:
+        """いまの [fuzz] の設定（区間（burst）の間は、区間の設定）。"""
+        return self.run.cfg
+
     def recent_press(self, now: float | None = None) -> str | None:
         """role_window_sec のうちに押したボタンの "<menu>/<name>"。なければ None。"""
         lp = self.run.last_press
@@ -216,6 +239,53 @@ class FuzzSession:
         if lp is None or now - lp[1] > float(self.cfg["role_window_sec"]):
             return None
         return lp[0]
+
+    # --- ある地点でときどき切り替える区間（ガチャプレイ・ボタンの網羅） ---
+
+    def _spot(self, ev: Event) -> None:
+        """初めて来た画面（ボタンのある menu）・scene なら、確率 prob で区間を始める（同じ地点では1回だけ）。"""
+        run = self.run
+        plan = run.burst_plan
+        if plan is None or run.burst is not None or run.burst_cfg is None:
+            return
+        if ev.kind == "menu" and ev.data.get("buttons"):
+            spot = f"画面 `{ev.data.get('name')}`"
+        elif ev.kind == "scene" and ev.data.get("name"):
+            spot = f"scene `{ev.data.get('name')}`"
+        else:
+            return
+        if spot in run.burst_seen:
+            return
+        run.burst_seen.add(spot)
+        now = time.monotonic()
+        used = sum(sec for _s, sec, _n in run.bursts)
+        if used + plan.sec > plan.share * max(now - run.started + plan.sec, plan.sec):
+            return  # ランのうち区間に使ってよい割合を超える。先へ進めるのを優先する
+        if run.rng.random() >= plan.prob:
+            return
+        run.burst_saved = (run.cfg, run.mode, run.intent)
+        run.cfg, run.mode = run.burst_cfg, plan.mode
+        if plan.intent is not None:
+            run.intent = plan.intent
+        ops = run.stats["normal"] + run.stats["irregular"]
+        run.burst = (spot, now, now + plan.sec, ops)
+        self.publish(Event("harness", "burst", {"phase": "start", "spot": spot, "sec": plan.sec, "mode": plan.mode},
+                           self.launch))
+
+    def _end_burst(self, why: str) -> None:
+        run = self.run
+        if run.burst is None or run.burst_saved is None:
+            return
+        spot, started, _until, ops0 = run.burst
+        sec = time.monotonic() - started
+        ops = run.stats["normal"] + run.stats["irregular"] - ops0
+        run.cfg, run.mode, intent = run.burst_saved
+        if run.burst_plan is not None and run.burst_plan.intent is not None:
+            run.intent = intent
+        run.burst, run.burst_saved = None, None
+        run.bursts.append((spot, sec, ops))
+        self.publish(Event("harness", "burst", {"phase": "end", "spot": spot, "sec": round(sec, 1), "ops": ops,
+                                                "why": why}, self.launch))
 
     def _remember_line(self, d: dict[str, Any]) -> None:
         """本文を覚える（AI に文脈として渡す）。"""
@@ -278,6 +348,8 @@ class FuzzSession:
         if ev.source == "game":
             self._observe(ev)
             self._progress(ev)
+            if ev.launch == self.launch:
+                self._spot(ev)
             if ev.kind == "line" and ev.launch == self.launch:
                 self._remember_line(ev.data)
         if self.run.mode != "fuzz" or ev.source != "game" or ev.kind not in TRIGGERS or ev.launch != self.launch:
@@ -309,6 +381,7 @@ class FuzzSession:
         finally:
             if self._trigger is not None:
                 self._trigger.cancel()
+            self._end_burst("起動が終わった")
             self._end_play()
 
     def _ready(self) -> bool:
@@ -318,6 +391,8 @@ class FuzzSession:
         if not self._ready():
             return
         now = time.monotonic()
+        if self.run.burst is not None and now >= self.run.burst[2]:
+            self._end_burst("時間になった")
         sig = self.state.signature()
         if sig != self._sig:
             # 画面が変わった直後は、アニメーションが落ち着くまで待つ
@@ -379,6 +454,8 @@ class FuzzSession:
     def _choose_intent(self, why: str) -> None:
         """プレイの目的を選ぶ（random モード）。ランの最初のプレイは、「本編を進める」の重みが 0 でなければそれにする。"""
         run = self.run
+        if run.burst is not None and run.burst_plan is not None and run.burst_plan.intent is not None:
+            return  # 区間の間は、区間の目的（画面を見て回る）のまま
         if run.mode != "random":
             run.intent = None
             return

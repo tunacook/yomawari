@@ -191,6 +191,10 @@ def run(
         raise typer.Exit(EXIT_HARNESS_ERROR) from None
     mode = mode or goal.mode
     console.print(f"目的: {goal.name}（{goal.description}）／モード: {mode}")
+    if goal.burst is not None:
+        b = goal.burst
+        console.print(f"  初めて来た画面・scene で、確率 {b.prob} で {b.sec:.0f} 秒だけ区間（{b.mode}）に切り替える"
+                      f"（ランの {b.share:.0%} まで）")
     plat = get_platform()
     rules = load_rules(cfg.rules_path)
     b = cfg.resolve_build(build, build_path)

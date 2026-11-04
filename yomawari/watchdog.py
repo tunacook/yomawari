@@ -165,6 +165,11 @@ class Harness:
 
     def _handle_issues(self, issues: list[Issue]) -> None:
         for i in issues:
+            if self._fuzz is not None and self._fuzz.burst is not None:
+                # 区間（ガチャプレイ・ボタンの網羅）の間に見つけたもの
+                spot = self._fuzz.burst[0]
+                i.detail += f"（区間 {self._fuzz.burst_plan.mode if self._fuzz.burst_plan else ''} の間: {spot}）"
+                i.evidence["burst"] = spot
             self.issues.append(i)
             self._publish(Event("harness", "issue", i.to_json(), i.launch))
             if i.action == "restart" and self._restart_req is not None:
@@ -350,14 +355,20 @@ class Harness:
             if self.fuzz_cfg["ai_choice"] and self.fuzz_cfg["use_flow"] and self.spec.flows and self.judge_cfg is not None:
                 # 流れの手順で選ぶものを、本文の文脈から AI に点数を付けさせる（fuzz/advisor.py）
                 self._fuzz.advisor = ChoiceAdvisor.from_judge(self.judge_cfg, float(self.fuzz_cfg["ai_timeout_sec"]))
+            burst = opts.purpose.burst if opts.purpose is not None else None
+            if burst is not None and opts.mode != "aging":
+                # 通常のプレイの途中で、初めて来た画面・scene でときどき区間（ガチャプレイ・ボタンの網羅）に切り替える
+                self._fuzz.burst_plan = burst
+                self._fuzz.burst_cfg = burst.apply(self.fuzz_cfg)
             if opts.mode == "random" and self.fuzz_cfg["learn"]:
                 # 進行につながった操作を優先し、巻き戻した操作を後回しにする。fuzz モードでは掛けない（いつもの道に偏らないように）
-                exp, fc = self._fuzz.experience, self.fuzz_cfg
+                exp = self._fuzz.experience
                 run = self._fuzz
-                # 経験は、目的が「本編を進める」のプレイでだけ使う（「画面を見て回る」では寄り道や巻き戻しも試す）
+                # 経験は、目的が「本編を進める」のプレイでだけ使う（「画面を見て回る」では寄り道や巻き戻しも試す）。
+                # 区間（ガチャプレイなど）の間は、区間の設定の learn に従う
                 self._fuzz.decider.learned = lambda key, op: exp.factor(  # type: ignore[attr-defined]
-                    key, op.label, float(fc["progress_bonus"]), float(fc["rewind_factor"])
-                ) if run.intent == "progress" else 1.0
+                    key, op.label, float(run.cfg["progress_bonus"]), float(run.cfg["rewind_factor"])
+                ) if run.intent == "progress" and run.mode == "random" and run.cfg["learn"] else 1.0
             if self.driver_factory is None:
                 from .input.mouse_kb import PyAutoGuiDriver
 
@@ -415,6 +426,7 @@ class Harness:
                 self.notes += self._fuzz.flow.summary()
                 self.notes.append(self._fuzz.summary())
                 self.notes += self._fuzz.blocked_notes(time.time())
+                self.notes += self._fuzz.burst_notes()
                 if self._fuzz.advisor is not None:
                     self.notes += self._fuzz.advisor.summary()
                     self._fuzz.advisor.close()

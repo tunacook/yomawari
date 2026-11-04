@@ -33,6 +33,12 @@ quit_timeout_sec = 10        # 終了要求から強制終了までの待ち時�
 # description = "セーブとロードを繰り返す"
 # mode = "random"
 # fuzz = { intent_explore = 1, weights = { right_click = 5 } }
+# [purpose.gacha.burst]                    # 通常のプレイの途中で、初めて来た画面・scene でときどき切り替える区間
+# sec = 120                                # 区間の長さ（秒）
+# prob = 0.5                               # 初めて来た地点で区間を始める確率
+# share = 0.5                              # ランのうち区間に使ってよい割合
+# [purpose.gacha.burst.fuzz]               # 区間の [fuzz] の上書き（mode / intent も書ける）
+# irregular_prob = 0.5
 
 [sensors]
 log_poll_sec = 0.1           # Player.log を読みに行く間隔
