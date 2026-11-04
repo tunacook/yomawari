@@ -396,21 +396,45 @@ class FuzzSession:
             return cands
         boost, low = float(cfg["flow_factor"]), float(cfg["flow_avoid_factor"])
         quiet = self._quiet() | run.silent
+        done = tracker.done_steps()
+
+        def option(t: Any) -> str | None:
+            """いまの手順で選べるもの（ボタンの label・選択肢の本文）。当てはまらなければ None。"""
+            if step is None or t is None:
+                return None
+            if t.kind == "choice" and step.choose is not None:
+                ok = not step.choose or any(fnmatchcase(t.text or "", p) for p in step.choose)
+                return (t.text or t.label) if ok else None
+            if (t.kind == "button" and t.label not in quiet and step.when.screen == t.menu
+                    and (matches(t.label, t.name, step.press) if step.press
+                         else not (step.advance or step.choose is not None))):
+                return t.label
+            return None
+
+        options = {op.label: o for op in cands if (o := option(op.target)) is not None}
+        tracker.offer(sorted(set(options.values())))
+        # 試行錯誤: すべて試し終えた枝（外れだった組み合わせ）は後回し。いまの枝で試しかけのものがあれば、そちらを先に
+        fresh = {o for o in options.values() if not tracker.exhausted(o)}
+        if options and not fresh:
+            tracker.note_exhausted()
+            fresh = set(options.values())  # 試せる組み合わせをすべて試した。ほかの道もないので、どれも同じに戻す
+        going = {o for o in fresh if tracker.tried(o)}
         out = []
         for op in cands:
             t = op.target
             f = 1.0
+            o = options.get(op.label)
             if t is not None and flow.avoid and matches(t.label, t.name, flow.avoid):
                 f = low
-            elif step is not None:
-                if op.kind == "advance" and step.advance:
-                    f = boost
-                elif t is not None and t.kind == "choice" and step.choose is not None:
-                    if not step.choose or any(fnmatchcase(t.text or "", p) for p in step.choose):
-                        f = boost
-                elif (t is not None and t.kind == "button" and t.label not in quiet and step.when.screen == t.menu
-                      and (matches(t.label, t.name, step.press) if step.press
-                           else not (step.advance or step.choose is not None))):
+            elif t is not None and t.kind == "button" and any(
+                    s.when.screen == t.menu and s.press and matches(t.label, t.name, s.press) for s in done):
+                f = low  # 同じ選び方で一度済ませた手順のボタン（読んだ思い出をもう一度読む）
+            elif step is not None and op.kind == "advance" and step.advance:
+                f = boost
+            elif o is not None:
+                if o not in fresh:
+                    f = low
+                elif not going or o in going:
                     f = boost
             out.append(dataclasses.replace(op, weight=op.weight * f) if f != 1.0 else op)
         return out
