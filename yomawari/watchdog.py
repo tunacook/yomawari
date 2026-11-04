@@ -48,12 +48,17 @@ from .sensors.process import watch_process
 StatusCallback = Callable[[dict[str, Any]], None]
 
 
+_LOCK_WORDS = {"immediate": "すぐ", "off": "ロックしない"}
+
+
 @dataclass
 class RunOptions:
     hours: float
     mode: str
     seed: str
     purpose: Purpose | None = None  # ランの目的。fuzz_cfg にはすでに重ねてある
+    display_off: bool = False  # ゲームが起動したあと、画面を消す
+    display_off_delay_sec: float = 10.0
 
 
 @dataclass
@@ -230,6 +235,24 @@ class Harness:
             self.notes.append("画面とシステムのスリープを防げませんでした。画面が消える・ロックされると操作できません")
         return proc
 
+    async def _display_off(self, delay: float) -> None:
+        """ゲームが起動して delay 秒たったら、画面を消す（夜間に画面を点けたままにしないため）。
+
+        macOS は、画面が消えたあとロックされると、ゲームへの入力を受け付けない（ロックまでの時間はシステム設定しだい）。
+        そうなったら「ハーネスの記録」の「操作できなかった」に出る。"""
+        while not self.state.booted:
+            await asyncio.sleep(0.5)
+        await asyncio.sleep(delay)
+        off = getattr(self.platform, "display_off", None)
+        if off is not None and await asyncio.to_thread(off):
+            lock = getattr(self.platform, "screen_lock_delay", None)
+            when = await asyncio.to_thread(lock) if lock is not None else None
+            self.notes.append(f"ゲームが起動して {delay:.0f} 秒後に、画面を消した（画面が消えてからロックされるまで: "
+                              f"{_LOCK_WORDS.get(when or '', when or '不明')}）")
+            self._publish(Event("harness", "display_off", {"lock": when}, max(self.launches - 1, 0)))
+        else:
+            self.notes.append("画面を消せなかった（この OS では未対応、または pmset が失敗した）")
+
     # --- 1回の起動 ---
 
     def _recent_press(self) -> str | None:
@@ -387,6 +410,7 @@ class Harness:
         assert main_task is not None
         loop.add_signal_handler(signal.SIGTERM, main_task.cancel)
         awake = self._keep_awake()
+        dark = asyncio.create_task(self._display_off(opts.display_off_delay_sec)) if opts.display_off else None
         try:
             if saves.pending():
                 self.notes += ["前回のランの未復元の退避を見つけたため復元しました"] + saves.restore()
@@ -413,6 +437,8 @@ class Harness:
             self.notes.append("中断の指示（Ctrl+C / SIGTERM）を受けて終了しました")
         finally:
             loop.remove_signal_handler(signal.SIGTERM)
+            if dark is not None:
+                dark.cancel()
             if awake is not None:
                 awake.terminate()
             if backed_up:

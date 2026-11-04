@@ -23,6 +23,8 @@ open_report = true
 keep_runs_days = 14
 max_restarts = 20            # これを超えたらランを打ち切る
 quit_timeout_sec = 10        # 終了要求から強制終了までの待ち時間
+display_off = false          # ゲームが起動したあと、画面を消す（macOS: pmset displaysleepnow）。--display-off
+display_off_delay_sec = 10   # ゲームが起動してから画面を消すまでの時間
 
 # ランの目的を変える・足す（yomawari/purpose.py の組み込みの目的に重ねる）。fuzz は [fuzz] の上書き
 # [purpose.stuck]
