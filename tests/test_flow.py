@@ -351,3 +351,34 @@ def test_screen_step_wins_over_lingering_scene_step():
     _press(s, st, run, "FragmentSelectDialogUI/Accept")
     assert run.flow.active is None and run.flow.stats["質問に答える"].completed == 1
     assert len(run.flow.leaves) == 1
+
+
+def test_steps_can_name_buttons_by_visible_text():
+    # 手順のボタンを、GameObject の名前ではなく、画面に見える文字（画面から読んだもの）で書く。空白は除いて比べる
+    flows = parse_flows(tomllib.loads("""
+[[flow]]
+name = "読む"
+start = { screen = "MemorySummaryUI" }
+avoid_text = ["閉じる"]
+steps = [
+  { screen = "MemorySummaryUI", text = "*読む*" },
+  { scene = "memories/*", advance = true },
+]
+""")["flow"])
+    s, st, run, _ = _session()
+    run.flow = FlowTracker(flows)
+    k, low = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"]
+    click = FUZZ_DEFAULTS["weights"]["click"]
+    _only(st, "MemorySummaryUI", SUMMARY)
+    st.set_read_text({"MemorySummaryUI/StartToMemoryScenario": "この 思い出を 読む", "MemorySummaryUI/CloseMemorySummary": "閉じる",
+                      "MemorySummaryUI/ShowFragmentListButton": "言葉を選ぶ"})
+    w = _weights(s, st)
+    assert w["click MemorySummaryUI/StartToMemoryScenario"] == click * k
+    assert w["click MemorySummaryUI/ShowFragmentListButton"] == click
+    assert w["click MemorySummaryUI/CloseMemorySummary"] == pytest.approx(click * low)
+    # 文字がまだ読めていないボタンは、手順のボタンとみなさない
+    st.read_text.clear()
+    _only(st, "MemorySummaryUI", SUMMARY)
+    assert _weights(s, st)["click MemorySummaryUI/StartToMemoryScenario"] == click
+    with pytest.raises(ConfigError, match="知らない項目"):
+        parse_flows([{"name": "x", "start": {"screen": "A"}, "steps": [{"screen": "A"}], "avoid_txt": ["a"]}])

@@ -46,7 +46,7 @@ from .ops import (
     normal_candidates,
     state_key,
 )
-from .flow import FlowTracker, matches
+from .flow import FlowTracker
 from .search import REVEAL, Lead, blind_candidates, known_leads, leads, search_candidates, searchable_menus, stuck_rows
 
 # プレイの目的（random モード）→ レポートでの呼び方
@@ -515,7 +515,7 @@ class FuzzSession:
                 ok = not step.choose or any(fnmatchcase(t.text or "", p) for p in step.choose)
                 return (t.text or t.label) if ok else None
             if (t.kind == "button" and t.label not in quiet and step.when.screen == t.menu
-                    and (matches(t.label, t.name, step.press) if step.press
+                    and (step.presses(t.label, t.name, t.text) if step.targets
                          else not (step.advance or step.choose is not None))):
                 return t.label
             return None
@@ -535,10 +535,10 @@ class FuzzSession:
             t = op.target
             f = 1.0
             o = options.get(op.label)
-            if t is not None and flow.avoid and matches(t.label, t.name, flow.avoid):
+            if t is not None and flow.avoids(t.label, t.name, t.text):
                 f = low
             elif t is not None and t.kind == "button" and any(
-                    s.when.screen == t.menu and s.press and matches(t.label, t.name, s.press) for s in done):
+                    s.when.screen == t.menu and s.targets and s.presses(t.label, t.name, t.text) for s in done):
                 f = low  # 同じ選び方で一度済ませた手順のボタン（読んだ思い出をもう一度読む）
             elif step is not None and op.kind == "advance" and step.advance:
                 f = boost
@@ -965,7 +965,8 @@ class FuzzSession:
         self.run.decider.feedback(key, op, responded)
         if op.target is not None:
             t = op.target
-            self.run.flow.pressed(t.label, t.name, responded, t.text if t.kind == "choice" else None)
+            self.run.flow.pressed(t.label, t.name, responded, t.text if t.kind == "choice" else None,
+                                  t.text if t.kind == "button" else None)
         if responded:
             self.run.responsive.add((key, op.label))
         else:
