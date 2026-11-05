@@ -437,3 +437,34 @@ def test_look_reads_button_text_from_screen_until_look_changes():
     windows.texts = [("夕方の帰り道", 0.9, (r[0] + 0.01, r[1] + 0.01, r[2] - 0.01, r[1] + 0.05))]
     asyncio.run(s._look())
     assert st.menus["MemoryListUI"].buttons[0].text == "夕方の帰り道"
+
+
+def test_masked_text_decides_lock_over_brightness():
+    # run 2026-11-05_0921: 回想一覧で、サムネイルの絵が暗いだけの開放済みの思い出（下に題名がある）を、暗いので押せないと
+    # 見て V-07 にしていた。並びに「？？？」（未開放）があれば、明るさではなく文字で押せるかを決める
+    import random
+
+    from yomawari.config import FUZZ_DEFAULTS
+    from yomawari.fuzz.decider import RandomDecider
+    from yomawari.fuzz.guard import Guard
+    from yomawari.fuzz.loop import FuzzRun, FuzzSession
+    from yomawari.fuzz.looks import load_masked_chars, masked, text_inactive
+
+    from .conftest import RULES_PATH
+
+    chars = load_masked_chars(RULES_PATH)
+    assert masked("？？？", chars) and masked("? ? ?", chars) and not masked("夕焼けの屋上？", chars) and not masked("", chars)
+    assert text_inactive("？？？", [], chars) and not text_inactive("駅前の公園", ["空き"], chars)
+
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                  rng=random.Random(1), cfg=FUZZ_DEFAULTS, response_timeout=0.1, masked_chars=chars)
+    s = FuzzSession(run, GameState(), None, lambda ev: None, 0, lambda _: None)
+    values = {f"M/Slot#{i}": (0.5, 0.5) for i in range(4)}
+    dim = {"M/Slot#1", "M/Slot#2", "M/Slot#3"}  # 明るさでは #1〜#3 が暗い
+    texts = {"M/Slot#0": "駅前の公園", "M/Slot#1": "夕焼けの屋上", "M/Slot#2": "？？？"}  # #3 は文字を読めていない
+    assert s._by_text("M/Slot", values, dim, texts) == {"M/Slot#2", "M/Slot#3"}
+    assert any("文字で押せるかを決めた" in n and "？？？" in n for n in run.notes)
+    # 並びに伏せ字がなければ、明るさのまま（灰色にした「続きから」、「空き」のセーブスロットなど）
+    assert s._by_text("T/Btn", values, dim, {"M/Slot#1": "続きから"}) == dim
+    run.inactive_words = ["空き"]
+    assert s._by_text("S/Slot", values, dim, {"M/Slot#0": "1. 2026/11/05", "M/Slot#1": "2. 空き"}) == dim

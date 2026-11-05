@@ -31,7 +31,7 @@ from .fuzz.experience import Experience
 from .fuzz.flow import FlowTracker
 from .fuzz.guard import Guard
 from .fuzz.loop import FuzzRun, FuzzSession
-from .fuzz.looks import load_inactive_words
+from .fuzz.looks import load_inactive_words, load_masked_chars
 from .fuzz.roles import RoleBook
 from .input.base import InputDriver
 from .input.pointer import Pointer
@@ -372,6 +372,7 @@ class Harness:
                 screen_weights=self.spec.screen_weights,
                 flow=FlowTracker(self.spec.flows),
                 inactive_words=load_inactive_words(self.rules_path),
+                masked_chars=load_masked_chars(self.rules_path),
                 # 進め方の経験は、ボタンの役割と同じファイル（runs/_experience/<ゲーム>.json）に覚える
                 experience=Experience(self.roles.path),
             )
