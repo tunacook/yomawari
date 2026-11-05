@@ -31,6 +31,8 @@ namespace Yomawari
         }
 
         static readonly List<string> choiceIds = new();
+        // 選び終えた選択肢の id。選んだあと消えていくまでのボタンを、選択肢として出し直さない（ScanChoices。消えきったら忘れる）
+        static readonly HashSet<string> handledIds = new();
 
         readonly List<IManagedUI> uis = new();
         readonly HashSet<IManagedUI> seen = new();
@@ -40,13 +42,19 @@ namespace Yomawari
         readonly List<ScrollRect> scrollRects = new();
         readonly List<RaycastResult> hits = new();
         PointerEventData pointer;
-        string choicesSignature;
+        string choicesSignature = ""; // 空 = 選択肢なし。起動直後に空の choices を出さない
         float elapsed;
 
         // choices_done の index（直近に出した choices の中での順番）。見つからなければ -1
         public static int IndexOfChoice(string id)
         {
             return choiceIds.IndexOf(id);
+        }
+
+        // 選択肢が選ばれた（choices_done）
+        public static void Handled(string id)
+        {
+            if (id != null) handledIds.Add(id);
         }
 
         void Update()
@@ -267,12 +275,25 @@ namespace Yomawari
                 ids.Add(c.Id);
             }
 
+            // 選び終えた選択肢と同じ組は、選ばなかったほうも含めて消えていく途中なので出さない。
+            // 消えきったら忘れる（ロールバック・ロードで同じ選択肢が出直したときは出す）
+            if (ids.Count == 0) handledIds.Clear();
+            else if (ids.Exists(handledIds.Contains))
+            {
+                json.Length = 1;
+                sig.Length = 0;
+                ids.Clear();
+            }
+
             var signature = sig.ToString();
             if (signature == choicesSignature) return;
             choicesSignature = signature;
-            if (ids.Count == 0) return; // 消えたことは choices_done で伝わる
-            choiceIds.Clear();
-            choiceIds.AddRange(ids);
+            // 選ばずに消えた（ロールバック・ロード・スクリプトで消した）ときも伝わるように、消えたら items を空で出す
+            if (ids.Count > 0)
+            {
+                choiceIds.Clear();
+                choiceIds.AddRange(ids);
+            }
             YomawariLog.Emit("choices", "\"items\":" + json.Append(']'));
         }
 

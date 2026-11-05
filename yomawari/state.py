@@ -107,6 +107,10 @@ class GameState:
     line_done: bool = False
     menus: dict[str, Menu] = field(default_factory=dict)
     choices: list[Target] = field(default_factory=list)
+    # 選び終えた選択肢の id（choices_done）。選んだあと消えていく途中のボタンを、古いパッケージ（0.7.0 まで）が
+    # 同じ id の choices として出し直し、消えたことは伝えないので、それを選択肢として扱わない。
+    # ロールバック・ロードで同じ選択肢が出直したときに無視しないように、次の本文・scene・ロードで忘れる
+    handled_choices: set[str] = field(default_factory=set)
     transitions: set[str] = field(default_factory=set)
     resolution: dict[str, Any] | None = None
     saving: bool = False
@@ -155,11 +159,13 @@ class GameState:
     def _on_scene(self, d: dict[str, Any], t: float) -> None:
         self.scene = d.get("name")
         self.last_progress_t = t
+        self.handled_choices.clear()
 
     def _on_line(self, d: dict[str, Any], t: float) -> None:
         self.line = {k: d.get(k) for k in ("label", "line_id", "speaker", "text")}
         self.line_done = False
         self.last_progress_t = t
+        self.handled_choices.clear()
         for m in self.menus.values():
             m.read_over = True
         if self.title_menu is not None and self.title_menu not in self.menus:
@@ -205,17 +211,23 @@ class GameState:
         self.behind.discard(str(d.get("name")))
 
     def _on_choices(self, d: dict[str, Any], t: float) -> None:
+        raw = [c for c in d.get("items") or [] if isinstance(c, dict)]
+        if any(str(c.get("id")) in self.handled_choices for c in raw):
+            raw = []  # 選び終えた選択肢と同じ組（選ばなかったほうも含めて消えていく途中）
         items = []
-        for i, c in enumerate(d.get("items") or []):
-            r = _rect(c.get("rect")) if isinstance(c, dict) else None
+        for i, c in enumerate(raw):
+            r = _rect(c.get("rect"))
             if r is None or c.get("locked"):
                 continue
             items.append(Target("choice", "choices", str(c.get("id")), r, c.get("text"), i))
         self.choices = items
-        self.last_progress_t = t
+        if items:
+            self.last_progress_t = t
 
     def _on_choices_done(self, d: dict[str, Any], t: float) -> None:
         self.choices = []
+        if d.get("id") is not None:
+            self.handled_choices.add(str(d.get("id")))
 
     def _on_transition(self, d: dict[str, Any], t: float) -> None:
         name = str(d.get("name"))
@@ -231,6 +243,7 @@ class GameState:
 
     def _on_load(self, d: dict[str, Any], t: float) -> None:
         self.loading = d.get("phase") == "start"
+        self.handled_choices.clear()
 
     # --- 参照 ---
 

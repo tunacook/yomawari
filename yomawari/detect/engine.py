@@ -297,7 +297,9 @@ class AdvanceStallDetector(Detector):
         self.lead: list[str] = []  # 進まなくなる前の操作（本文送りが続くと「直前の操作」から押し出されるため）
 
     def on_event(self, ev: Event) -> list[Issue]:
-        if ev.kind == "launch" or (ev.source == "game" and ev.kind in self.PROGRESS):
+        # 選択肢が消えた知らせ（items が空の choices）は進んだことにしない
+        progress = ev.kind in self.PROGRESS and not (ev.kind == "choices" and not ev.data.get("items"))
+        if ev.kind == "launch" or (ev.source == "game" and progress):
             self.count = 0
             return []
         d = ev.data

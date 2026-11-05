@@ -83,9 +83,13 @@ namespace Yomawari
         static void Watch(IChoiceHandlerActor handler)
         {
             if (handler == null) return;
-            handler.OnChoiceHandled += c => YomawariLog.Emit("choices_done",
-                "\"id\":" + YomawariFormat.Str(c.Id) +
-                ",\"index\":" + YomawariUiWatcher.IndexOfChoice(c.Id));
+            handler.OnChoiceHandled += c =>
+            {
+                YomawariUiWatcher.Handled(c.Id);
+                YomawariLog.Emit("choices_done",
+                    "\"id\":" + YomawariFormat.Str(c.Id) +
+                    ",\"index\":" + YomawariUiWatcher.IndexOfChoice(c.Id));
+            };
         }
 
         static void EmitSaveLoad(string ev, GameSaveLoadArgs a, string phase)

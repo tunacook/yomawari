@@ -65,6 +65,35 @@ def test_line_choices_transition_save():
     assert s.snapshot()["scene"] == "main/start"
 
 
+def test_choices_redisplayed_after_done_are_ignored():
+    # run 2026-11-05_0921: 選んだあと消えていくボタンを、パッケージ 0.7.0 までは同じ id の choices で出し直し、
+    # 消えたことは出さなかった。選択肢が出たままと思って、本文の行ごとに選択肢の位置を押し続けていた
+    items = [{"id": "8f51", "text": "レイチェルに話す", "rect": [0.03, 0.31, 0.97, 0.44], "locked": False},
+             {"id": "281c", "text": "レイチェルに話さない", "rect": [0.03, 0.45, 0.97, 0.58], "locked": False}]
+    s = GameState()
+    s.feed(game("choices", items=items))
+    assert len(s.choices) == 2
+    s.feed(game("choices_done", id="281c", index=1))
+    s.feed(game("choices", items=items))  # 消えていく途中の出し直し
+    assert s.choices == []
+    assert [t.key for t in s.targets()] == []
+    # 次の本文が出たら忘れる（ロールバック・ロードで同じ選択肢が出直したときは、選択肢として扱う）
+    s.feed(game("line", label="m", line_id="m:162.0", speaker=None, text="本文"))
+    s.feed(game("choices", items=items))
+    assert len(s.choices) == 2
+    s.feed(game("choices_done", id="8f51", index=0))
+    s.feed(game("load", slot="1", phase="start"))
+    s.feed(game("choices", items=items))
+    assert len(s.choices) == 2
+
+    # 次に出た選択肢（新しい id）は、今までどおり選択肢として扱う
+    s.feed(game("choices", items=[{**items[0], "id": "aa01"}, {**items[1], "id": "aa02"}]))
+    assert [t.key for t in s.choices] == ["choices/aa01", "choices/aa02"]
+    # パッケージ 0.7.1 からは、選ばずに消えたら items が空の choices が来る
+    s.feed(game("choices", items=[]))
+    assert s.choices == []
+
+
 def test_launch_resets_state():
     s = GameState()
     s.feed(game("scene", name="x"))
