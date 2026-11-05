@@ -381,6 +381,7 @@ class Harness:
                 rng=random.Random(f"{seed}:trigger"),
                 cfg=self.fuzz_cfg,
                 response_timeout=float(self.rules["S-01"].param("timeout_sec")),
+                run_sec=opts.hours * 3600,
                 screen_weights=self.spec.screen_weights,
                 flow=FlowTracker(self.spec.flows),
                 inactive_words=load_inactive_words(self.rules_path),

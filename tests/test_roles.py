@@ -278,3 +278,16 @@ def test_roles_are_per_button_not_per_name():
     slot = lambda n: Target("button", "MemoryListUI", "Slot", (0, 0, 0.1, 0.1), nth=n)
     assert book.role_of(slot(3)) == "external"
     assert book.role_of(slot(4)) is None  # 同じ名前のほかのスロットには効かない
+
+
+def test_exit_interval_grows_with_long_runs():
+    # run 2026-11-05_2230: 8 時間のランで 30 分ごとに終わらせ、起動し直すたびに最初から遊び直して先へ進めなかった
+    s, *_ = _session()
+    cfg = {**CFG, "exit_min_interval_sec": 1800, "exit_interval_ratio": 0.25}
+    s.run.cfg = cfg
+    s.run.run_sec = 3600
+    assert s._exit_interval() == 1800  # 1 時間のランは今までどおり
+    s.run.run_sec = 8 * 3600
+    assert s._exit_interval() == 2 * 3600
+    s.run.cfg = {**cfg, "exit_interval_ratio": 0}
+    assert s._exit_interval() == 1800

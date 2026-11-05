@@ -87,6 +87,7 @@ rapid_count = 10              # 連打の回数
 stuck_modal_sec = 5           # ボタンのないモーダルがこの時間残ったら、Esc・右クリックで抜けようとする
 external_wait_sec = 3         # external のボタンを押してから前面を確かめるまで
 exit_min_interval_sec = 1800  # expect_exit のボタンを押す間隔の下限
+exit_interval_ratio = 0.25    # 長いランでは、expect_exit の間隔をランの長さのこの割合以上にする（8 時間なら 2 時間）。0 で無効
 no_response_factor = 0.2      # 押して反応がなかった操作の重みに、反応がなかった回数だけ掛ける（同じ状態で後回しにする）
 drag_distance = 0.3           # モーダルな画面でドラッグする距離（描画領域の幅・高さに対する割合）
 role_window_sec = 5           # ボタンを押してからこの時間内に起きたこと（終了・タイトル・解像度など）で、そのボタンの役割を確定する
