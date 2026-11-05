@@ -47,6 +47,9 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "stuck_modal_sec": 5.0,
     "external_wait_sec": 3.0,
     "exit_min_interval_sec": 1800.0,
+    # 長いランでは、expect_exit の間隔をランの長さのこの割合以上にする（起動し直すたびに最初から遊び直すので、
+    # 8 時間のランで 30 分ごとに終わらせると先へ進めない）。0 で無効
+    "exit_interval_ratio": 0.25,
     "no_response_factor": 0.2,
     "drag_distance": 0.3,
     "role_window_sec": 5.0,

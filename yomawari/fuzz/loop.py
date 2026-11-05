@@ -74,6 +74,7 @@ class FuzzRun:
     response_timeout: float
     started: float = field(default_factory=time.monotonic)
     last_exit_t: float | None = None
+    run_sec: float = 0.0  # ランの長さ（--hours）。長いランで expect_exit の間隔を延ばすのに使う
     stats: Counter[str] = field(default_factory=Counter)
     labels: set[str] = field(default_factory=set)
     recent: deque[str] = field(default_factory=lambda: deque(maxlen=10))
@@ -439,7 +440,7 @@ class FuzzSession:
             await self._irregular("random")
             return
 
-        allow_exit = now - (self.run.last_exit_t or self.run.started) >= float(self.cfg["exit_min_interval_sec"])
+        allow_exit = now - (self.run.last_exit_t or self.run.started) >= self._exit_interval()
         cands = normal_candidates(
             self.state, self.run.guard, self.cfg["weights"], allow_exit, self.run.screen_weights,
             self._factors(),
@@ -740,6 +741,11 @@ class FuzzSession:
         r["left"] -= 1
         r["ops"].append(op.label)
         await self._normal(op, key, False)
+
+    def _exit_interval(self) -> float:
+        """expect_exit のボタンを押す間隔。exit_min_interval_sec か、長いランではランの長さの exit_interval_ratio 倍。"""
+        return max(float(self.cfg["exit_min_interval_sec"]),
+                   self.run.run_sec * float(self.cfg.get("exit_interval_ratio", 0.0)))
 
     def _search_candidates(self) -> list[Op]:
         """まだ見ていないボタンが画面の外にある向きへ動かす操作（fuzz/search.py）。"""

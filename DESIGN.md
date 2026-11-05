@@ -311,6 +311,7 @@ rapid_count = 10              # 連打の回数
 stuck_modal_sec = 5           # ボタンのないモーダルがこの時間残ったら、Esc・右クリックで抜けようとする
 external_wait_sec = 3         # external のボタンを押してから前面を確かめるまで
 exit_min_interval_sec = 1800  # expect_exit のボタンを押す間隔の下限（ラン開始からも数える）
+exit_interval_ratio = 0.25    # 長いランでは、expect_exit の間隔をランの長さのこの割合以上にする（8 時間なら 2 時間）。0 で無効
 no_response_factor = 0.2      # 押して反応がなかった操作の重みに、反応がなかった回数だけ掛ける
 drag_distance = 0.3           # モーダルな画面でドラッグする距離（描画領域に対する割合）
 role_window_sec = 5           # ボタンを押してからこの時間内に起きたことで、そのボタンの役割を確定する（§9「役割の推定と判定」）
@@ -505,7 +506,7 @@ class Decider(Protocol):
 
 - 役割と区分の対応はハーネスの既定値で、プロファイルの `[guard.roles]` で変えられる（値は区分の名前。通常の操作にするなら `"normal"`）
 - `deny` は押した結果では確定できない（押した時点で外に影響が出る）。文字・名前・見た目から推定できないものは、プロファイルの `[guard.buttons]` に `"<menu の name>/<ボタンの name>"` で書く。`[guard.buttons]` はほかの区分にも使えて、役割より優先する（覚えた役割が合わないときの上書き）
-- `expect_exit` は、`exit_min_interval_sec` に1回まで押す。終了したら再起動するが、`max_restarts` には数えない
+- `expect_exit` は、`exit_min_interval_sec` に1回まで押す。長いランでは、間隔をランの長さの `exit_interval_ratio` 倍まで延ばす（起動し直すとタイトルから遊び直すことが多く、8 時間のランで 30 分ごとに終わらせると、そのたびに進行が戻って先へ進めなかった。run 2026-11-05_2230）。終了したら再起動するが、`max_restarts` には数えない
 - `external` の結果（前面のアプリが切り替わったか、ゲームを前面に戻せたか）は、レポートの「ハーネスの記録」に書く
 - タイトルの「ニューゲーム」は本編に入る唯一の道なので、`irregular_only` にしない（`random` で本編に進めなくなる）
 
