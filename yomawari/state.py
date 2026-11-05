@@ -127,8 +127,9 @@ class GameState:
     # 押せる候補から除く。閉じたら除く
     behind: set[str] = field(default_factory=set)
     # ボタン（label）→ 画面から読んだ文字（OCR）。ボタンの文字は、UI の部品の作りに頼らず、人と同じく画面から読む。
-    # 出し直された menu にも引き継ぐ
+    # 出し直された menu にも引き継ぐ。閉じたら忘れる（ボタンの名前は並びの番号なので、次に開いたときは中身が違うことがある）
     read_text: dict[str, str] = field(default_factory=dict)
+    closed: set[str] = field(default_factory=set)  # 閉じた menu（ハーネスが、その画面で読んだ文字の記録を捨てるため）
     _played_since_title: bool = False
     _order: int = 0
 
@@ -207,8 +208,12 @@ class GameState:
         self.menus[name] = menu
 
     def _on_menu_close(self, d: dict[str, Any], t: float) -> None:
-        self.menus.pop(str(d.get("name")), None)
-        self.behind.discard(str(d.get("name")))
+        name = str(d.get("name"))
+        self.menus.pop(name, None)
+        self.behind.discard(name)
+        prefix = name + "/"
+        self.read_text = {k: v for k, v in self.read_text.items() if not k.startswith(prefix)}
+        self.closed.add(name)
 
     def _on_choices(self, d: dict[str, Any], t: float) -> None:
         raw = [c for c in d.get("items") or [] if isinstance(c, dict)]

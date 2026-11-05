@@ -454,6 +454,9 @@ def test_masked_text_decides_lock_over_brightness():
 
     chars = load_masked_chars(RULES_PATH)
     assert masked("？？？", chars) and masked("? ? ?", chars) and not masked("夕焼けの屋上？", chars) and not masked("", chars)
+    # run 2026-11-05_1811: Rachel の回想一覧は番号付きで読める。OCR が「？」の一部を読み違えることもある
+    assert masked("No.017 ？？？", chars) and masked("INo.013 ？？", chars) and masked("No.011 2？2", chars)
+    assert not masked("No.050 呑み込んだ言葉", chars) and not masked("0ゆまどうぶつえん ？！ ？", chars)
     assert text_inactive("？？？", [], chars) and not text_inactive("駅前の公園", ["空き"], chars)
 
     run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),

@@ -275,11 +275,18 @@ class FlowTracker:
                         "流れのどの画面でもなくなった")
         return None
 
+    def _picks_before(self, i: int) -> int:
+        """手順 i より前に選んだものの数（once でない、押す・選ぶ手順の数）。"""
+        flow = self.active
+        if flow is None:
+            return 0
+        return sum(1 for s in flow.steps[:i] if not s.once and (s.targets or s.choose is not None))
+
     def is_done(self, i: int) -> bool:
         """手順 i が once で、いまの選び方で一度済ませたか。"""
         flow = self.active
         return (flow is not None and flow.steps[i].once
-                and (flow.name, i, tuple(self.path)) in self.done_once)
+                and (flow.name, i, tuple(self.path[:self._picks_before(i)])) in self.done_once)
 
     def done_steps(self) -> list[Step]:
         """いまの選び方で済ませた once の手順（そのボタンは後回しにする）。"""
@@ -303,6 +310,11 @@ class FlowTracker:
         if not opts or depth > 32:
             return False
         return all(self._exhausted(ctx, (*path, o), depth + 1) for o in opts)
+
+    def dead_end(self) -> None:
+        """いまの選び方は、手順の画面で選べるものが1つもない行き止まり（外れと同じに扱う）。"""
+        if self.ctx is not None and self.path:
+            self.leaves.add((self.ctx, tuple(self.path)))
 
     def note_exhausted(self) -> None:
         """いまの手順で選べるものの枝を、すべて試し終えた（同じ質問で、試せる組み合わせがもうない）。"""
@@ -328,6 +340,12 @@ class FlowTracker:
         flow, step = self.active, self.step
         if flow is None or step is None or not responded:
             return
+        if choice_text is None:
+            # いまの手順より前の once の手順のボタン（言葉を選ぶ画面から戻って思い出を読み直したなど）も、済ませたと覚える
+            for i, s in enumerate(flow.steps[:self.index]):
+                if (s.once and s.targets and (s.when.screen is None or label.startswith(s.when.screen + "/"))
+                        and s.presses(label, name, text)):
+                    self.done_once.add((flow.name, i, tuple(self.path[:self._picks_before(i)])))
         if choice_text is not None:
             if step.choose is None or (step.choose and not any(fnmatchcase(choice_text, p) for p in step.choose)):
                 return
@@ -339,7 +357,7 @@ class FlowTracker:
                 return
             picked = label
         if step.once:
-            self.done_once.add((flow.name, self.index, tuple(self.path)))
+            self.done_once.add((flow.name, self.index, tuple(self.path[:self._picks_before(self.index)])))
         else:
             self.path.append(picked)
         if self.index == len(flow.steps) - 1:
