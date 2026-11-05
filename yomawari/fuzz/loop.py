@@ -356,6 +356,8 @@ class FuzzSession:
             return
         if ev.kind in ("transition", "save", "load") and ev.data.get("phase") != "start":
             return
+        if ev.kind == "choices" and not ev.data.get("items"):  # 選択肢が消えた知らせ
+            return
         if self._trigger is not None and not self._trigger.done():
             return
         if self.run.rng.random() >= float(self.cfg["trigger_prob"]):

@@ -380,6 +380,8 @@ def test_s02_counts_advances_until_progress():
            "heartbeat_age": 0.5, "recent": [], "state": {"line_id": "a:1.0"}}
     for _ in range(9):
         assert engine.feed(Event("harness", "op_result", adv, 0)) == []
+    engine.feed(Event("game", "choices", {"items": []}, 0))  # 選択肢が消えた知らせは進んだことにしない
+    assert [i.rule_id for i in engine.feed(Event("harness", "op_result", adv, 0))] == ["S-02"]
     engine.feed(Event("game", "line", {"line_id": "a:2.0"}, 0))  # 進んだら数え直す
     out = []
     # 進めなくなった原因の操作（回想一覧を Esc で閉じた）は、本文送りが続くと「直前の操作」から押し出される。前の操作として載せる
