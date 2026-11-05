@@ -241,6 +241,9 @@ class FuzzSession:
         self._pressed: str | None = None  # この起動で最後に押したボタン（次のボタンを押せたら、押しても終わらなかったもの）
         self._looked: Any = None  # 見た目を比べたときの signature
         self._dim: set[str] = set()
+        # 暗いもののうち、押せないときの一般的な見せ方（半透明・灰色）か伏せ字で押せないと見たもの（V-07 の対象）。
+        # 明るさの差だけでは入れない（絵柄・サムネイルが暗いだけのことがあり、暗い＝押せないかはデザイン次第のため）
+        self._disabled: set[str] = set()
         self._varied: set[str] = set()  # 明るさに差のあった並び（looks の並びのキー）
         self._values: dict[str, Values] = {}  # 最後に撮った画像での、並びごとのボタンの明るさ
         # 探す・戻る操作の label → それが向かう ("<unseen|known>:<menu>/<name>:<向き>", menu)
@@ -942,7 +945,7 @@ class FuzzSession:
         比べない（半透明の UI は後ろの絵で明るさが変わり、別のときに撮ったものとは比べられないため）。
         前は暗かったのに、ほかに暗いものが残っている並びで明るくなったボタン（新しくアンロックされたもの）は、ランで1回だけ先に押す。
         """
-        self._dim, self._varied, self._values = set(), set(), {}
+        self._dim, self._disabled, self._varied, self._values = set(), set(), set(), {}
         # 後ろに下がったと判定した画面のボタンも測る（手前に戻ってきたかを見るため）
         targets = self.state.targets() + [
             b for name in sorted(self.state.behind) if name in self.state.menus
@@ -988,6 +991,7 @@ class FuzzSession:
             if dk:
                 run.look_split.add(gkey)
             self._dim |= dk
+            self._disabled |= dk & (set(fade) | {label for label in dk if masked(texts.get(label), run.masked_chars)})
             self._values[gkey] = values
             if dk:
                 self._varied.add(gkey)
@@ -1152,6 +1156,7 @@ class FuzzSession:
                     "target": op.target.label if op.target else None,  # 同じ名前のボタンは #n で分けて数える
                     "type": op.target.type if op.target else None,
                     "dim": bool(op.target and op.target.label in self._dim),
+                    "disabled_look": bool(op.target and op.target.label in self._disabled),
                     "screen_changed": screen_changed,
                     "saved": self.state.saves != saves_before,  # 押してセーブが始まった（空きのスロットにセーブした）
                     "quiet": quiet,
