@@ -36,7 +36,7 @@ from ..state import GameState, Rect
 from .decider import Decider
 from .experience import Experience, Press
 from .guard import Guard
-from .looks import Values, alike, brightest, dark, groups, inactive, masked, measure
+from .looks import Values, alike, brightest, dark, disabled_looks, groups, inactive, masked, measure
 from .advisor import ChoiceAdvisor
 from .reading import assign, unread
 from .ops import (
@@ -92,6 +92,10 @@ class FuzzRun:
     seen: set[str] = field(default_factory=set)  # 一度でも見えたボタンの label
     silent: set[str] = field(default_factory=set)  # 最後に押したとき反応しなかったボタンの label
     answered: set[str] = field(default_factory=set)  # 押して反応があったことのあるボタンの label
+    # 見た目の推定（明るさ・半透明・文字）。並び → 測ったボタン、見分けられた（押せなさそうなものがあった）並び
+    look_groups: dict[str, set[str]] = field(default_factory=dict)
+    look_split: set[str] = field(default_factory=set)
+    shot_failed: bool = False  # 画面を撮れなかった（「ハーネスの記録」に1回書く）
     search_miss: Counter[str] = field(default_factory=Counter)  # "<menu>/<name>:<向き>" → 動かしても続けて反応しなかった回数
     # menu → それを開いたボタンの label（ハーネスがボタンを押して開いた寄り道の画面）。ここにない menu はゲームが開いたもの
     opened_by: dict[str, str] = field(default_factory=dict)
@@ -165,6 +169,22 @@ class FuzzRun:
         return [f"OS がゲームへの入力を受け付けず、計 {_duration(total)} 操作できなかった（{len(spans)} 回: {detail}"
                 f"{' ほか' if len(spans) > 5 else ''}）。このあいだはゲームの不具合を探せていない。画面をロック・スリープ"
                 "させずに回す（画面を暗くするだけにする）"]
+
+    def looks_notes(self) -> list[str]:
+        """見た目では押せるかを見分けられなかった並び（推定できなかったことを、開発者に伝える）。
+
+        明るさ・半透明・文字のどれでも差が出なかったのに、押して反応したものとしなかったものが混じっていた並び。
+        ゲームが押せないことを見た目で表していないか、ハーネスの見方では拾えない表し方（アイコン・形など）をしている。"""
+        out = []
+        for gkey in sorted(self.look_groups):
+            if gkey in self.look_split:
+                continue
+            labels = self.look_groups[gkey]
+            res, sil = labels & self.answered, labels & (self.silent - self.answered)
+            if res and sil:
+                out.append(f"`{gkey}` の並びは、見た目（明るさ・半透明・文字）では押せるかを見分けられなかった（押して反応した"
+                           f" {len(res)} 個と反応しなかった {len(sil)} 個が、同じように見えた）。押して確かめて覚えた")
+        return out
 
     def burst_notes(self) -> list[str]:
         """区間（ガチャプレイ・ボタンの網羅）の記録。"""
@@ -890,7 +910,12 @@ class FuzzSession:
         except PointerError:
             return
         if shot is None:
-            return  # 画面収録の権限がないなど。見た目なしで続ける
+            # 画面収録の権限がないなど。見た目なしで続ける
+            if not run.shot_failed:
+                run.shot_failed = True
+                run.notes.append(f"画面を撮れなかった（画面収録の権限がないなど）ので、ボタンの見た目（明るさ・半透明・文字）で"
+                                 f"押せるかを推定できなかった。押して確かめた（起動 #{self.launch}）")
+            return
         measured = measure(targets, shot) if looks else {}
         if reading:
             await self._read_text(shot, measured)
@@ -904,7 +929,16 @@ class FuzzSession:
                 continue  # 後ろの画面は、手前の画面の影で暗く見えるので、暗い・明るいを判定しない
             ref = brightest(values)
             dk = dark(values, ref, float(self.cfg["dim_ratio"]), float(self.cfg["dim_min_gap"]))
+            fade: dict[str, str] = {}
+            if not dk:
+                # 明るさでは差がない。押せないときのほかの一般的な見せ方（半透明・灰色）をしているものを、暗いものと同じに扱う
+                fade = disabled_looks(targets, list(values), shot, float(self.cfg["fade_ratio"]),
+                                      float(self.cfg["grey_ratio"]), float(self.cfg["fade_min_gap"]))
+                dk = set(fade)
             dk = self._by_text(gkey, values, dk, texts)
+            run.look_groups.setdefault(gkey, set()).update(values)
+            if dk:
+                run.look_split.add(gkey)
             self._dim |= dk
             self._values[gkey] = values
             if dk:
@@ -919,14 +953,16 @@ class FuzzSession:
                 run.dim_history[label] = now
             if dk and gkey not in run.dim_seen:
                 run.dim_seen.add(gkey)
-                run.notes.append(
-                    f"`{gkey}` の並びで、いちばん明るいものより暗いボタン（{len(dk)}/{len(values)} 個）を後回しにした"
-                    f"（起動 #{self.launch}）"
-                )
+                kinds = {"faded": "半透明に見える", "grey": "色を抜いた（灰色の）"}
+                what = ("明るさでは差がなかったが、" + "・".join(kinds[k] for k in sorted(set(fade.values()))) + "ボタン"
+                        if fade and dk == set(fade) else "いちばん明るいものより暗いボタン")
+                run.notes.append(f"`{gkey}` の並びで、{what}（{len(dk)}/{len(values)} 個）を後回しにした（起動 #{self.launch}）")
             record[gkey] = {
                 "ref": [round(ref[0], 3), round(ref[1], 3)],
                 "buttons": {k: [round(v[0], 3), round(v[1], 3), k in dk] for k, v in values.items()},
             }
+            if fade:
+                record[gkey]["disabled_looks"] = dict(sorted(fade.items()))
         if record:
             # 明るさの判定をあとから確かめられるように残す（events.jsonl）
             self.publish(Event("harness", "looks", {"groups": record}, self.launch))
