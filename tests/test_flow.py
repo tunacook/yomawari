@@ -474,3 +474,20 @@ def test_read_text_is_forgotten_when_menu_closes():
     _feed(st, "menu", name="MemoryFragmentListUI", modal=True,
           buttons=[{"name": "MemoryFragmentListSlot(Clone)", "rect": [0.1, 0.4, 0.2, 0.5]}])
     assert st.find(FRAG).text is None
+
+
+def test_dim_options_wait_while_bright_one_is_off_screen():
+    # run 2026-11-05_1811: 質問の一覧で、開示済みの思い出（明るい）が画面の外にあり、見えているのはロック中（暗い）
+    # ものだけだった。明るいものを試し終えたと誤って、ロック中の思い出を次々に押していた。画面の外の明るいものを先に探す
+    s, st, run, _ = _session()
+    run.flow = FlowTracker(parse_flows(tomllib.loads(ONCE_PROFILE)["flow"]))
+    click = FUZZ_DEFAULTS["weights"]["click"]
+    slots = [{"name": "MemoryListGridSlot (Clone)", "rect": [0.1 + 0.2 * i, 0.3, 0.25 + 0.2 * i, 0.5]} for i in range(3)]
+    slots.append({"name": "MemoryListGridSlot (Clone)", "rect": [0.1, 1.3, 0.25, 1.5], "hidden": True})
+    _feed(st, "line", line_id="main/scenarioA_004:44.0", text="あの時——")
+    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=slots)
+    s._dim = {SLOT, f"{SLOT}#1", f"{SLOT}#2"}
+    w = _weights(s, st)
+    assert run.flow.index == 0
+    assert [w[f"click {x}"] for x in (SLOT, f"{SLOT}#1", f"{SLOT}#2")] == [click] * 3
+    assert not any("すべて試しても" in e for e in run.flow.events)

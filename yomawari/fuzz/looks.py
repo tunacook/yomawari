@@ -93,9 +93,15 @@ def load_masked_chars(path: Path) -> str:
 
 
 def masked(text: str | None, chars: str) -> bool:
-    """文字が（空白を除いて）伏せ字だけでできている（「？？？」）。"""
-    body = re.sub(r"\s+", "", text or "")
-    return bool(chars) and bool(body) and all(c in chars for c in body)
+    """伏せ字（「？？？」）。番号（「No.017 ？？？」）は除いて見る。
+
+    英数字・空白・番号に使う記号を除いた残りが伏せ字だけ、または伏せ字が2文字以上あって残りの半分以上を占める
+    （OCR が「？」の一部を別の文字に読み違えることがあるため）。題名の終わりの「？」1文字は伏せ字としない。"""
+    if not chars or not text:
+        return False
+    body = [c for c in text if not (c.isascii() and (c.isalnum() or c.isspace() or c in ".#:-_/()[]")) and not c.isspace()]
+    n = sum(1 for c in body if c in chars)
+    return bool(body) and (n == len(body) or (n >= 2 and n * 2 >= len(body)))
 
 
 def inactive(targets: list[Target], words: list[str], masked_chars: str = "") -> set[str]:

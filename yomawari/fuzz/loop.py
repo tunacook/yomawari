@@ -538,8 +538,10 @@ class FuzzSession:
             tracker.dead_end()
         # 試行錯誤: すべて試し終えた枝（外れだった組み合わせ）は後回し。いまの枝で試しかけのものがあれば、そちらを先に
         fresh = {o for o in options.values() if not tracker.exhausted(o)}
-        if not fresh and later:
-            # 押せそうに見えるものは試し終えた。見た目だけで押せなさそうと見たものも試す
+        if not fresh and later and (options or not self._step_bright_anywhere(step, quiet)):
+            # 押せそうに見えるものを試し終えた（または、画面の外も含めて押せそうに見えるものがない）。見た目だけで
+            # 押せなさそうと見たものも試す。押せそうに見えるものが画面の外にあるだけなら、先にそれを探す（ロック中の
+            # 思い出を押して回らない。run 2026-11-05_1811）
             options |= later
             fresh = {o for o in later.values() if not tracker.exhausted(o)}
         if options and not fresh:
@@ -567,6 +569,15 @@ class FuzzSession:
                     f = boost * (ai if o in favored else 1.0)
             out.append(dataclasses.replace(op, weight=op.weight * f) if f != 1.0 else op)
         return out
+
+    def _step_bright_anywhere(self, step: Any, quiet: set[str]) -> bool:
+        """手順の画面に、手順のボタンで押せそうに見えるもの（見た目で押せなさそうとしていないもの）があるか。
+        画面の外（hidden）のボタンは明るさを測っていないので、押せそうに見えるものとして数える。"""
+        menu = self.state.menus.get(step.when.screen) if step is not None and step.when.screen else None
+        if menu is None or not step.targets:
+            return False
+        return any(not b.locked and not b.covered and b.label not in quiet and step.presses(b.label, b.name, b.text)
+                   for b in menu.buttons)
 
     def _advice(self, pick: set[str], cands: list[Op], options: dict[str, str]) -> set[str]:
         """先に試す候補のうち、本文の文脈にいちばん合うと AI が答えたもの。答えがまだ・聞かない目的なら空。"""
