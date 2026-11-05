@@ -454,6 +454,7 @@ class Harness:
                 self.notes.append(self._fuzz.summary())
                 self.notes += self._fuzz.blocked_notes(time.time())
                 self.notes += self._fuzz.burst_notes()
+                self.notes += self._fuzz.looks_notes()
                 if self._fuzz.advisor is not None:
                     self.notes += self._fuzz.advisor.summary()
                     self._fuzz.advisor.close()

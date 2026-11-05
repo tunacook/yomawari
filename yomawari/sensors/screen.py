@@ -50,3 +50,33 @@ def brightness(shot: Shot, rect: Rect) -> tuple[float, float] | None:
     values.sort(reverse=True)
     top = values[: max(1, len(values) // 10)]
     return sum(values) / len(values), sum(top) / len(top)
+
+
+def vividness(shot: Shot, rect: Rect) -> tuple[float, float] | None:
+    """rect の範囲の (濃淡, 鮮やかさ)。どちらも 0〜1。範囲が画面の外なら None。
+
+    濃淡は明るさの標準偏差、鮮やかさは各点の (RGB の最大 - 最小) の平均。半透明のボタンは後ろの絵が透けて混ざるので、
+    明るさが同じでも、濃淡が小さく色が薄く写る（スクリーンショットからは透明度そのものは測れないので、見え方で推定する）。
+    """
+    x0 = max(0, int(rect[0] * shot.width))
+    y0 = max(0, int(rect[1] * shot.height))
+    x1 = min(shot.width, int(rect[2] * shot.width))
+    y1 = min(shot.height, int(rect[3] * shot.height))
+    if x1 <= x0 or y1 <= y0:
+        return None
+    r, g, b = shot.order.index("R"), shot.order.index("G"), shot.order.index("B")
+    nx, ny = min(_SAMPLES, x1 - x0), min(_SAMPLES, y1 - y0)
+    lum: list[float] = []
+    sat = 0.0
+    for j in range(ny):
+        y = y0 + (y1 - y0) * (2 * j + 1) // (2 * ny)
+        row = y * shot.bytes_per_row
+        for i in range(nx):
+            x = x0 + (x1 - x0) * (2 * i + 1) // (2 * nx)
+            p = row + x * 4
+            cr, cg, cb = shot.data[p + r], shot.data[p + g], shot.data[p + b]
+            lum.append((0.299 * cr + 0.587 * cg + 0.114 * cb) / 255.0)
+            sat += (max(cr, cg, cb) - min(cr, cg, cb)) / 255.0
+    mean = sum(lum) / len(lum)
+    var = sum((v - mean) ** 2 for v in lum) / len(lum)
+    return var ** 0.5, sat / len(lum)

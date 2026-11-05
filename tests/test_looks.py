@@ -471,3 +471,90 @@ def test_masked_text_decides_lock_over_brightness():
     assert s._by_text("T/Btn", values, dim, {"M/Slot#1": "続きから"}) == dim
     run.inactive_words = ["空き"]
     assert s._by_text("S/Slot", values, dim, {"M/Slot#0": "1. 2026/11/05", "M/Slot#1": "2. 空き"}) == dim
+
+
+def _color_shot(cards):
+    """cards: [(rect, [(R, G, B), ...])]。四角の中を、色を縦の縞で順に塗った BGRA の画面（背景は灰色）。"""
+    data = bytearray([128, 128, 128, 255] * (W * H))
+    for (x0, y0, x1, y1), colors in cards:
+        for y in range(int(y0 * H), int(y1 * H)):
+            for x in range(int(x0 * W), int(x1 * W)):
+                r, g, b = colors[x % len(colors)]
+                p = (y * W + x) * 4
+                data[p:p + 3] = bytes([b, g, r])
+    return Shot(W, H, W * 4, bytes(data))
+
+
+def test_faded_buttons_are_found_when_brightness_is_even():
+    # 明るさは同じだが、半透明で後ろの灰色が透けている（色が薄く、濃淡が小さい）ボタンを見分ける
+    from yomawari.fuzz.looks import disabled_looks
+    from yomawari.sensors.screen import vividness
+
+    def faded(ts, labels, shot, ratio, gap):
+        return {k for k, v in disabled_looks(ts, labels, shot, ratio, 0.3, gap).items() if v == "faded"}
+
+    slots = [_slot(i) for i in range(4)]
+    vivid = [(230, 40, 40), (40, 40, 230), (240, 220, 60), (30, 160, 60)]
+    # 同じ色を灰色（128）と半々に混ぜた（半透明）
+    washed = [tuple((c + 128) // 2 for c in col) for col in vivid]
+    shot = _color_shot([(slots[0].rect, vivid), (slots[1].rect, vivid), (slots[2].rect, washed), (slots[3].rect, washed)])
+    m = measure(slots, shot)["MemoryListUI/Slot"]
+    assert dark(m, brightest(m), 0.6, 0.1) == set()  # 明るさでは差がない
+    c0, s0 = vividness(shot, slots[0].rect)
+    c2, s2 = vividness(shot, slots[2].rect)
+    assert c2 < c0 and s2 < s0
+    labels = [s.label for s in slots]
+    assert faded(slots, labels, shot, 0.6, 0.05) == {labels[2], labels[3]}
+    # 全部同じ見え方なら、どれも半透明としない。3つに満たなければ比べない
+    same = _color_shot([(s.rect, vivid) for s in slots])
+    assert faded(slots, labels, same, 0.6, 0.05) == set()
+    assert faded(slots[:2], labels[:2], shot, 0.6, 0.05) == set()
+
+
+def test_groups_that_looks_could_not_split_are_reported():
+    # 見た目（明るさ・半透明・文字）で差が出なかったのに、押して反応したものとしなかったものが混じっていた並びは、
+    # 推定できなかったとして「ハーネスの記録」に書く
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                  rng=random.Random(1), cfg=FUZZ_DEFAULTS, response_timeout=0.1)
+    run.look_groups = {"A/Slot": {"A/Slot", "A/Slot#1", "A/Slot#2"}, "B/Slot": {"B/Slot", "B/Slot#1", "B/Slot#2"},
+                       "C/Slot": {"C/Slot", "C/Slot#1", "C/Slot#2"}}
+    run.look_split = {"B/Slot"}  # B は暗いもので見分けられた
+    run.answered = {"A/Slot", "B/Slot", "C/Slot", "C/Slot#1"}
+    run.silent = {"A/Slot#1", "B/Slot#1"}
+    notes = run.looks_notes()
+    assert len(notes) == 1 and "`A/Slot` の並びは、見た目" in notes[0] and "反応した 1 個と反応しなかった 1 個" in notes[0]
+
+
+def test_faded_buttons_are_tried_later_and_noted():
+    slots = [_slot(i) for i in range(4)]
+    vivid = [(230, 40, 40), (40, 40, 230), (240, 220, 60), (30, 160, 60)]
+    washed = [tuple((c + 128) // 2 for c in col) for col in vivid]
+    shot = _color_shot([(slots[0].rect, vivid), (slots[1].rect, washed), (slots[2].rect, vivid), (slots[3].rect, washed)])
+    s, st, run, windows, mouse, events = _list_session(slots, shot)
+    asyncio.run(s._look())
+    assert s._dim == {"MemoryListUI/Slot#1", "MemoryListUI/Slot#3"}
+    assert any("半透明に見える" in n and "2/4 個" in n for n in run.notes)
+    looks = [e for e in events if e.kind == "looks"][0].data["groups"]["MemoryListUI/Slot"]
+    assert looks["disabled_looks"] == {"MemoryListUI/Slot#1": "faded", "MemoryListUI/Slot#3": "faded"}
+    assert run.look_split == {"MemoryListUI/Slot"}
+    # 画面を撮れなかったら、見た目で推定できなかったと1回書く
+    windows.shot = None
+    asyncio.run(s._look())
+    asyncio.run(s._look())
+    assert sum("画面を撮れなかった" in n for n in run.notes) == 1
+
+
+def test_grey_buttons_are_found_when_brightness_is_even():
+    # 色を抜いた（グレーアウトした）ボタン: 濃淡は残るが色がない。並びがもともと色のないボタンなら灰色としない
+    from yomawari.fuzz.looks import disabled_looks
+
+    slots = [_slot(i) for i in range(4)]
+    labels = [s.label for s in slots]
+    vivid = [(230, 40, 40), (40, 40, 230), (240, 220, 60), (30, 160, 60)]
+    grey = [(v, v, v) for v in (int(0.299 * r + 0.587 * g + 0.114 * b) for r, g, b in vivid)]
+    shot = _color_shot([(slots[0].rect, vivid), (slots[1].rect, vivid), (slots[2].rect, grey), (slots[3].rect, vivid)])
+    m = measure(slots, shot)["MemoryListUI/Slot"]
+    assert dark(m, brightest(m), 0.6, 0.1) == set()
+    assert disabled_looks(slots, labels, shot, 0.6, 0.3, 0.05) == {labels[2]: "grey"}
+    mono = _color_shot([(s.rect, grey) for s in slots])
+    assert disabled_looks(slots, labels, mono, 0.6, 0.3, 0.05) == {}

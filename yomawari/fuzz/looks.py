@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-from ..sensors.screen import Shot, brightness
+from ..sensors.screen import Shot, brightness, vividness
 from ..state import Target
 
 # 同じ大きさとみなす、幅・高さの差（描画領域に対する割合）
@@ -53,6 +53,29 @@ def measure(targets: list[Target], shot: Shot, min_group: int = 3) -> dict[str, 
         values = {t.label: v for t in ts if (v := brightness(shot, t.rect)) is not None}
         if len(values) >= min_group:
             out[key] = values
+    return out
+
+
+def disabled_looks(targets: list[Target], labels: set[str] | list[str], shot: Shot, fade_ratio: float,
+                   grey_ratio: float, min_gap: float) -> dict[str, str]:
+    """明るさでは差がない並びで、押せない（disabled）ときの一般的な見せ方をしているボタン → 見せ方（faded / grey）。
+
+    UI デザインの定石では、押せないボタンは「暗くする」（brightness で見る）のほかに、「不透明度を下げる」（後ろが透けて、
+    濃淡と鮮やかさがどちらも小さくなる: faded）、「色を抜いて灰色にする」（濃淡は残るが、鮮やかさがなくなる: grey）で表す。
+    並びでいちばん大きいものと比べ、faded は濃淡と鮮やかさのどちらも fade_ratio 倍より小さいもの、grey は鮮やかさが
+    grey_ratio 倍より小さいもの。どちらも差が min_gap 以上のときだけ。並びがもともと色のないボタンなら grey とはしない。"""
+    rects = {t.label: t.rect for t in targets}
+    vals = {label: v for label in labels if label in rects and (v := vividness(shot, rects[label])) is not None}
+    if len(vals) < 3:
+        return {}
+    top_c = max(v[0] for v in vals.values())
+    top_s = max(v[1] for v in vals.values())
+    out: dict[str, str] = {}
+    for label, (c, s) in vals.items():
+        if c < top_c * fade_ratio and top_c - c >= min_gap and s < top_s * fade_ratio and top_s - s >= min_gap:
+            out[label] = "faded"
+        elif s < top_s * grey_ratio and top_s - s >= min_gap:
+            out[label] = "grey"
     return out
 
 
