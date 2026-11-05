@@ -85,15 +85,29 @@ def load_inactive_words(path: Path) -> list[str]:
     return [str(w) for w in words if w]
 
 
-def inactive(targets: list[Target], words: list[str]) -> set[str]:
-    """文字が「空」を表す語を含むボタンの label。英数字の語は単語として照らし合わせる（大文字小文字は区別しない）。"""
-    if not words:
+def load_masked_chars(path: Path) -> str:
+    """rules.yaml の inactive_hints.masked（伏せ字の文字）。"""
+    doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    chars = ((doc.get("inactive_hints") or {}).get("masked")) or []
+    return "".join(str(c) for c in chars if c)
+
+
+def masked(text: str | None, chars: str) -> bool:
+    """文字が（空白を除いて）伏せ字だけでできている（「？？？」）。"""
+    body = re.sub(r"\s+", "", text or "")
+    return bool(chars) and bool(body) and all(c in chars for c in body)
+
+
+def inactive(targets: list[Target], words: list[str], masked_chars: str = "") -> set[str]:
+    """文字が「空」を表す語を含む、または伏せ字だけのボタンの label。英数字の語は単語として照らし合わせる（大文字小文字は区別しない）。"""
+    if not words and not masked_chars:
         return set()
-    out = set()
-    for t in targets:
-        if t.kind == "button" and t.text and any(_match(w, t.text) for w in words):
-            out.add(t.label)
-    return out
+    return {t.label for t in targets if t.kind == "button" and text_inactive(t.text, words, masked_chars)}
+
+
+def text_inactive(text: str | None, words: list[str], masked_chars: str = "") -> bool:
+    """文字が「空」を表す語を含む、または伏せ字だけでできている。"""
+    return bool(text) and (any(_match(w, text) for w in words) or masked(text, masked_chars))
 
 
 def _match(word: str, text: str) -> bool:

@@ -36,7 +36,7 @@ from ..state import GameState, Rect
 from .decider import Decider
 from .experience import Experience, Press
 from .guard import Guard
-from .looks import Values, alike, brightest, dark, groups, inactive, measure
+from .looks import Values, alike, brightest, dark, groups, inactive, masked, measure
 from .advisor import ChoiceAdvisor
 from .reading import assign, unread
 from .ops import (
@@ -79,6 +79,8 @@ class FuzzRun:
     last_press: tuple[str, float] | None = None  # 最後に押したボタンの label と時刻（役割の確定に使う）
     notes: list[str] = field(default_factory=list)  # report.md の「ハーネスの記録」に載せること
     inactive_words: list[str] = field(default_factory=list)  # rules.yaml の inactive_hints.text
+    masked_chars: str = ""  # rules.yaml の inactive_hints.masked（伏せ字の文字）
+    text_decided: set[str] = field(default_factory=set)  # 文字で押せるかを決めた並び（「ハーネスの記録」に1回書く）
     # 見た目（fuzz/looks.py）。ランのあいだ覚えておく
     dim_seen: set[str] = field(default_factory=set)  # 暗いボタンがあると記録した並び
     bright_noted: set[str] = field(default_factory=set)  # 新しく明るくなったとして先に押したボタン（ランで1回だけ）
@@ -753,7 +755,7 @@ class FuzzSession:
         """押しても反応しないと見込んでいるボタン（暗い、文字で空と分かる、押しても一度も反応しなかったもの・それと
         同じ見た目のもの）の label。一度も反応しなかったボタンは S-05 の対象でないので、押し直しても待つ時間は短くてよい。"""
         return (self._dim | self._locked_alike() | (self.run.silent - self.run.answered)
-                | inactive(self.state.targets(), self.run.inactive_words))
+                | inactive(self.state.targets(), self.run.inactive_words, self.run.masked_chars))
 
     def _judge_behind(self, measured: dict[str, Values], rects: dict[str, Rect]) -> None:
         """画面の見た目から、後ろに下がった画面を判定する。
@@ -870,12 +872,14 @@ class FuzzSession:
         if not looks:
             return
         record: dict[str, Any] = {}
+        texts = {t.label: t.text for t in targets if t.text}
         self._judge_behind(measured, {t.label: t.rect for t in targets})
         for gkey, values in measured.items():
             if gkey.split("/", 1)[0] in self.state.behind:
                 continue  # 後ろの画面は、手前の画面の影で暗く見えるので、暗い・明るいを判定しない
             ref = brightest(values)
             dk = dark(values, ref, float(self.cfg["dim_ratio"]), float(self.cfg["dim_min_gap"]))
+            dk = self._by_text(gkey, values, dk, texts)
             self._dim |= dk
             self._values[gkey] = values
             if dk:
@@ -901,6 +905,29 @@ class FuzzSession:
         if record:
             # 明るさの判定をあとから確かめられるように残す（events.jsonl）
             self.publish(Event("harness", "looks", {"groups": record}, self.launch))
+
+    def _by_text(self, gkey: str, values: Values, dk: set[str], texts: dict[str, str]) -> set[str]:
+        """並びに伏せ字（「？？？」）のボタンがあれば、その並びは明るさではなく文字で押せるかを決める。
+
+        人は、サムネイルの下が「？？？」なら未開放、題名が書いてあれば開放済みと読み、サムネイルの暗さでは決めない
+        （絵そのものが暗いものがある）。伏せ字のものを暗い扱い（V-07 の対象）にし、文字を読めて伏せ字でないものは
+        暗くても押せる扱いにする。文字を読めていないものは明るさで決める。並びに伏せ字のものが1つもなければ、
+        明るさで決める（灰色にして押せないことを示すボタンは、文字はそのままのことが多いため）。「空き」などの語
+        （inactive_hints.text）はきっかけにしない（空きのスロットを押して何かが開くのは正しい動作のことがあり、
+        V-07 に使わないため。後回しにするのは _quiet でする）。"""
+        run = self.run
+        named = [label for label in values if label in texts]
+        off = {label for label in named if masked(texts[label], run.masked_chars)}
+        if not off:
+            return dk
+        out = (dk - set(named)) | off
+        if gkey not in run.text_decided:
+            run.text_decided.add(gkey)
+            run.notes.append(
+                f"`{gkey}` の並びは、伏せ字（「{texts[sorted(off)[0]]}」）で開いていないものが分かるので、明るさではなく文字で"
+                f"押せるかを決めた（伏せ字 {len(off)} 個、文字を読めて押せる {len(set(named) - off)} 個）（起動 #{self.launch}）"
+            )
+        return out
 
     async def _read_text(self, shot: Shot, measured: dict[str, Values]) -> None:
         """ボタンの文字を、撮った画像から読む（fuzz/reading.py）。読んだボタンは、見た目が変わるまで読み直さない。"""
