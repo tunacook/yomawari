@@ -77,6 +77,8 @@ class FuzzRun:
     recent: deque[str] = field(default_factory=lambda: deque(maxlen=10))
     responsive: set[tuple[str, str]] = field(default_factory=set)  # (状態, 操作) のうち、反応があったもの
     last_press: tuple[str, float] | None = None  # 最後に押したボタンの label と時刻（役割の確定に使う）
+    # 押したあともゲームが動き続けた（同じ起動のうちに次の操作をした）ボタンの label。終了ボタンとはみなさない
+    survived: set[str] = field(default_factory=set)
     notes: list[str] = field(default_factory=list)  # report.md の「ハーネスの記録」に載せること
     inactive_words: list[str] = field(default_factory=list)  # rules.yaml の inactive_hints.text
     masked_chars: str = ""  # rules.yaml の inactive_hints.masked（伏せ字の文字）
@@ -233,6 +235,7 @@ class FuzzSession:
         self._modal_since: float | None = None
         self._trigger: asyncio.Task[None] | None = None
         self._exiting = False
+        self._pressed: str | None = None  # この起動で最後に押したボタン（次のボタンを押せたら、押しても終わらなかったもの）
         self._looked: Any = None  # 見た目を比べたときの signature
         self._dim: set[str] = set()
         self._varied: set[str] = set()  # 明るさに差のあった並び（looks の並びのキー）
@@ -1227,6 +1230,9 @@ class FuzzSession:
             self.run.labels.add(op.target.label)
             self.run.newly_bright.discard(op.target.label)
             if op.target.kind == "button":
+                if self._pressed is not None:
+                    self.run.survived.add(self._pressed)
+                self._pressed = op.target.label
                 self.run.last_press = (op.target.label, time.monotonic())
         self.publish(Event("harness", "op", {**op.to_json(), "trigger": trigger, "pos": pos}, self.launch))
         return True

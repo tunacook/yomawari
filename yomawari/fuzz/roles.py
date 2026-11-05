@@ -162,6 +162,19 @@ class RoleBook:
         self.new.append(f"`{key}` は{why}押すと{observed}ので `{role}` と確定した")
         return True
 
+    def suspect(self, key: str, role: str, observed: str) -> bool:
+        """1回の観測だけでは確定しないもの（人がゲームを閉じたのかもしれない終了など）を、推定として覚える。
+
+        推定の区分で押し直して確かめ、起きれば確定し、起きなければ取り消す。確定・取り消し済みのものは変えない。
+        新しく推定したら True。
+        """
+        e = self.entries.get(key)
+        if e is not None and (e.status != "estimated" or e.role == role):
+            return False
+        self.entries[key] = RoleEntry(role, "estimated", observed, self.build)
+        self.new.append(f"`{key}` は押すと{observed}ので `{role}` と推定した（押し直して確かめる）")
+        return True
+
     def cancel(self, key: str, observed: str) -> None:
         """推定が外れていた。以降は推定を使わない（同じキーワードでまた推定し直さない）。"""
         e = self.entries.get(key)

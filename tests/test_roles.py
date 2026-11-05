@@ -14,7 +14,7 @@ from yomawari.events import Event
 from yomawari.fuzz.decider import RandomDecider
 from yomawari.fuzz.guard import Guard
 from yomawari.fuzz.loop import FuzzRun, FuzzSession
-from yomawari.fuzz.ops import normal_candidates
+from yomawari.fuzz.ops import Op, normal_candidates
 from yomawari.fuzz.roles import RoleBook, RoleHintError, RoleHints, load_role_hints
 from yomawari.input.pointer import Pointer
 from yomawari.sensors.window import ScreenRect, WindowInfo
@@ -23,7 +23,7 @@ from yomawari.watchdog import Harness
 
 from .conftest import RULES_PATH, scaled_rules
 from .test_fuzz import CFG, TITLE, run_sim
-from .test_window import FakeWindows
+from .test_window import FakeWindows, RecordingDriver
 
 HINTS = load_role_hints(RULES_PATH)
 WEIGHTS = FUZZ_DEFAULTS["weights"]
@@ -204,17 +204,62 @@ def test_c01_skips_clean_exit_right_after_press():
     assert [i.rule_id for i in engine.feed(Event("proc", "proc_exit", {**ok, "after_op": None}, 0))] == ["C-01"]
 
 
-def test_harness_confirms_exit_and_relaunches(tmp_path):
-    book = RoleBook(HINTS)
+def _harness(tmp_path, book):
     h = Harness(BuildConfig("x", Path("/x")), Path("/x"), None, scaled_rules(1.0), RULES_PATH, tmp_path,
                 RUN_DEFAULTS, SENSOR_DEFAULTS, roles=book)
     h._restart_req = asyncio.Event()
     h._bus = type("Bus", (), {"publish": lambda self, ev: None})()
     h._on_event(Event("game", "boot", {"version": "1.0", "build_guid": "abc"}, 0))
-    h._on_event(Event("proc", "proc_exit", {"code": 0, "by_harness": False, "after_op": "RClickMenuUI/ToExit"}, 0))
-    assert book.entries["RClickMenuUI/ToExit"].role == "exit"
+    return h
+
+
+def test_harness_confirms_exit_it_expected(tmp_path):
+    # 終わると見込んで押した（推定を確かめた）ボタンで終わったら確定する
+    book = RoleBook(HINTS)
+    h = _harness(tmp_path, book)
+    h._on_event(Event("proc", "proc_exit", {"code": 0, "by_harness": True, "after_op": "RClickMenuUI/ToExit"}, 0))
+    assert book.entries["RClickMenuUI/ToExit"].status == "confirmed"
     assert book.entries["RClickMenuUI/ToExit"].build == "1.0/abc"
+    assert h.issues == []
+
+
+def test_unexpected_exit_after_press_is_only_estimated_and_relaunches(tmp_path):
+    # 見込んでいない終了は、人がゲームを閉じたのかもしれない（run 1346 で、閉じる直前に押した
+    # 「この思い出を読む」が exit と確定され、以後のランで一度も押されなくなった）
+    book = RoleBook(HINTS)
+    h = _harness(tmp_path, book)
+    h._on_event(Event("proc", "proc_exit", {"code": 0, "by_harness": False, "after_op": "Summary/Read"}, 0))
+    e = book.entries["Summary/Read"]
+    assert (e.role, e.status) == ("exit", "estimated")
     assert h._exit_after_op and h._restart_req.is_set() and h.issues == []
+
+
+def test_unexpected_exit_after_button_that_survived_before_is_not_exit(tmp_path):
+    book = RoleBook(HINTS)
+    h = _harness(tmp_path, book)
+    h._fuzz = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.3), guard=Guard({}, book=book),
+                      rng=random.Random(1), cfg=CFG, response_timeout=0.25)
+    h._fuzz.survived.add("Summary/Read")
+    h._on_event(Event("proc", "proc_exit", {"code": 0, "by_harness": False, "after_op": "Summary/Read"}, 0))
+    assert "Summary/Read" not in book.entries
+    assert any("終了ボタンとはみなさなかった" in n for n in h.notes)
+    assert h._exit_after_op and h.issues == []
+
+
+def test_button_pressed_before_next_press_survived():
+    s, st, _, windows, _ = _session()
+    s.pointer = Pointer(windows, RecordingDriver(), 1, st, activate_wait=0)
+    _feed(s, st, "resolution", w=1000, h=500, mode="Windowed")
+    _feed(s, st, "menu", name="TitleUI", buttons=[{"name": "Start", "rect": [0.1, 0.1, 0.2, 0.2]},
+                                                  {"name": "Gallery", "rect": [0.3, 0.1, 0.4, 0.2]}])
+    for name in ("Start", "Gallery"):
+        t = st.find(f"TitleUI/{name}")
+        asyncio.run(s._do(Op("click", t, weight=1, group="button")))
+    assert s.run.survived == {"TitleUI/Start"}  # 最後に押したものは、まだ終わらなかったか分からない
+    # 起動し直したら、前の起動で最後に押したものは数えない
+    s2 = FuzzSession(s.run, st, s.pointer, lambda e: None, 1, lambda _: None)
+    asyncio.run(s2._do(Op("click", st.find("TitleUI/Start"), weight=1, group="button")))
+    assert s.run.survived == {"TitleUI/Start"}
 
 
 def test_title_menu_that_gets_buttons_later():
