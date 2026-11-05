@@ -382,3 +382,95 @@ steps = [
     assert _weights(s, st)["click MemorySummaryUI/StartToMemoryScenario"] == click
     with pytest.raises(ConfigError, match="知らない項目"):
         parse_flows([{"name": "x", "start": {"screen": "A"}, "steps": [{"screen": "A"}], "avoid_txt": ["a"]}])
+
+
+ONCE_PROFILE = """
+[[flow]]
+name = "質問に言葉で答える"
+start = { screen = "MemoryListUI", by = "game" }
+steps = [
+  { screen = "MemoryListUI", press = "MemoryListGridSlot*", note = "開示済みの思い出を選ぶ" },
+  { screen = "MemorySummaryUI", press = "StartToMemoryScenario", once = true, note = "この思い出を読む" },
+  { scene = "memories/*", advance = true, once = true, note = "最後まで読む" },
+  { screen = "MemorySummaryUI", press = "ShowFragmentListButton", note = "言葉を選ぶ" },
+  { screen = "MemoryFragmentListUI", press = "MemoryFragmentListSlot*", note = "開示済みの言葉を選ぶ" },
+]
+"""
+FRAG = "MemoryFragmentListUI/MemoryFragmentListSlot(Clone)"
+SLOT = "MemoryListUI/MemoryListGridSlot (Clone)"
+
+
+def _to_fragments(s, st, run, slots):
+    """質問の一覧で 1 つめの思い出を選び、言葉の一覧まで進める（読むのは済ませたものとして飛ばす）。"""
+    _feed(st, "line", line_id="main/scenarioB_004:323.0", text="アカウント名を選ぼう。")
+    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=LIST)
+    _weights(s, st)
+    run.flow.pressed(SLOT, "MemoryListGridSlot (Clone)", True)
+    _feed(st, "menu", name="MemorySummaryUI", modal=True, buttons=SUMMARY)
+    _weights(s, st)
+    run.flow.pressed("MemorySummaryUI/StartToMemoryScenario", "StartToMemoryScenario", True)
+    _feed(st, "menu", name="MemorySummaryUI", modal=True, buttons=SUMMARY)
+    run.flow.index = 3
+    _weights(s, st)
+    run.flow.pressed("MemorySummaryUI/ShowFragmentListButton", "ShowFragmentListButton", True)
+    _feed(st, "menu", name="MemoryFragmentListUI", modal=True, buttons=[
+        *[{"name": "MemoryFragmentListSlot(Clone)", "rect": [0.1 + 0.15 * i, 0.4, 0.2 + 0.15 * i, 0.5]} for i in range(slots)],
+        {"name": "ReturnButton", "rect": [0.07, 0.9, 0.13, 0.95]},
+    ])
+
+
+def test_dim_options_are_tried_after_bright_ones():
+    # run 2026-11-05_1346: 「No.009 こわくない場所」の言葉の一覧で、下の3枚（答えの「rachel0612」を含む）が暗く写り、
+    # 押せないとみなして選ばずに、上の3枚を試し終えたら「すべて試した」としていた。暗いものも、明るいものの次に試す
+    s, st, run, _ = _session()
+    run.flow = FlowTracker(parse_flows(tomllib.loads(ONCE_PROFILE)["flow"]))
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    _to_fragments(s, st, run, 4)
+    labels = [FRAG, f"{FRAG}#1", f"{FRAG}#2", f"{FRAG}#3"]
+    s._dim = {labels[2], labels[3]}
+    w = _weights(s, st)
+    assert run.flow.index == 4
+    assert [w[f"click {x}"] for x in labels] == [click * k, click * k, click, click]
+    # 明るい2枚は外れだった
+    ctx, path = run.flow.ctx, tuple(run.flow.path)
+    run.flow.leaves |= {(ctx, (*path, labels[0])), (ctx, (*path, labels[1]))}
+    w = _weights(s, st)
+    assert [w[f"click {x}"] for x in labels[2:]] == [click * k, click * k]
+    assert not any("すべて試しても" in e for e in run.flow.events)
+    # 押して反応がなかったもの（押して確かめた）は、暗いものの番になっても選ばない
+    run.silent.add(labels[3])
+    assert _weights(s, st)[f"click {labels[3]}"] == click
+    run.flow.leaves.add((ctx, (*path, labels[2])))
+    _weights(s, st)
+    assert any("すべて試しても" in e for e in run.flow.events)
+
+
+def test_empty_fragment_list_is_dead_end_and_reading_is_remembered():
+    # run 2026-11-05_1346: 言葉が1つも開示されていない思い出「あの計画」（一覧には戻るボタンだけ）を、選ぶたびに
+    # 読み直していた。選べるものがない一覧は行き止まりとし、手順の順番から外れて読んだときも読んだと覚える
+    s, st, run, _ = _session()
+    run.flow = FlowTracker(parse_flows(tomllib.loads(ONCE_PROFILE)["flow"]))
+    _to_fragments(s, st, run, 0)
+    _weights(s, st)
+    assert (run.flow.ctx, (SLOT, "MemorySummaryUI/ShowFragmentListButton")) in run.flow.leaves
+    # 言葉の一覧から戻って、要約で「この思い出を読む」を押した（いまの手順は言葉を選ぶ）
+    run.flow.done_once.clear()
+    run.flow.pressed("MemorySummaryUI/StartToMemoryScenario", "StartToMemoryScenario", True)
+    assert run.flow.is_done(1)
+    # 同じ質問で同じ思い出を選び直したときも、読んだ思い出は読み直さない（「この思い出を読む」は後回し）
+    run.flow.path = [SLOT]
+    run.flow.index = 1
+    assert run.flow.is_done(1)
+
+
+def test_read_text_is_forgotten_when_menu_closes():
+    # 言葉のスロットの名前は並びの番号なので、別の思い出の一覧でも同じ名前になる。閉じたら読んだ文字を忘れる
+    st = GameState()
+    _feed(st, "menu", name="MemoryFragmentListUI", modal=True,
+          buttons=[{"name": "MemoryFragmentListSlot(Clone)", "rect": [0.1, 0.4, 0.2, 0.5]}])
+    st.set_read_text({FRAG: "階段", "MemoryListUI/X": "No.009"})
+    _feed(st, "menu_close", name="MemoryFragmentListUI")
+    assert st.read_text == {"MemoryListUI/X": "No.009"} and st.closed == {"MemoryFragmentListUI"}
+    _feed(st, "menu", name="MemoryFragmentListUI", modal=True,
+          buttons=[{"name": "MemoryFragmentListSlot(Clone)", "rect": [0.1, 0.4, 0.2, 0.5]}])
+    assert st.find(FRAG).text is None

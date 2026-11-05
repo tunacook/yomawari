@@ -508,26 +508,40 @@ class FuzzSession:
             run.question = list(run.lines)[-int(cfg["ai_context_lines"]):]
             run.read_lines = []
         boost, low = float(cfg["flow_factor"]), float(cfg["flow_avoid_factor"])
+        # 押しても反応しないと分かっているもの（押して反応がなかった、文字で空・伏せ字と分かる）は選ばない。
+        # 見た目だけで押せなさそうと見たもの（暗い、反応しなかったものと同じ見た目）は、ほかを試し終えてから選ぶ
+        # （人も、明るいものが外れなら暗いものも試す。絵柄が暗いだけで選べるものがある。run 2026-11-05_1346）
         quiet = self._quiet() | run.silent
+        sure = (run.silent - run.answered) | inactive(self.state.targets(), run.inactive_words, run.masked_chars)
         done = tracker.done_steps()
 
-        def option(t: Any) -> str | None:
+        def option(t: Any, skip: set[str]) -> str | None:
             """いまの手順で選べるもの（ボタンの label・選択肢の本文）。当てはまらなければ None。"""
             if step is None or t is None:
                 return None
             if t.kind == "choice" and step.choose is not None:
                 ok = not step.choose or any(fnmatchcase(t.text or "", p) for p in step.choose)
                 return (t.text or t.label) if ok else None
-            if (t.kind == "button" and t.label not in quiet and step.when.screen == t.menu
+            if (t.kind == "button" and t.label not in skip and step.when.screen == t.menu
                     and (step.presses(t.label, t.name, t.text) if step.targets
                          else not (step.advance or step.choose is not None))):
                 return t.label
             return None
 
-        options = {op.label: o for op in cands if (o := option(op.target)) is not None}
-        tracker.offer(sorted(set(options.values())))
+        options = {op.label: o for op in cands if (o := option(op.target, quiet)) is not None}
+        later = {op.label: o for op in cands if (o := option(op.target, sure)) is not None and op.label not in options}
+        tracker.offer(sorted(set(options.values()) | set(later.values())))
+        if (step is not None and step.targets and not options and not later
+                and (top := self.state.top_modal()) is not None and top.name == step.when.screen):
+            # 手順の画面が出ているのに、選べるものが1つもない（言葉がまだ1つも開示されていない思い出など）。
+            # この選び方は行き止まりとして、ほかの選び方を試す
+            tracker.dead_end()
         # 試行錯誤: すべて試し終えた枝（外れだった組み合わせ）は後回し。いまの枝で試しかけのものがあれば、そちらを先に
         fresh = {o for o in options.values() if not tracker.exhausted(o)}
+        if not fresh and later:
+            # 押せそうに見えるものは試し終えた。見た目だけで押せなさそうと見たものも試す
+            options |= later
+            fresh = {o for o in later.values() if not tracker.exhausted(o)}
         if options and not fresh:
             tracker.note_exhausted()
             fresh = set(options.values())  # 試せる組み合わせをすべて試した。ほかの道もないので、どれも同じに戻す
@@ -932,6 +946,12 @@ class FuzzSession:
     async def _read_text(self, shot: Shot, measured: dict[str, Values]) -> None:
         """ボタンの文字を、撮った画像から読む（fuzz/reading.py）。読んだボタンは、見た目が変わるまで読み直さない。"""
         run = self.run
+        if self.state.closed:
+            # 閉じた画面で読んだ文字は捨てる（同じ名前のボタンでも、次に開いたときは中身が違うことがある）
+            prefixes = tuple(name + "/" for name in self.state.closed)
+            run.read_done = {label for label in run.read_done if not label.startswith(prefixes)}
+            run.read_look = {k: v for k, v in run.read_look.items() if not k.startswith(prefixes)}
+            self.state.closed.clear()
         ratio, gap = float(self.cfg["dim_ratio"]), float(self.cfg["dim_min_gap"])
         now = {label: v for values in measured.values() for label, v in values.items()}
         for label, v in now.items():
