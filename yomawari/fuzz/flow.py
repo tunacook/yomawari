@@ -264,7 +264,27 @@ class FlowTracker:
             # 最後の手順（本文を最後まで読むなど）の条件から外れた。押して終える手順がないので、ここで最後まで進めたとする
             self._complete("最後の手順の条件から外れた")
             return None
-        # いまの手順より前の画面（流れの始まりの画面など）にいるなら、まだ流れの中
+        # いまの手順より前の手順の画面に戻った（言葉の一覧から要約へ戻った、要約を閉じて思い出の一覧へ戻った）。
+        # 人が戻って選び直すのと同じく、その手順からやり直す。選んだものの並びも、その手順の前までに戻す
+        # （戻れないと、先の手順のまま思い出の一覧で何も優先せず、読む前の思い出を選び直せない。run 2026-11-05_1856）
+        for j in range(self.index - 1, -1, -1):
+            s = flow.steps[j]
+            if s.when.screen is None or not s.when.match(state, opened_by):
+                continue
+            picks = self._picks_before(j)
+            if s.once and (flow.name, j, tuple(self.path[:picks])) in self.done_once:
+                continue
+            # 同じ画面に戻る手順が前にもあり、そのあいだに選ぶ手順がなければ、まだ済ませていない once の手順を先にする
+            # （言葉の一覧から要約に戻ったとき、まだ読んでいない思い出なら「言葉を選ぶ」より「この思い出を読む」）
+            for k in range(j):
+                e = flow.steps[k]
+                if (e.once and e.when.screen == s.when.screen and self._picks_before(k) == picks
+                        and (flow.name, k, tuple(self.path[:picks])) not in self.done_once):
+                    j, s = k, e
+                    break
+            self.index, self.path, self.idle_since = j, self.path[:picks], None
+            return s
+        # 流れの始まりの画面にいるなら、まだ流れの中
         if flow.start.match(state, opened_by) or any(s.when.match(state, opened_by) for s in flow.steps[: self.index]):
             self.idle_since = None
             return None
@@ -312,9 +332,17 @@ class FlowTracker:
         return all(self._exhausted(ctx, (*path, o), depth + 1) for o in opts)
 
     def dead_end(self) -> None:
-        """いまの選び方は、手順の画面で選べるものが1つもない行き止まり（外れと同じに扱う）。"""
-        if self.ctx is not None and self.path:
-            self.leaves.add((self.ctx, tuple(self.path)))
+        """いまの選び方は、手順の画面で選べるものが1つもない行き止まり（外れと同じに扱う）。
+
+        前の once の押す手順（この思い出を読む）を、この選び方でまだ済ませていなければ、行き止まりにしない
+        （読む前の思い出の言葉の一覧が空なのは当たり前で、読めば言葉が開示される）。"""
+        flow = self.active
+        if self.ctx is None or not self.path or flow is None:
+            return
+        for i, s in enumerate(flow.steps[:self.index]):
+            if s.once and s.targets and (flow.name, i, tuple(self.path[:self._picks_before(i)])) not in self.done_once:
+                return
+        self.leaves.add((self.ctx, tuple(self.path)))
 
     def note_exhausted(self) -> None:
         """いまの手順で選べるものの枝を、すべて試し終えた（同じ質問で、試せる組み合わせがもうない）。"""
@@ -359,7 +387,8 @@ class FlowTracker:
         if step.once:
             self.done_once.add((flow.name, self.index, tuple(self.path[:self._picks_before(self.index)])))
         else:
-            self.path.append(picked)
+            # 同じ手順で選び直したら置き換える（思い出を選んで反応があったが、要約が出ずに一覧のままだったなど）
+            self.path = [*self.path[:self._picks_before(self.index)], picked]
         if self.index == len(flow.steps) - 1:
             if self.ctx is not None:
                 self.leaves.add((self.ctx, tuple(self.path)))

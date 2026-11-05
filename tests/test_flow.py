@@ -491,3 +491,47 @@ def test_dim_options_wait_while_bright_one_is_off_screen():
     assert run.flow.index == 0
     assert [w[f"click {x}"] for x in (SLOT, f"{SLOT}#1", f"{SLOT}#2")] == [click] * 3
     assert not any("すべて試しても" in e for e in run.flow.events)
+
+
+def test_going_back_restarts_from_that_step():
+    # run 2026-11-05_1856: まだ読んでいない思い出で「言葉を選ぶ」を押し、空の言葉の一覧から要約・思い出の一覧へ戻った。
+    # 流れが「言葉を選ぶ」のまま戻れず、思い出の一覧で何も優先せず、思い出を読まなくなった
+    s, st, run, _ = _session()
+    run.flow = FlowTracker(parse_flows(tomllib.loads(ONCE_PROFILE)["flow"]))
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    _feed(st, "line", line_id="main/scenarioA_004:44.0", text="あの時——")
+    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=LIST)
+    _weights(s, st)
+    run.flow.pressed(SLOT, "MemoryListGridSlot (Clone)", True)
+    _feed(st, "menu", name="MemorySummaryUI", modal=True, buttons=SUMMARY)
+    assert _weights(s, st)["click MemorySummaryUI/StartToMemoryScenario"] == click * k
+    # 読まずに「言葉を選ぶ」を押した。言葉の一覧は空（読む前なので当たり前）で、行き止まりにはしない
+    run.flow.pressed("MemorySummaryUI/ShowFragmentListButton", "ShowFragmentListButton", True)
+    _feed(st, "menu", name="MemoryFragmentListUI", modal=True,
+          buttons=[{"name": "ReturnButton", "rect": [0.07, 0.9, 0.13, 0.95]}])
+    _weights(s, st)
+    assert run.flow.index == 4 and not run.flow.leaves
+    # 要約に戻った: まだ読んでいないので「この思い出を読む」からやり直す
+    _feed(st, "menu_close", name="MemoryFragmentListUI")
+    w = _weights(s, st)
+    assert run.flow.index == 1 and run.flow.path == [SLOT]
+    assert w["click MemorySummaryUI/StartToMemoryScenario"] == click * k
+    # 要約を閉じて思い出の一覧に戻った: 思い出を選ぶところからやり直す
+    _feed(st, "menu_close", name="MemorySummaryUI")
+    w = _weights(s, st)
+    assert run.flow.index == 0 and run.flow.path == []
+    assert w[f"click {SLOT}#1"] == click * k
+    # 一覧のまま選び直したら、選んだものを置き換える
+    run.flow.pressed(f"{SLOT}#1", "MemoryListGridSlot (Clone)", True)
+    run.flow.pressed(f"{SLOT}#2", "MemoryListGridSlot (Clone)", True)
+    assert run.flow.path == [f"{SLOT}#2"]
+    # 読んだ思い出の要約に、言葉の一覧から戻ったときは「言葉を選ぶ」
+    _feed(st, "menu", name="MemorySummaryUI", modal=True, buttons=SUMMARY)
+    _weights(s, st)
+    run.flow.pressed("MemorySummaryUI/StartToMemoryScenario", "StartToMemoryScenario", True)
+    run.flow.index = 4
+    _feed(st, "menu_close", name="MemorySummaryUI")
+    _feed(st, "menu", name="MemorySummaryUI", modal=True, buttons=SUMMARY)
+    w = _weights(s, st)
+    assert run.flow.index == 3
+    assert w["click MemorySummaryUI/ShowFragmentListButton"] == click * k
