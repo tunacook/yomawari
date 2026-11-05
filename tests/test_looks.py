@@ -124,6 +124,7 @@ def test_dim_buttons_are_tried_later_and_noted():
     s, st, run, windows, mouse, events = _list_session(slots, shot)
     asyncio.run(s._look())
     assert s._dim == {"MemoryListUI/Slot", "MemoryListUI/Slot#1", "MemoryListUI/Slot#3"}
+    assert s._disabled == set()  # 暗いだけなので後回しにするが、V-07 の対象にはしない（暗い＝押せないかはデザイン次第）
     # 撮る前に、カーソルをボタンのない場所（右上の隅）へ逃がした
     assert mouse.moves == [(995.0, 2.5)]
     ops = normal_candidates(st, run.guard, CFG["weights"], False, None, s._factors())
@@ -194,13 +195,15 @@ def test_v07_dim_button_that_responds():
     from .conftest import scaled_rules
 
     engine = Engine(scaled_rules(1.0))
-    ok = {"kind": "click", "target": "MemoryListUI/Slot#3", "dim": True, "responded": True, "screen_changed": True,
+    ok = {"kind": "click", "target": "MemoryListUI/Slot#3", "dim": True, "disabled_look": True, "responded": True, "screen_changed": True,
           "interfered": False, "heartbeat_age": 0.5}
     out = engine.feed(Event("harness", "op_result", ok, 0))
     assert [i.rule_id for i in out] == ["V-07"] and "Slot#3" in out[0].detail
     assert engine.feed(Event("harness", "op_result", ok, 0)) == []  # 同じボタンは1回だけ
     assert engine.feed(Event("harness", "op_result", {**ok, "target": "A/B", "responded": False, "screen_changed": False}, 0)) == []
-    assert engine.feed(Event("harness", "op_result", {**ok, "target": "A/C", "dim": False}, 0)) == []
+    assert engine.feed(Event("harness", "op_result", {**ok, "target": "A/C", "dim": False, "disabled_look": False}, 0)) == []
+    # run 2026-11-05_2230: ほかより暗いだけ（絵柄が暗い言葉・セーブスロット）では出さない（暗い＝押せないかはデザイン次第）
+    assert engine.feed(Event("harness", "op_result", {**ok, "target": "A/D", "disabled_look": False}, 0)) == []
 
 
 def test_v07_needs_another_screen_not_feedback():
@@ -209,7 +212,7 @@ def test_v07_needs_another_screen_not_feedback():
     from .conftest import scaled_rules
 
     engine = Engine(scaled_rules(1.0))
-    base = {"kind": "click", "target": "MemoryListUI/Slot#5", "dim": True, "responded": True,
+    base = {"kind": "click", "target": "MemoryListUI/Slot#5", "dim": True, "disabled_look": True, "responded": True,
             "interfered": False, "heartbeat_age": 0.5}
     # 押せないことを知らせる演出（通知が出た）で画面の状態は変わったが、別の画面は出ていない
     assert engine.feed(Event("harness", "op_result", {**base, "screen_changed": False}, 0)) == []
@@ -222,7 +225,7 @@ def test_v07_skips_saving_into_empty_slot():
 
     engine = Engine(scaled_rules(1.0))
     # 空きのセーブスロットはサムネイルがなく暗く写る。押してセーブが始まり、操作を止める幕（ボタンのないモーダル）が出た
-    d = {"kind": "click", "target": "SaveLoadUI/SaveLoadSlot (Clone)#1", "dim": True, "responded": True,
+    d = {"kind": "click", "target": "SaveLoadUI/SaveLoadSlot (Clone)#1", "dim": True, "disabled_look": True, "responded": True,
          "screen_changed": True, "saved": True, "interfered": False, "heartbeat_age": 0.5}
     assert engine.feed(Event("harness", "op_result", d, 0)) == []
     st = GameState()
@@ -532,7 +535,7 @@ def test_faded_buttons_are_tried_later_and_noted():
     shot = _color_shot([(slots[0].rect, vivid), (slots[1].rect, washed), (slots[2].rect, vivid), (slots[3].rect, washed)])
     s, st, run, windows, mouse, events = _list_session(slots, shot)
     asyncio.run(s._look())
-    assert s._dim == {"MemoryListUI/Slot#1", "MemoryListUI/Slot#3"}
+    assert s._dim == s._disabled == {"MemoryListUI/Slot#1", "MemoryListUI/Slot#3"}
     assert any("半透明に見える" in n and "2/4 個" in n for n in run.notes)
     looks = [e for e in events if e.kind == "looks"][0].data["groups"]["MemoryListUI/Slot"]
     assert looks["disabled_looks"] == {"MemoryListUI/Slot#1": "faded", "MemoryListUI/Slot#3": "faded"}
