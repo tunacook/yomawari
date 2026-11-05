@@ -151,10 +151,22 @@ class Harness:
             d = ev.data
             self.roles.build = "/".join(str(d[k]) for k in ("version", "build_guid") if d.get(k)) or None
         elif ev.kind == "proc_exit" and ev.data["code"] == 0 and ev.data.get("after_op"):
-            # 押した直後に正常に終わった。ハーネスが止めたのでなければ、終了を期待する操作と同じく起動し直して続ける
-            self.roles.confirm(str(ev.data["after_op"]), "exit", "終了コード 0 で終わった")
-            if not ev.data["by_harness"]:
+            # 押した直後に正常に終わった
+            key = str(ev.data["after_op"])
+            if ev.data["by_harness"]:
+                # 終わると見込んで押した（終了の推定を確かめた）とおりに終わった
+                self.roles.confirm(key, "exit", "終了コード 0 で終わった")
+            else:
+                # 見込んでいない終了は、人がゲームを閉じたのかもしれない。1回では確定せず、
+                # 前に押して終わらなかったボタンなら終了ボタンとはみなさない。終了を期待する操作と同じく起動し直して続ける
                 self._exit_after_op = True
+                if self._fuzz is not None and key in self._fuzz.survived:
+                    self.notes.append(
+                        f"`{key}` を押した直後にゲームが終了コード 0 で終わったが、前に押したときは終わらなかったので、"
+                        f"終了ボタンとはみなさなかった（起動 #{ev.launch}。人がゲームを閉じたのかもしれない）"
+                    )
+                else:
+                    self.roles.suspect(key, "exit", "終了コード 0 で終わった")
         if ev.kind == "external":
             d = ev.data
             self.notes.append(
