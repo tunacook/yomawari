@@ -36,7 +36,9 @@ class Lead:
     unseen: int  # その向きにある、まだ見ていないボタンの数
     point: tuple[float, float]  # ホイール・ドラッグをする位置（見えているボタンの範囲の中心）
     visible: tuple[str, ...]  # 見えているボタンの label
-    kind: str = "unseen"  # unseen: まだ見ていない項目を探す / known: 前に見て明るかった（開示済みと分かっている）項目へ戻る
+    # unseen: まだ見ていない項目を探す / known: 前に見て明るかった（開示済みと分かっている）項目へ戻る /
+    # flow: ゲームの流れで、まだ試していない選び方を探す
+    kind: str = "unseen"
 
 
 def searchable_menus(state: GameState) -> list[Menu]:
@@ -59,6 +61,12 @@ def known_leads(state: GameState, known: set[str]) -> list[Lead]:
     def want(vis: list[Target], b: Target) -> bool:
         return b.label in known and not any(v.label in known for v in vis)
     return _directions(state, want, "known")
+
+
+def toward(state: GameState, menu: str, want) -> list[Lead]:
+    """menu の画面の外にある、want(b) に当てはまるボタンの向き（ゲームの流れで、見えている選び方を試し終えたあとに
+    まだ試していない選び方を探しにいく。fuzz/loop.py）。"""
+    return [lead for lead in _directions(state, lambda vis, b: want(b), "flow") if lead.menu == menu]
 
 
 def _directions(state: GameState, want, kind: str) -> list[Lead]:

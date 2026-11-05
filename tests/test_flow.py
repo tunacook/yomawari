@@ -535,3 +535,32 @@ def test_going_back_restarts_from_that_step():
     w = _weights(s, st)
     assert run.flow.index == 3
     assert w["click MemorySummaryUI/ShowFragmentListButton"] == click * k
+
+
+def test_tried_all_visible_options_looks_off_screen():
+    # run 2026-11-05_2230: 質問の一覧が最後のほうで開き、見えている思い出 2 つ（No.050・No.052）の言葉をすべて試しても、
+    # 一覧を動かさずに同じ 2 つを 1 時間試し続けた。見えているものを試し終えたら、画面の外のまだ試していないものを探す
+    s, st, run, _ = _session()
+    run.flow = FlowTracker(parse_flows(tomllib.loads(ONCE_PROFILE)["flow"]))
+    k, low, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    slots = [{"name": "MemoryListGridSlot (Clone)", "rect": [0.1 + 0.2 * i, 0.3, 0.25 + 0.2 * i, 0.5]} for i in range(2)]
+    slots += [{"name": "MemoryListGridSlot (Clone)", "rect": [0.1, -0.5, 0.25, -0.3], "hidden": True},
+              {"name": "MemoryListGridSlot (Clone)", "rect": [0.3, -0.5, 0.45, -0.3], "hidden": True}]
+    _feed(st, "line", line_id="main/scenarioB_004:323.0", text="アカウント名を選ぼう。")
+    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=slots)
+    _weights(s, st)
+    ctx = run.flow.ctx
+    run.flow.leaves |= {(ctx, (SLOT,)), (ctx, (f"{SLOT}#1",))}
+    run.masked_chars = "?？"
+    st.set_read_text({f"{SLOT}#3": "？？？"})  # 伏せ字のものは探さない（#2 だけを探す）
+    w = _weights(s, st)
+    assert w[f"click {SLOT}"] == w[f"click {SLOT}#1"] == pytest.approx(click * low)
+    assert w["wheel_up 3"] == w["drag down"] == click * k
+    assert w["wheel_down 3"] < click * k  # 上へ探す（下へはふだんの動かす操作のまま）
+    assert not any("すべて試しても" in e for e in run.flow.events)
+    assert any("画面の外のまだ試していない項目を探した" in n for n in run.notes)
+    # 画面の外のものも試し終えたら（残りは伏せ字の #3 だけ）、すべて試したと記録する
+    run.flow.leaves.add((ctx, (f"{SLOT}#2",)))
+    w = _weights(s, st)
+    assert w["wheel_up 3"] < click * k
+    assert any("すべて試しても" in e for e in run.flow.events)

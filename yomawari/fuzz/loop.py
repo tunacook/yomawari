@@ -32,7 +32,7 @@ from typing import Any
 from ..events import Event
 from ..input.pointer import InputBlocked, Pointer, PointerError
 from ..sensors.screen import Shot
-from ..state import GameState, Rect
+from ..state import GameState, Rect, Target
 from .decider import Decider
 from .experience import Experience, Press
 from .guard import Guard
@@ -47,7 +47,9 @@ from .ops import (
     state_key,
 )
 from .flow import FlowTracker
-from .search import REVEAL, Lead, blind_candidates, known_leads, leads, search_candidates, searchable_menus, stuck_rows
+from .search import (
+    REVEAL, Lead, blind_candidates, known_leads, leads, search_candidates, searchable_menus, stuck_rows, toward,
+)
 
 # プレイの目的（random モード）→ レポートでの呼び方
 INTENTS = {"progress": "本編を進める", "explore": "画面を見て回る"}
@@ -567,9 +569,14 @@ class FuzzSession:
             # 思い出を押して回らない。run 2026-11-05_1811）
             options |= later
             fresh = {o for o in later.values() if not tracker.exhausted(o)}
+        away: list[Op] = []
         if options and not fresh:
-            tracker.note_exhausted()
-            fresh = set(options.values())  # 試せる組み合わせをすべて試した。ほかの道もないので、どれも同じに戻す
+            # 見えている選び方は試し終えた。画面の外に、まだ試していない選び方があれば、人が一覧をめくるようにそちらを探す
+            # （一覧が最後のほうで開き、見えている 2 つの思い出だけを 1 時間試し続けた。run 2026-11-05_2230）
+            away = self._flow_search(step, sure, boost)
+            if not away:
+                tracker.note_exhausted()
+                fresh = set(options.values())  # 試せる組み合わせをすべて試した。ほかの道もないので、どれも同じに戻す
         going = {o for o in fresh if tracker.tried(o)}
         favored = self._advice(going or fresh, cands, options)
         ai = float(cfg["ai_choice_factor"])
@@ -591,7 +598,39 @@ class FuzzSession:
                 elif not going or o in going:
                     f = boost * (ai if o in favored else 1.0)
             out.append(dataclasses.replace(op, weight=op.weight * f) if f != 1.0 else op)
+        if away:
+            labels = {op.label for op in away}
+            out = [op for op in out if op.label not in labels] + away
         return out
+
+    def _flow_search(self, step: Any, sure: set[str], boost: float) -> list[Op]:
+        """手順の画面の外にある、手順のボタンでまだ試していない選び方へ動かす操作（試し終えたもの、押せないと分かっている
+        もの（伏せ字・押して反応がなかった）は探さない）。動かしても見えてこない向きは search_give_up 回であきらめる。"""
+        run, tracker = self.run, self.run.flow
+        menu = self.state.menus.get(step.when.screen) if step is not None and step.when.screen else None
+        if menu is None or not step.targets:
+            return []
+        skip = sure | inactive(menu.buttons, run.inactive_words, run.masked_chars)
+        give_up = int(self.cfg["search_give_up"])
+
+        def want(b: Target) -> bool:
+            return (not b.locked and b.label not in skip and step.presses(b.label, b.name, b.text)
+                    and not tracker.exhausted(b.label))
+        found = [lead for lead in toward(self.state, menu.name, want)
+                 if run.search_miss[self._lead_key(lead)] < give_up]
+        if not found:
+            return []
+        w = float(self.cfg["weights"]["click"]) * run.screen_weights.get(menu.name, 1.0) * boost
+        low = float(self.cfg["no_response_factor"])
+        ops = []
+        for op in search_candidates(found, {f"{lead.menu}/{lead.name}": w for lead in found}):
+            targets = [lead for lead in found if (op.kind, op.arg) in REVEAL[lead.direction]]
+            op = dataclasses.replace(op, weight=op.weight * low ** run.search_dead[(menu.name, op.label)])
+            self._search[op.label] = [(self._lead_key(lead), lead.menu) for lead in targets]
+            ops.append(op)
+        self._note_search(menu.name, f"`{menu.name}` で、見えている選び方をすべて試したので、画面の外のまだ試していない"
+                                     "項目を探した", final=False, tag="flow")
+        return ops
 
     def _step_bright_anywhere(self, step: Any, quiet: set[str]) -> bool:
         """手順の画面に、手順のボタンで押せそうに見えるもの（見た目で押せなさそうとしていないもの）があるか。
