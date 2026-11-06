@@ -48,6 +48,7 @@ from .ops import (
 )
 from .flow import FlowTracker
 from .resume import SaveHints, stamp_key
+from .rollback import EDGE_OPS, EDGE_TIMINGS, PATTERNS, RollbackWatch, Step, describe, edge_timing, step_of
 from .search import (
     REVEAL, Lead, blind_candidates, known_leads, leads, search_candidates, searchable_menus, stuck_rows, toward,
 )
@@ -58,7 +59,6 @@ INTENTS = {"progress": "本編を進める", "explore": "画面を見て回る"}
 RECOVERABLE = ("S-02", "S-03")
 
 # イレギュラー操作を差し込むきっかけにするゲームのイベント
-TRIGGERS = {"transition", "line", "choices", "save", "load", "scene"}
 # drag の向き → 描画領域の正規化座標での移動の向き（上へドラッグすると、下にある項目が出てくる）
 DRAG = {"up": (0.0, -1.0), "down": (0.0, 1.0), "left": (-1.0, 0.0), "right": (1.0, 0.0)}
 
@@ -88,6 +88,12 @@ class FuzzRun:
     masked_chars: str = ""  # rules.yaml の inactive_hints.masked（伏せ字の文字）
     save_hints: SaveHints = field(default_factory=SaveHints)  # rules.yaml の save_hints（セーブ済みのスロット・続きから）
     resume_until: float | None = None  # 起動し直して、続きから遊ぼうとしているあいだ（この時刻まで）
+    # 巻き戻しのエッジケース（fuzz/rollback.py）
+    rollback: RollbackWatch = field(default_factory=RollbackWatch)
+    edge_sent: Counter[tuple[str, str]] = field(default_factory=Counter)  # (タイミング, 操作の種類) → 差し込んだ回数
+    rollback_dead: Counter[str] = field(default_factory=Counter)  # タイミング → 差し込んだのに前の行に戻らなかった回数
+    menu_opener: dict[str, Step] = field(default_factory=dict)  # 開いているモーダル → それを開いた操作
+    last_step: tuple[Step, float] | None = None  # 最後に行った操作と時刻
     text_decided: set[str] = field(default_factory=set)  # 文字で押せるかを決めた並び（「ハーネスの記録」に1回書く）
     # 見た目（fuzz/looks.py）。ランのあいだ覚えておく
     dim_seen: set[str] = field(default_factory=set)  # 暗いボタンがあると記録した並び
@@ -194,6 +200,33 @@ class FuzzRun:
             if res and sil:
                 out.append(f"`{gkey}` の並びは、見た目（明るさ・半透明・文字）では押せるかを見分けられなかった（押して反応した"
                            f" {len(res)} 個と反応しなかった {len(sil)} 個が、同じように見えた）。押して確かめて覚えた")
+        return out
+
+    def edge_notes(self) -> list[str]:
+        """エッジケース（壊れやすいタイミングへの差し込み）の記録。"""
+        if not self.edge_sent:
+            return []
+        by_t: Counter[str] = Counter()
+        by_k: Counter[str] = Counter()
+        for (t, k), n in self.edge_sent.items():
+            by_t[EDGE_TIMINGS.get(t, t)] += n
+            by_k[EDGE_OPS.get(k, k)] += n
+        line = (f"エッジケース: {sum(self.edge_sent.values())} 回差し込んだ（タイミング: "
+                + "、".join(f"{t} {n} 回" for t, n in by_t.most_common()) + "。操作: "
+                + "、".join(f"{k} {n} 回" for k, n in by_k.most_common()) + "）")
+        seq = self.rollback.best()
+        out = [line]
+        if seq is not None:
+            text = f"巻き戻しの操作は {describe(seq)} を使った（ハーネスの操作のあとに前の行が出たもの）"
+            dead = sum(self.rollback_dead.values())
+            if dead:
+                text += (f"。巻き戻しを差し込んだのに本文が前の行に戻らなかったのは {dead} 回（"
+                         + "、".join(f"{EDGE_TIMINGS.get(t, t)} {n} 回" for t, n in self.rollback_dead.most_common())
+                         + "。巻き戻せない場面なら正常。戻るはずの場面なら不具合の可能性がある）")
+            out.append(text)
+        else:
+            out.append("巻き戻しの操作をまだ覚えていないので、エッジケースに巻き戻しは使わなかった"
+                       "（ハーネスの操作のあとに前の行が出たら、その操作を巻き戻しとして覚える）")
         return out
 
     def burst_notes(self) -> list[str]:
@@ -391,22 +424,40 @@ class FuzzSession:
             self._observe(ev)
             self._progress(ev)
             if ev.launch == self.launch:
+                self._watch_rollback(ev)
+            if ev.launch == self.launch:
                 self._spot(ev)
             if ev.kind == "line" and ev.launch == self.launch:
                 self._remember_line(ev.data)
                 self.run.flow.line_seen()
-        if self.run.mode != "fuzz" or ev.source != "game" or ev.kind not in TRIGGERS or ev.launch != self.launch:
+        if ev.source != "game" or ev.launch != self.launch:
             return
-        if ev.kind in ("transition", "save", "load") and ev.data.get("phase") != "start":
+        timing = edge_timing(ev.kind, ev.data)
+        if timing is not None:
+            self._maybe_edge(timing)
+
+    def _maybe_edge(self, timing: str) -> None:
+        """壊れやすいタイミングに、狙って行うのが難しい操作（エッジケース）を差し込む。fuzz モード（ガチャプレイの区間など）は
+        trigger_prob、random モード（通常のプレイ）は edge_prob の確率で（本文が出るたびには差し込まない）。"""
+        run = self.run
+        if run.mode == "fuzz":
+            prob = float(self.cfg["trigger_prob"])
+        elif run.mode == "random" and timing != "line":
+            prob = float(self.cfg["edge_prob"])
+        else:
             return
-        if ev.kind == "choices" and not ev.data.get("items"):  # 選択肢が消えた知らせ
+        if prob <= 0 or self._exiting or run.resume_until is not None:
             return
         if self._trigger is not None and not self._trigger.done():
             return
-        if self.run.rng.random() >= float(self.cfg["trigger_prob"]):
+        if run.rng.random() >= prob:
             return
-        delay = self.run.rng.uniform(0, float(self.cfg["trigger_delay_max_sec"]))
-        self._trigger = asyncio.get_running_loop().create_task(self._delayed_irregular(delay, ev.kind))
+        delay = run.rng.uniform(0, float(self.cfg["trigger_delay_max_sec"]))
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._trigger = loop.create_task(self._delayed_irregular(delay, timing))
 
     async def _delayed_irregular(self, delay: float, trigger: str) -> None:
         await asyncio.sleep(delay)
@@ -762,6 +813,80 @@ class FuzzSession:
                     f = low
             out.append(dataclasses.replace(op, weight=op.weight * f) if f != 1.0 else op)
         return out
+
+    # --- 巻き戻しのエッジケース（fuzz/rollback.py） ---
+
+    def _operated(self, op: Op) -> None:
+        """ハーネスが操作した。本文送りのほかは、次に前の行が出たら巻き戻しとして覚えるために控える。"""
+        run = self.run
+        step = step_of(op)
+        run.last_step = (step, time.monotonic())
+        if op.kind == "advance":
+            return
+        top = self.state.top_modal()
+        if op.target is not None and top is not None and op.target.menu == top.name and top.name in run.menu_opener:
+            run.rollback.operated((run.menu_opener[top.name], step))  # モーダル（バックログ）を開いた操作と合わせて
+        else:
+            run.rollback.operated((step,))
+
+    def _watch_rollback(self, ev: Event) -> None:
+        """本文の行の順番を追い、巻き戻しを差し込むタイミングを見る。"""
+        run, d = self.run, ev.data
+        if ev.kind == "menu" and d.get("modal") and d.get("name") not in run.menu_opener:
+            last = run.last_step
+            if last is not None and time.monotonic() - last[1] <= float(self.cfg["progress_window_sec"]):
+                run.menu_opener[str(d.get("name"))] = last[0]
+        elif ev.kind == "menu_close":
+            run.menu_opener.pop(str(d.get("name")), None)
+        elif ev.kind == "line" and d.get("line_id") is not None:
+            run.rollback.line(str(d["line_id"]))
+        elif ev.kind in ("scene", "load"):
+            run.rollback.jumped()
+
+    async def _rollback_edge(self, timing: str, seq: tuple[Step, ...]) -> bool:
+        """巻き戻しを差し込む。1回戻る・続けて戻る・戻ってすぐ送るを繰り返す、のどれかで。"""
+        run = self.run
+        pattern = run.rng.choice(list(PATTERNS))
+        times = 1 if pattern == "single" else run.rng.randint(2, max(2, int(self.cfg["rollback_repeat_max"])))
+        before = run.rollback.rewinds
+        sent = 0
+        for _ in range(times):
+            if self._exiting or not await self._replay(seq, timing):
+                break
+            sent += 1
+            if pattern == "bounce":
+                await self._do(Op("advance", irregular=True), trigger=f"rollback:{timing}")
+        if not sent:
+            return False
+        await asyncio.sleep(float(self.cfg["rollback_check_sec"]))
+        rewound = run.rollback.rewinds > before
+        if not rewound:
+            run.rollback_dead[timing] += 1
+        self.publish(Event("harness", "rollback_edge", {
+            "timing": timing, "pattern": pattern, "times": sent, "ops": describe(seq), "rewound": rewound,
+        }, self.launch))
+        return True
+
+    async def _replay(self, seq: tuple[Step, ...], timing: str) -> bool:
+        """覚えた巻き戻しの操作の並びを行う。ボタンは同じ名前のもの（バックログの別の行でもよい）を、出るまで少し待って押す。"""
+        for kind, arg in seq:
+            if arg is not None and "/" in arg:
+                wait_until = time.monotonic() + float(self.cfg["rollback_menu_wait_sec"])
+                found: list[Target] = []
+                while True:
+                    found = [t for t in self.state.targets() if t.label.split("#", 1)[0] == arg]
+                    if found or time.monotonic() >= wait_until:
+                        break
+                    await asyncio.sleep(0.05)
+                if not found:
+                    return False
+                op = Op(kind, self.run.rng.choice(found), irregular=True)
+            else:
+                value: str | int | None = int(arg) if arg is not None and arg.isdigit() else arg
+                op = Op(kind, arg=value, irregular=True)
+            if not await self._do(op, trigger=f"rollback:{timing}"):
+                return False
+        return True
 
     # --- 再起動の前に抜け出す ---
 
@@ -1202,8 +1327,11 @@ class FuzzSession:
         self.run.decider.feedback(key, op, responded)
         if op.target is not None:
             t = op.target
+            done = sum(st.completed for st in self.run.flow.stats.values())
             self.run.flow.pressed(t.label, t.name, responded, t.text if t.kind == "choice" else None,
                                   t.text if t.kind == "button" else None)
+            if sum(st.completed for st in self.run.flow.stats.values()) > done:
+                self._maybe_edge("answer")
         if responded:
             self.run.responsive.add((key, op.label))
         else:
@@ -1267,12 +1395,27 @@ class FuzzSession:
         if not self._ready() or self._exiting:
             return
         key = "irregular:" + state_key(self.state)
-        op = self.run.decider.choose(key, irregular_candidates(self.state, self.run.guard, int(self.cfg["rapid_count"])))
+        run = self.run
+        seq = run.rollback.best()
+        cands = irregular_candidates(self.state, run.guard, int(self.cfg["rapid_count"]), seq is not None)
+        op = run.decider.choose(key, cands)
         if op is None:
             return
         self._irregular_t = time.monotonic()
-        if await self._do(op, trigger=trigger):
-            self.run.stats["irregular"] += 1
+        if op.kind == "rollback":
+            assert seq is not None
+            done = await self._rollback_edge(trigger, seq)
+        elif op.kind == "menu_flash":
+            # メニューを開いてすぐ閉じる（開く途中で閉じる）
+            done = await self._do(Op("right_click", irregular=True), trigger=trigger)
+            if done:
+                await asyncio.sleep(float(self.cfg["menu_flash_sec"]))
+                await self._do(Op("key", arg="esc", irregular=True), trigger=trigger)
+        else:
+            done = await self._do(op, trigger=trigger)
+        if done:
+            run.stats["irregular"] += 1
+            run.edge_sent[(trigger, op.kind)] += 1
             self._verify_next = True
 
     async def _check_front(self, key: str) -> None:
@@ -1367,6 +1510,7 @@ class FuzzSession:
             self.publish(Event("harness", "input_resumed", {"reason": resumed[0], "sec": round(resumed[1], 1)},
                                self.launch))
         self.run.recent.append(op.label)
+        self._operated(op)
         if op.target is not None:
             self.run.labels.add(op.target.label)
             self.run.newly_bright.discard(op.target.label)
