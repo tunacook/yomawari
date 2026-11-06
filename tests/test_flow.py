@@ -678,3 +678,48 @@ def test_flow_step_ops_are_not_worn_down_by_repeats():
     for _ in range(50):
         dec.tries[("k", slot.label)] += 1
     assert dec.weight("k", slot) == slot.weight
+
+
+def test_spent_choice_goes_back_instead_of_reopening_empty_list():
+    # run 2026-11-06_1646: 言葉のない思い出で、「言葉を選ぶ」と空の言葉の一覧を閉じるのを繰り返した。
+    # 選んだ思い出を試し終えたら（行き止まり）、流れから外れるボタン（要約を閉じる）で思い出の一覧へ戻るのを優先する
+    s, st, run, _ = _session()
+    profile = ONCE_PROFILE.replace('by = "game" }', 'by = "game" }\navoid = ["MemorySummaryUI/CloseMemorySummary"]', 1)
+    run.flow = FlowTracker(parse_flows(tomllib.loads(profile)["flow"]))
+    k, low, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    _to_fragments(s, st, run, 0)
+    _weights(s, st)
+    assert run.flow.spent()
+    _feed(st, "menu_close", name="MemoryFragmentListUI")
+    _feed(st, "menu", name="MemorySummaryUI", modal=True, buttons=SUMMARY)
+    w = _weights(s, st)
+    assert run.flow.index == 3
+    assert w["click MemorySummaryUI/CloseMemorySummary"] == click * k
+    assert w["click MemorySummaryUI/ShowFragmentListButton"] == click
+    # 試し終えていない思い出なら、今までどおり「言葉を選ぶ」を優先し、要約を閉じるのは後回し
+    run.flow.leaves.clear()
+    w = _weights(s, st)
+    assert w["click MemorySummaryUI/ShowFragmentListButton"] == click * k
+    assert w["click MemorySummaryUI/CloseMemorySummary"] == pytest.approx(click * low)
+
+
+def test_reveals_are_forgotten_when_progress_is_replaced():
+    # run 2026-11-06_1646: 思い出を読んだあと起動し直して、はじめから遊んだ（開示が消えた）のに、読んだと覚えていた
+    s, st, run, _ = _session()
+    run.flow = FlowTracker(parse_flows(tomllib.loads(ONCE_PROFILE)["flow"]))
+    _to_fragments(s, st, run, 0)
+    _weights(s, st)
+    tr = run.flow
+    dead = (tr.ctx, (SLOT,))
+    wrong = (tr.ctx, (f"{SLOT}#1", FRAG))
+    tr.leaves.add(wrong)
+    tr.wrong.add(wrong)
+    assert tr.done_once and dead in tr.leaves
+    # 流れの中のロード（思い出から本編に戻る）では忘れない
+    s.on_event(Event("game", "load", {"slot": "MemoryReturn", "phase": "start"}, 0))
+    assert tr.done_once and dead in tr.leaves
+    # 流れの外でセーブをロードしたら、読んだ思い出と行き止まりを忘れる。外れと分かった答えは覚えておく
+    tr.active = None
+    s.on_event(Event("game", "load", {"slot": "GameSave004", "phase": "start"}, 0))
+    assert not tr.done_once and dead not in tr.leaves and wrong in tr.leaves
+    assert any("GameSave004" in e and "忘れた" in e for e in tr.events)

@@ -295,6 +295,8 @@ class FuzzSession:
         self._recovery: dict[str, Any] | None = None
         self._choose_intent("起動した")
         self._start_resume()
+        if launch > 0:
+            run.flow.forget_reveals("起動し直した")
 
     # --- イベント（バスから同期で呼ばれる） ---
 
@@ -406,6 +408,9 @@ class FuzzSession:
                 self._end_resume(f"セーブ（{d.get('slot')}）をロードした")
             elif ev.kind == "line":
                 self._end_resume("本文が始まった（ロードせずに始めた）")
+        if ev.kind == "load" and d.get("phase") == "start" and self.run.flow.active is None:
+            # 流れの外でセーブをロードした（続きから遊ぶ・ロードの行き来）。流れの中のロード（思い出から本編に戻る）は除く
+            self.run.flow.forget_reveals(f"セーブ（{d.get('slot')}）をロードした")
         if place is not None and self.run.experience.reach(place):
             self._credit("progress")
         elif ev.kind == "load" and d.get("phase") == "start":
@@ -648,6 +653,11 @@ class FuzzSession:
                 tracker.note_exhausted()
                 fresh = set(options.values())  # 試せる組み合わせをすべて試した。ほかの道もないので、どれも同じに戻す
         going = {o for o in fresh if tracker.tried(o)}
+        # いま選んでいるもの（思い出）の枝を試し終えた（言葉をすべて試した、言葉の一覧が空の行き止まり）のに、
+        # その先の決まったボタン（言葉を選ぶ）の手順か、選べるものが1つもない手順の画面にいる。人が一覧に戻って選び直すように、
+        # 手順の操作は優先せず、流れから外れるボタン（要約を閉じる・一覧に戻る）を優先して前の手順へ戻る
+        # （run 2026-11-06_1646: 言葉のない思い出で、「言葉を選ぶ」と空の言葉の一覧を閉じるのを繰り返した）
+        spent = step is not None and tracker.spent() and (not step.picks or not (options or later))
         favored = self._advice(going or fresh, cands, options)
         ai = float(cfg["ai_choice_factor"])
         out = []
@@ -656,7 +666,9 @@ class FuzzSession:
             f = 1.0
             o = options.get(op.label)
             if t is not None and flow.avoids(t.label, t.name, t.text):
-                f = low
+                f = boost if spent else low
+            elif spent:
+                pass
             elif t is not None and t.kind == "button" and any(
                     s.when.screen == t.menu and s.targets and s.presses(t.label, t.name, t.text) for s in done):
                 f = low  # 同じ選び方で一度済ませた手順のボタン（読んだ思い出をもう一度読む）
@@ -667,7 +679,7 @@ class FuzzSession:
                     f = low
                 elif not going or o in going:
                     f = boost * (ai if o in favored else 1.0)
-            if f >= boost:
+            if f >= boost and not spent:
                 # 流れの手順の操作は、同じ質問に答え直すたびに同じボタン（言葉を選ぶ・この言葉で答える・答えを決める）を押す。
                 # 押した回数で重みを下げる（novelty）と、答え直すほど流れの優先が薄れ、ドラッグ・Esc などの寄り道が増える
                 # （run 2026-11-06_1418: 「この言葉で答える」を 45 回押したあとは、手順の外の操作のほうが多くなった）。
