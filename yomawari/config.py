@@ -138,6 +138,8 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     # 続きから遊ぶとき以外に、セーブ済みのスロット（文字に日時がある）の重みに掛ける。0 なら押さない（自分のセーブのロードは
     # 目的があるときだけにする）。ロードとの行き来を試す目的（stuck）や、画面のボタンを網羅的に押す区間では 1 にする
     "saved_slot_factor": 0.0,
+    # レポートの「進めなかったところ」: 新しい本文・scene・選択肢にこの秒数以上届かなかった区間を載せる。0 で載せない
+    "stall_report_sec": 300.0,
     "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")

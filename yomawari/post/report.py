@@ -30,6 +30,7 @@ class RunSummary:
     purpose: str | None = None  # ランの目的（yomawari/purpose.py）
     purpose_description: str = ""
     focus: list[str] = field(default_factory=list)  # 目的で重点的に見るルール。深刻度ごとに先に並べる
+    stalls: list[str] = field(default_factory=list)  # 「進めなかったところ」の節（post/stalls.py）
 
 
 @dataclass
@@ -118,6 +119,8 @@ def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
                     f"最前面のモーダル `{st.get('top_modal')}`"
                 )
             out += ["", "- 判定: [ ] 正しい検出　[ ] 誤検知", ""]
+
+    out += summary.stalls
 
     if summary.silent_buttons:
         out += [

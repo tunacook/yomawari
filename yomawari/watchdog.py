@@ -33,6 +33,7 @@ from .fuzz.guard import Guard
 from .fuzz.loop import FuzzRun, FuzzSession
 from .fuzz.looks import load_inactive_words, load_masked_chars
 from .fuzz.resume import load_save_hints
+from .post.stalls import find_stalls, load_events, render_stalls
 from .fuzz.roles import RoleBook
 from .input.base import InputDriver
 from .input.pointer import Pointer
@@ -219,6 +220,15 @@ class Harness:
                 await asyncio.wait_for(stop.wait(), timeout=interval)
             except TimeoutError:
                 pass
+
+    def _stall_lines(self, run_dir: Path) -> list[str]:
+        """「進めなかったところ」の節。操作しないモード（aging）では出さない。"""
+        if self._fuzz is None:
+            return []
+        sec = float(self.fuzz_cfg["stall_report_sec"])
+        if sec <= 0:
+            return []
+        return render_stalls(find_stalls(load_events(run_dir / "events.jsonl"), sec), sec)
 
     def _status(self, now: float, force: bool = False) -> None:
         if self.on_status is None or (not force and now - self._last_status < 1.0):
@@ -510,6 +520,7 @@ class Harness:
                 },
                 harness_notes=self.notes,
                 silent_buttons=self.engine.silent_buttons(),
+                stalls=self._stall_lines(run_dir),
             )
             report = write_report(summary, self.issues, run_dir)
         return RunResult(run_dir, report, self.issues, interrupted)
