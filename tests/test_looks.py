@@ -388,6 +388,56 @@ def test_behind_tolerates_small_slide():
     assert st.behind == set()
 
 
+def test_behind_judgment_is_undone_when_front_does_not_respond():
+    # run 2026-11-06_0937: 右クリックメニューがスライドして出てくる途中に測り、見た目が変わったので後ろに下がったと誤った。
+    # メニューの下に隠れた選択肢を 30 分押し続けた（押しても画面が変わらないので、測り直すきっかけもなかった）。
+    # 手前のものを続けて押しても反応がなければ、判定を取り消し、閉じるまで後ろに下がったとはしない
+    import random
+
+    from yomawari.config import FUZZ_DEFAULTS
+    from yomawari.events import Event
+    from yomawari.fuzz.decider import RandomDecider
+    from yomawari.fuzz.guard import Guard
+    from yomawari.fuzz.loop import FuzzRun, FuzzSession
+    from yomawari.input.pointer import Pointer
+    from yomawari.sensors.window import ScreenRect, WindowInfo
+    from yomawari.state import GameState
+
+    from .test_window import FakeWindows
+
+    st = GameState()
+    feed = lambda kind, **d: st.feed(Event("game", kind, d, 0))  # noqa: E731
+    items = [{"name": f"To{i}", "rect": [0.8, 0.15 + 0.08 * i, 0.9, 0.19 + 0.08 * i]} for i in range(4)]
+    feed("menu", name="RClickMenuUI", modal=True, buttons=items)
+    cfg = {**FUZZ_DEFAULTS, "hover_wait_sec": 0}
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                  rng=random.Random(1), cfg=cfg, response_timeout=0.1)
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
+    s = FuzzSession(run, st, Pointer(windows, None, 1, st, activate_wait=0), lambda ev: None, 0, lambda _: None)
+    labels = [f"RClickMenuUI/To{i}" for i in range(4)]
+    rects = {t.label: t.rect for t in st.menus["RClickMenuUI"].buttons}
+    opening = [(0.05, 0.1)] * 4
+    shown = [(0.4, 0.3)] * 4
+    s._judge_behind({"RClickMenuUI/To": dict(zip(labels, opening))}, rects)
+    feed("choices", items=[{"id": "a", "text": "話す", "rect": [0.03, 0.3, 0.97, 0.44]},
+                           {"id": "b", "text": "話さない", "rect": [0.03, 0.55, 0.97, 0.69]}])
+    s._judge_behind({"RClickMenuUI/To": dict(zip(labels, shown))}, rects)
+    assert st.behind == {"RClickMenuUI"}  # 開いている途中に測ったものと比べて、見た目が変わった
+    choice = st.choices[0]
+    s._verify_behind(choice, False)
+    assert st.behind == {"RClickMenuUI"}
+    s._verify_behind(choice, False)
+    assert st.behind == set() and st.top_modal().name == "RClickMenuUI"
+    assert any("判定を取り消した" in n for n in run.notes)
+    # 閉じるまでは、見た目が変わっても後ろに下がったとはしない
+    s._judge_behind({"RClickMenuUI/To": dict(zip(labels, opening))}, rects)
+    assert st.behind == set()
+    # 閉じて開き直したら、また見た目で判定する
+    feed("menu_close", name="RClickMenuUI")
+    s._judge_behind({}, {})
+    assert run.behind_refuted == set()
+
+
 def test_repressing_a_never_answered_button_waits_short():
     # 押しても一度も反応しなかったボタンを押し直すときは、quiet_wait_sec だけ待つ（S-05 の対象でないので）。
     # 一度でも反応したことのあるボタンは、反応しなくなったかを確かめるので、今までどおり待つ
