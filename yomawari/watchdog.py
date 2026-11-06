@@ -61,6 +61,7 @@ class RunOptions:
     purpose: Purpose | None = None  # ランの目的。fuzz_cfg にはすでに重ねてある
     display_off: bool = False  # ゲームが起動したあと、画面を消す
     display_off_delay_sec: float = 10.0
+    continue_previous: bool = False  # ランの最初の起動から、前のランのセーブの続きを遊ぶ
 
 
 @dataclass
@@ -398,6 +399,7 @@ class Harness:
                 inactive_words=load_inactive_words(self.rules_path),
                 masked_chars=load_masked_chars(self.rules_path),
                 save_hints=load_save_hints(self.rules_path),
+                continue_previous=opts.continue_previous,
                 # 進め方の経験は、ボタンの役割と同じファイル（runs/_experience/<ゲーム>.json）に覚える
                 experience=Experience(self.roles.path),
             )

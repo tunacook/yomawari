@@ -88,6 +88,7 @@ class FuzzRun:
     masked_chars: str = ""  # rules.yaml の inactive_hints.masked（伏せ字の文字）
     save_hints: SaveHints = field(default_factory=SaveHints)  # rules.yaml の save_hints（セーブ済みのスロット・続きから）
     resume_until: float | None = None  # 起動し直して、続きから遊ぼうとしているあいだ（この時刻まで）
+    continue_previous: bool = False  # ランの最初の起動でも続きから遊ぶ（--continue）
     # 巻き戻しのエッジケース（fuzz/rollback.py）
     rollback: RollbackWatch = field(default_factory=RollbackWatch)
     edge_sent: Counter[tuple[str, str]] = field(default_factory=Counter)  # (タイミング, 操作の種類) → 差し込んだ回数
@@ -768,15 +769,17 @@ class FuzzSession:
 
     def _start_resume(self) -> None:
         """ラン中にゲームを起動し直したら（終了ボタンを確かめた・再起動した）、人がするように続きから遊ぶ。
-        ロードするか本文が始まるか、resume_sec たったら終える。ランの最初の起動では、はじめから遊ぶ。"""
+        ロードするか本文が始まるか、resume_sec たったら終える。ランの最初の起動では、はじめから遊ぶ
+        （--continue なら、最初の起動でも前のランのセーブの続きを遊ぶ）。"""
         run = self.run
-        if self.launch == 0 or float(self.cfg["resume_sec"]) <= 0:
+        if (self.launch == 0 and not run.continue_previous) or float(self.cfg["resume_sec"]) <= 0:
             return
         run.resume_until = time.monotonic() + float(self.cfg["resume_sec"])
 
     def _end_resume(self, how: str) -> None:
         self.run.resume_until = None
-        self.run.notes.append(f"起動し直したので続きから遊ぼうとした: {how}（起動 #{self.launch}）")
+        why = "前のランの続きから遊ぶ（--continue）ので" if self.launch == 0 else "起動し直したので"
+        self.run.notes.append(f"{why}続きから遊ぼうとした: {how}（起動 #{self.launch}）")
 
     def _apply_resume(self, cands: list[Op], now: float) -> list[Op]:
         """続きから遊ぶあいだは、「続きから」のボタンと、いちばん新しいセーブ済みのスロットを先に押し、「はじめから」を

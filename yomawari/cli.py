@@ -178,6 +178,11 @@ def run(
     ),
     seed: str | None = typer.Option(None, "--seed", help="乱数シード。既定は yomawari.toml の run.seed"),
     no_open: bool = typer.Option(False, "--no-open", help="終了後にレポートを開かない"),
+    cont: bool | None = typer.Option(
+        None, "--continue/--from-start",
+        help="ランの最初の起動から、前のランのセーブの続きを遊ぶ（タイトルの「続きから」といちばん新しいセーブを選ぶ）。"
+             "既定は yomawari.toml の run.continue（false: はじめから）",
+    ),
     display_off: bool | None = typer.Option(
         None, "--display-off/--no-display-off",
         help="ゲームが起動したあと、画面（ディスプレイ）を消す（macOS: pmset displaysleepnow）。既定は yomawari.toml の run.display_off",
@@ -233,7 +238,10 @@ def run(
         purpose=goal,
         display_off=dark,
         display_off_delay_sec=float(rc["display_off_delay_sec"]),
+        continue_previous=bool(rc["continue"] if cont is None else cont),
     )
+    if opts.continue_previous:
+        console.print("前のランのセーブの続きから遊びます（セーブが見つからなければ、はじめから）")
     live = Live(Text("起動中…"), console=console, refresh_per_second=2) if console.is_terminal else None
     harness = Harness(
         b, exe, plat, rules, cfg.rules_path, cfg.runs_dir, rc, cfg.sensors,
