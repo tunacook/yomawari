@@ -47,7 +47,7 @@ from .ops import (
     state_key,
 )
 from .flow import FlowTracker
-from .resume import SaveHints, newest_slots
+from .resume import SaveHints, newest_slots, older_than, stamp_key
 from .rollback import EDGE_OPS, EDGE_TIMINGS, PATTERNS, RollbackWatch, Step, describe, edge_timing, step_of
 from .search import (
     REVEAL, Lead, blind_candidates, known_leads, leads, search_candidates, searchable_menus, stuck_rows, toward,
@@ -89,6 +89,8 @@ class FuzzRun:
     save_hints: SaveHints = field(default_factory=SaveHints)  # rules.yaml の save_hints（セーブ済みのスロット・続きから）
     resume_until: float | None = None  # 起動し直して、続きから遊ぼうとしているあいだ（この時刻まで）
     saved_t: float | None = None  # 最後にセーブした時刻（流れの外。ゲームが流れの中で自分でするセーブは除く）
+    saved_wall: float | None = None  # saved_t と同じときの time.time()（スロットの文字の日時と比べる。起動し直しても残す）
+    resume_pages: int = 0  # 続きから遊ぶあいだに、ページを送った回数
     save_first_until: float | None = None  # 終了ボタンを試す前にセーブしようとしているあいだ（この時刻まで）
     continue_previous: bool = False  # ランの最初の起動でも続きから遊ぶ（--continue）
     # 巻き戻しのエッジケース（fuzz/rollback.py）
@@ -417,6 +419,7 @@ class FuzzSession:
         if (ev.kind == "save" and d.get("phase") == "start" and self.run.flow.active is None
                 and self.run.resume_until is None):
             self.run.saved_t = time.monotonic()
+            self.run.saved_wall = time.time()
             if self.run.save_first_until is not None:
                 self.run.save_first_until = None
                 self.run.notes.append(f"終了ボタンを試す前にセーブした（{d.get('slot')}、起動 #{self.launch}）")
@@ -805,6 +808,7 @@ class FuzzSession:
         if (self.launch == 0 and not run.continue_previous) or float(self.cfg["resume_sec"]) <= 0:
             return
         run.resume_until = time.monotonic() + float(self.cfg["resume_sec"])
+        run.resume_pages = 0
 
     def _end_resume(self, how: str) -> None:
         self.run.resume_until = None
@@ -834,6 +838,11 @@ class FuzzSession:
         newest = newest_slots({t.label: t.text for t in saved}) or {t.label for t in saved}
         empty = inactive(targets, run.inactive_words, run.masked_chars)
         paging = not saved and bool(stuck_rows(self.state, empty))
+        if saved and self._older_than_own_save(newest, {t.label: t.text for t in saved}):
+            # 見えているセーブは、どれもこのランで最後にセーブしたときより古い。人は自分がどこにセーブしたかを覚えていて、
+            # ほかのページを探す（run 2026-11-06_2157: 22:44 に 16 番へセーブしたのに、起動し直したあと 1 ページ目の
+            # 22:00 のセーブをロードし、44 分前に戻った）
+            newest, paging = set(), True
         out = []
         for op in cands:
             t = op.target
@@ -845,6 +854,23 @@ class FuzzSession:
                     f = low
             out.append(dataclasses.replace(op, weight=op.weight * f) if f != 1.0 else op)
         return out
+
+    def _older_than_own_save(self, newest: set[str], texts: dict[str, str | None]) -> bool:
+        """見えているいちばん新しいセーブが、このランで最後にセーブした時刻より古いか（resume_page_limit 回ページを送っても
+        見つからなければ、見えているものでよいとする）。"""
+        run = self.run
+        if run.saved_wall is None or not newest or run.resume_pages >= int(self.cfg["resume_page_limit"]):
+            return False
+        slack = float(self.cfg["resume_stamp_slack_sec"])
+        keys = [k for label in newest if (k := stamp_key(texts.get(label))) is not None]
+        if not keys or not all(older_than(k, run.saved_wall, slack) for k in keys):
+            return False
+        at = time.strftime("%H:%M:%S", time.localtime(run.saved_wall))
+        note = (f"続きから遊ぶとき、見えているセーブがどれも最後にセーブした時刻（{at}）より古かったので、ページを送って探した"
+                f"（起動 #{self.launch}）")
+        if note not in run.notes:
+            run.notes.append(note)
+        return True
 
     # --- 終了を試す前にセーブする ---
 
@@ -1432,6 +1458,8 @@ class FuzzSession:
             self._verify_behind(op.target, responded)
         if op.target is not None and op.target.kind == "button":
             (self.run.silent.discard if responded else self.run.silent.add)(op.target.label)
+            if responded and self.run.resume_until is not None and self.run.save_hints.next_page(op.target):
+                self.run.resume_pages += 1
             if responded:
                 self.run.miss_streak.pop(op.target.label, None)
             else:

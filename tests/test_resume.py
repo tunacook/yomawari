@@ -204,3 +204,41 @@ def test_save_first_gives_up_and_skips_inside_flow_saves():
     assert not s._saved_for_exit(0.0)
     assert s._saved_for_exit(run.save_first_until + 1)  # セーブできないまま時間がたったら、終了を試す
     assert any("セーブできなかった" in n for n in run.notes)
+
+
+def test_stamp_key_treats_impossible_date_as_unreadable():
+    # run 2026-11-06_2157: 「8.2026-14-06 22:00:43」と読めた。月が 14 では、ほかのどれより新しくなってしまう
+    assert stamp_key("8.2026-14-06 22:00:43") == (0, 0, 0, 22, 0, 43)
+
+
+def test_relaunch_looks_for_own_save_on_other_pages():
+    # run 2026-11-06_2157: 22:44 に 16 番（2 ページ目）へセーブしたのに、起動し直したあと 1 ページ目の 22:00 のセーブを
+    # ロードして 44 分前に戻った。自分が最後にセーブした時刻より古いセーブしか見えなければ、ページを送って探す
+    saved_at = time.mktime((2026, 11, 6, 22, 44, 9, 0, 0, -1))
+    s, st, run = _session(launch=1)
+    run.saved_wall = saved_at
+    page1 = {_label(i): f"{i + 1}. Empty" for i in range(9)}
+    page1[_label(4)] = "5.2026-11-06 22:00:47"
+    page1[_label(7)] = "8.2026-14-06 22:00:43"
+    _show(st, "SaveLoadUI", LOAD, page1)
+    w = _weights(s, st, 0.0)
+    assert w["click SaveLoadUI/NextPageButton"] == CLICK * BOOST
+    assert w[f"click {_label(4)}"] == CLICK and w[f"click {_label(7)}"] == CLICK
+    assert any("22:44:09" in n and "ページを送って探した" in n for n in run.notes)
+    # 2 ページ目に自分のセーブがある: それを先に押す
+    page2 = {_label(i): f"{i + 10}. Empty" for i in range(9)}
+    page2[_label(1)] = "11.2026-11-06 22:10:27"
+    page2[_label(6)] = "16.2026-11-06 22:44:09"
+    _show(st, "SaveLoadUI", LOAD, page2)
+    w = _weights(s, st, 0.0)
+    assert w[f"click {_label(6)}"] == CLICK * BOOST and w[f"click {_label(1)}"] == CLICK
+    assert w["click SaveLoadUI/NextPageButton"] == CLICK
+    # ページを送り尽くしても見つからなければ、見えているいちばん新しいものでよい
+    _show(st, "SaveLoadUI", LOAD, page1)
+    run.resume_pages = FUZZ_DEFAULTS["resume_page_limit"]
+    w = _weights(s, st, 0.0)
+    assert w[f"click {_label(4)}"] == CLICK * BOOST
+    # このランでセーブしていなければ、今までどおり見えているいちばん新しいもの
+    s, st, run = _session(launch=1)
+    _show(st, "SaveLoadUI", LOAD, page1)
+    assert _weights(s, st, 0.0)[f"click {_label(4)}"] == CLICK * BOOST
