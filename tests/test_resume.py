@@ -1,6 +1,7 @@
 """続きから遊ぶ・セーブ済みのスロット（fuzz/resume.py、DESIGN.md §9「続きから遊ぶ」）。"""
 
 import random
+import time
 from pathlib import Path
 
 import pytest
@@ -152,3 +153,54 @@ def test_newest_slot_compares_time_only_when_some_date_is_unreadable():
     assert newest_slots(texts) == {"b"}
     assert newest_slots({"a": "1. 2026-11-05 23:00:00", "b": "2. 2026-11-06 01:00:00"}) == {"b"}
     assert newest_slots({"d": "7. Empty"}) == set()
+
+
+SAVE_FACTOR = FUZZ_DEFAULTS["save_first_factor"]
+RCLICK = [{"name": n, "rect": [0.4, 0.3 + 0.06 * i, 0.5, 0.35 + 0.06 * i]}
+          for i, n in enumerate(["ToSave", "ToLoad", "ToTitle", "ToExit", "CloseButton"])]
+RCLICK_TEXT = {"RClickMenuUI/ToSave": "Save", "RClickMenuUI/ToLoad": "Load", "RClickMenuUI/ToTitle": "Title",
+               "RClickMenuUI/ToExit": "Exit", "RClickMenuUI/CloseButton": "back"}
+
+
+def _save_weights(s, st):
+    cands = normal_candidates(st, s.run.guard, s.cfg["weights"], False)
+    return {op.label: op.weight for op in s._apply_save_first(s._apply_resume(cands, 0.0))}
+
+
+def test_saves_before_trying_exit_button():
+    # run 2026-11-06_1646: 22 分セーブしないまま終了ボタンを試し、起動し直したらロードするセーブがなく、はじめから遊び直した
+    s, st, run = _session(launch=0)
+    now = 1000.0
+    assert not s._saved_for_exit(now) and run.save_first_until == now + FUZZ_DEFAULTS["save_first_sec"]
+    # 右クリックメニュー: 「Save」を先に押す
+    _show(st, "RClickMenuUI", RCLICK, RCLICK_TEXT)
+    w = _save_weights(s, st)
+    assert w["click RClickMenuUI/ToSave"] == CLICK * SAVE_FACTOR
+    assert w["click RClickMenuUI/ToLoad"] == CLICK
+    # セーブ画面: セーブのタブと空きのスロットを先に押す。セーブ済みのスロットは押さない（上書きしない）
+    buttons = SLOTS[:3] + [{"name": "SaveToggle", "rect": [0.2, 0.2, 0.3, 0.25]},
+                           {"name": "ReturnButton", "rect": [0.45, 0.85, 0.55, 0.9]}]
+    texts = {_label(0): "1. Empty", _label(1): "2. 2026-11-06 16:01:40", _label(2): "3.Empty",
+             "SaveLoadUI/SaveToggle": "SAVE", "SaveLoadUI/ReturnButton": "RETURN"}
+    _show(st, "SaveLoadUI", buttons, texts)
+    w = _save_weights(s, st)
+    assert w["click SaveLoadUI/SaveToggle"] == CLICK * SAVE_FACTOR
+    assert w[f"click {_label(0)}"] == CLICK * SAVE_FACTOR and w[f"click {_label(2)}"] == CLICK * SAVE_FACTOR
+    assert f"click {_label(1)}" not in w and w["click SaveLoadUI/ReturnButton"] == CLICK
+    # セーブしたら終了を試す
+    s.on_event(Event("game", "save", {"slot": "GameSave001", "phase": "start"}, 0))
+    assert run.save_first_until is None and any("終了ボタンを試す前にセーブした（GameSave001" in n for n in run.notes)
+    assert s._saved_for_exit(time.monotonic())
+
+
+def test_save_first_gives_up_and_skips_inside_flow_saves():
+    s, st, run = _session(launch=0)
+    # ゲームが流れの中で自分でするセーブ（思い出を読む前の MemoryReturn など）は数えない
+    run.flow.active = object()
+    s.on_event(Event("game", "save", {"slot": "MemoryReturn", "phase": "start"}, 0))
+    assert run.saved_t is None
+    assert not s._saved_for_exit(0.0) and run.save_first_until is None  # 流れの途中は待つ
+    run.flow.active = None
+    assert not s._saved_for_exit(0.0)
+    assert s._saved_for_exit(run.save_first_until + 1)  # セーブできないまま時間がたったら、終了を試す
+    assert any("セーブできなかった" in n for n in run.notes)

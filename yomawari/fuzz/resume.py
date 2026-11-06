@@ -8,6 +8,7 @@
 - stamp: セーブ済みのスロットの文字（日時）。正規表現
 - resume: 続きから遊ぶボタン
 - next_page: ページを送るボタン
+- save: セーブするボタン（終了ボタンを試す前にセーブする。DESIGN.md §9「終了を試す前にセーブする」）
 """
 
 from __future__ import annotations
@@ -30,6 +31,8 @@ class SaveHints:
     resume_name: list[str] = field(default_factory=list)
     next_text: list[str] = field(default_factory=list)
     next_name: list[str] = field(default_factory=list)
+    save_text: list[str] = field(default_factory=list)
+    save_name: list[str] = field(default_factory=list)
 
     def saved(self, target: Target) -> bool:
         """セーブ済みのスロット（文字に日時がある）か。"""
@@ -39,6 +42,10 @@ class SaveHints:
     def resume(self, target: Target) -> bool:
         """続きから遊ぶボタンか。"""
         return target.kind == "button" and _hit(target, self.resume_text, self.resume_name)
+
+    def save(self, target: Target) -> bool:
+        """セーブするボタンか（セーブ済みのスロットは除く）。"""
+        return target.kind == "button" and not self.saved(target) and _hit(target, self.save_text, self.save_name)
 
     def next_page(self, target: Target) -> bool:
         """ページを送るボタンか。"""
@@ -103,4 +110,5 @@ def load_save_hints(path: Path) -> SaveHints:
         except re.error as e:
             raise RuleError(f"rules.yaml の save_hints.stamp の正規表現が正しくありません: {p}（{e}）") from e
     return SaveHints(stamp, words("resume", "text"), words("resume", "name"),
-                     words("next_page", "text"), words("next_page", "name"))
+                     words("next_page", "text"), words("next_page", "name"),
+                     words("save", "text"), words("save", "name"))

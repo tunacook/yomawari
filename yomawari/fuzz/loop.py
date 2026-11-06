@@ -88,6 +88,8 @@ class FuzzRun:
     masked_chars: str = ""  # rules.yaml の inactive_hints.masked（伏せ字の文字）
     save_hints: SaveHints = field(default_factory=SaveHints)  # rules.yaml の save_hints（セーブ済みのスロット・続きから）
     resume_until: float | None = None  # 起動し直して、続きから遊ぼうとしているあいだ（この時刻まで）
+    saved_t: float | None = None  # 最後にセーブした時刻（流れの外。ゲームが流れの中で自分でするセーブは除く）
+    save_first_until: float | None = None  # 終了ボタンを試す前にセーブしようとしているあいだ（この時刻まで）
     continue_previous: bool = False  # ランの最初の起動でも続きから遊ぶ（--continue）
     # 巻き戻しのエッジケース（fuzz/rollback.py）
     rollback: RollbackWatch = field(default_factory=RollbackWatch)
@@ -411,6 +413,12 @@ class FuzzSession:
         if ev.kind == "load" and d.get("phase") == "start" and self.run.flow.active is None:
             # 流れの外でセーブをロードした（続きから遊ぶ・ロードの行き来）。流れの中のロード（思い出から本編に戻る）は除く
             self.run.flow.forget_reveals(f"セーブ（{d.get('slot')}）をロードした")
+        if (ev.kind == "save" and d.get("phase") == "start" and self.run.flow.active is None
+                and self.run.resume_until is None):
+            self.run.saved_t = time.monotonic()
+            if self.run.save_first_until is not None:
+                self.run.save_first_until = None
+                self.run.notes.append(f"終了ボタンを試す前にセーブした（{d.get('slot')}、起動 #{self.launch}）")
         if place is not None and self.run.experience.reach(place):
             self._credit("progress")
         elif ev.kind == "load" and d.get("phase") == "start":
@@ -513,6 +521,8 @@ class FuzzSession:
             return
 
         allow_exit = now - (self.run.last_exit_t or self.run.started) >= self._exit_interval()
+        if allow_exit:
+            allow_exit = self._saved_for_exit(now)
         cands = normal_candidates(
             self.state, self.run.guard, self.cfg["weights"], allow_exit, self.run.screen_weights,
             self._factors(),
@@ -525,6 +535,7 @@ class FuzzSession:
             cands += search
         cands = self._apply_intent(cands)
         cands = self._apply_resume(cands, now)
+        cands = self._apply_save_first(cands)
         cands = self._apply_flow(cands, now)
         top = self.state.top_modal()
         if top is not None and not top.buttons and not self.state.busy:
@@ -833,6 +844,44 @@ class FuzzSession:
                     f = low
             out.append(dataclasses.replace(op, weight=op.weight * f) if f != 1.0 else op)
         return out
+
+    # --- 終了を試す前にセーブする ---
+
+    def _saved_for_exit(self, now: float) -> bool:
+        """終了ボタンを試してよいか。起動し直したら続きから遊べるように、save_before_exit_sec のうちにセーブしていなければ、
+        先に save_first_sec のあいだセーブしようとする（run 2026-11-06_1646: 22 分セーブしないまま終了ボタンを試し、
+        起動し直したらロードするセーブがなく、はじめから遊び直した）。流れの途中（質問に答えているあいだ）は待つ。"""
+        run, fresh = self.run, float(self.cfg["save_before_exit_sec"])
+        if fresh <= 0 or run.resume_until is not None:
+            return True
+        if run.saved_t is not None and now - run.saved_t <= fresh:
+            return True
+        if run.save_first_until is None:
+            if run.flow.active is not None:
+                return False
+            run.save_first_until = now + float(self.cfg["save_first_sec"])
+            return False
+        if now < run.save_first_until:
+            return False
+        run.notes.append(f"終了ボタンを試す前に {float(self.cfg['save_first_sec']):g} 秒セーブしようとしたが、セーブできなかった"
+                         f"（起動 #{self.launch}。起動し直したら、はじめから遊ぶことがある）")
+        run.save_first_until = None
+        run.saved_t = now  # あきらめた。次の終了の間隔まで、セーブしようとしない
+        return True
+
+    def _apply_save_first(self, cands: list[Op]) -> list[Op]:
+        """セーブしようとするあいだは、セーブするボタン（save_hints.save）と、それがある画面の空きのスロット（文字で空と
+        分かるもの）を先に押す。"""
+        run, hints = self.run, self.run.save_hints
+        if run.save_first_until is None:
+            return cands
+        targets = [op.target for op in cands if op.target is not None and op.target.kind == "button"]
+        menus = {t.menu for t in targets if hints.save(t)}
+        empty = inactive([t for t in targets if t.menu in menus], run.inactive_words, run.masked_chars)
+        boost = float(self.cfg["save_first_factor"])
+        return [dataclasses.replace(op, weight=op.weight * boost)
+                if op.target is not None and op.target.kind == "button"
+                and (hints.save(op.target) or op.target.label in empty) else op for op in cands]
 
     # --- 巻き戻しのエッジケース（fuzz/rollback.py） ---
 

@@ -57,6 +57,10 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "stuck_modal_sec": 5.0,
     "external_wait_sec": 3.0,
     "exit_min_interval_sec": 1800.0,
+    # 終了ボタンを試す前にセーブする（起動し直したら続きから遊べるように）。セーブしてからこの秒数のうちなら終了を試す（0 で使わない）
+    "save_before_exit_sec": 300.0,
+    "save_first_sec": 180.0,  # セーブしようとする時間。過ぎたらセーブしないまま終了を試す
+    "save_first_factor": 20.0,  # セーブしようとするあいだ、セーブするボタンと空きのスロットの重みに掛ける
     # 長いランでは、expect_exit の間隔をランの長さのこの割合以上にする（起動し直すたびに最初から遊び直すので、
     # 8 時間のランで 30 分ごとに終わらせると先へ進めない）。0 で無効
     "exit_interval_ratio": 0.25,

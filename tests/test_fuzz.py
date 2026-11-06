@@ -258,7 +258,7 @@ def test_dead_button_is_s05():
 
 
 def test_expect_exit_is_pressed_and_announced():
-    cfg = {**CFG, "exit_min_interval_sec": 0}
+    cfg = {**CFG, "exit_min_interval_sec": 0, "save_before_exit_sec": 0}  # セーブしてから試すのは test_resume で見る
     title = {"QuitButton": TITLE["QuitButton"]}
     game, run, _, events, exits = run_sim("random", 0.5, title=title, cfg=cfg,
                                           guard={"expect_exit": ["TitleUI/QuitButton"]})
