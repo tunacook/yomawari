@@ -120,6 +120,15 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "flow_avoid_factor": 0.02,  # 流れの途中で押すと流れから外れるボタン（avoid）の重みに掛ける
     "flow_idle_sec": 10.0,  # 流れのどの画面・scene でもない状態がこれだけ続いたら、流れが途切れたとする
     "flow_retry_lines": 6,  # 流れを最後まで進めて（答えて）からこの行数以内に同じ流れが始まったら、同じ質問に戻ったとする
+    # 続きから遊ぶ（fuzz/resume.py）。ラン中にゲームを起動し直したら、この秒数のあいだ「続きから」のボタン・いちばん新しい
+    # セーブ済みのスロット・（見えているスロットがどれも空なら）ページを送るボタンの重みに resume_factor を、「はじめから」に
+    # resume_new_game_factor を掛ける。0 にすると使わない
+    "resume_sec": 180.0,
+    "resume_factor": 20.0,
+    "resume_new_game_factor": 0.05,
+    # 続きから遊ぶとき以外に、セーブ済みのスロット（文字に日時がある）の重みに掛ける。0 なら押さない（自分のセーブのロードは
+    # 目的があるときだけにする）。ロードとの行き来を試す目的（stuck）や、画面のボタンを網羅的に押す区間では 1 にする
+    "saved_slot_factor": 0.0,
     "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")
