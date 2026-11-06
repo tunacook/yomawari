@@ -240,6 +240,7 @@ class FlowTracker:
         self.wrong: set[tuple[Ctx, Path]] = set()
         self.wrong_loaded = 0  # 前のランまでに外れと分かっていた組み合わせの数
         self._loaded_leaves: set[tuple[Ctx, Path]] = set()
+        self.dead: set[tuple[Ctx, Path]] = set()  # 行き止まり（言葉がまだない思い出）。開示の状態で変わる
         self.lines_after = 0  # 最後まで進めてから届いた本文の行の数
         self.exhausted_noted: set[Ctx] = set()
 
@@ -372,6 +373,10 @@ class FlowTracker:
             return False
         return self._exhausted(self.ctx, (*self.path, option), 0)
 
+    def spent(self) -> bool:
+        """いままで選んだものの枝（いま選んでいる思い出）を、すべて試し終えたか（言葉をすべて試した、言葉が1つもない）。"""
+        return self.ctx is not None and bool(self.path) and self._exhausted(self.ctx, tuple(self.path), 0)
+
     def _exhausted(self, ctx: Ctx, path: Path, depth: int) -> bool:
         if (ctx, path) in self.leaves:
             return True
@@ -392,6 +397,21 @@ class FlowTracker:
             if s.once and s.targets and (flow.name, i, tuple(self.path[:self._picks_before(i)])) not in self.done_once:
                 return
         self.leaves.add((self.ctx, tuple(self.path)))
+        self.dead.add((self.ctx, tuple(self.path)))
+
+    def forget_reveals(self, why: str) -> None:
+        """ゲームの進み具合が入れ替わった（起動し直した、流れの外でセーブをロードした）。読んだ思い出（once の手順）と
+        行き止まりは、開示の状態で変わるので忘れる（外れと分かった答えは、開示の状態によらないので覚えておく）。
+
+        run 2026-11-06_1646: 思い出を読んだあと起動し直して、はじめから遊んだ（開示が消えた）のに、読んだと覚えていたので
+        読み直さず、言葉のない思い出で「言葉を選ぶ」と空の言葉の一覧を閉じるのを繰り返した。"""
+        if not self.done_once and not self.dead:
+            return
+        self.events.append(f"{why}ので、読んだ思い出など一度済ませた手順（{len(self.done_once)} 件）と行き止まり"
+                           f"（{len(self.dead)} 件）を忘れた（開示の状態が変わるため）")
+        self.leaves -= self.dead - self.wrong
+        self.dead.clear()
+        self.done_once.clear()
 
     def note_exhausted(self) -> None:
         """いまの手順で選べるものの枝を、すべて試し終えた（同じ質問で、試せる組み合わせがもうない）。"""
@@ -456,6 +476,8 @@ class FlowTracker:
     def title_returned(self) -> None:
         if self.active is not None:
             self._break("タイトルに戻った")
+        # タイトルからは、はじめから遊ぶかセーブをロードするので、開示の状態が変わる
+        self.forget_reveals("タイトルに戻った")
 
     def _break(self, why: str) -> None:
         assert self.active is not None
