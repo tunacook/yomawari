@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -70,7 +71,21 @@ def stamp_key(text: str | None) -> tuple[int, ...] | None:
         return None
     d = re.search(r"(20\d\d)\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})", text[:t.start()])
     date = tuple(int(x) for x in d.groups()) if d else (0, 0, 0)
+    if not (1 <= date[1] <= 12 and 1 <= date[2] <= 31):
+        # 日付としてありえない（OCR で崩れた。run 2026-11-06_2157: 「2026-14-06」）。読めなかったものとする
+        date = (0, 0, 0)
     return (*date, int(t.group(1)), int(t.group(2)), int(t.group(3) or 0))
+
+
+def older_than(key: tuple[int, ...], wall: float, slack: float) -> bool:
+    """スロットの日時（stamp_key）が、時刻 wall（time.time()）より slack 秒以上前か。日付が読めなければ時刻だけで比べる
+    （日付をまたいだときは古いと判定しない。間違えても、今までどおり見えているいちばん新しいセーブを選ぶだけ）。"""
+    t = time.localtime(wall - slack)
+    if key[:3] != (0, 0, 0):
+        return key < (t.tm_year, t.tm_mon, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec)
+    if time.localtime(wall).tm_mday != t.tm_mday:
+        return False
+    return key[3:] < (t.tm_hour, t.tm_min, t.tm_sec)
 
 
 def newest_slots(texts: dict[str, str | None]) -> set[str]:
