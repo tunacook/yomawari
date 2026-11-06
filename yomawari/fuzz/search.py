@@ -88,14 +88,15 @@ def _directions(state: GameState, want, kind: str) -> list[Lead]:
                 if b.visible or b.covered or not want(vis, b):
                     continue
                 cx, cy = (b.rect[0] + b.rect[2]) / 2, (b.rect[1] + b.rect[3]) / 2
-                if cy > y1:
+                if cx > x1 or cx < x0:
+                    # 見えている列の外（斜めも）は、縦に動かしても見えてこないので、横の向きにだけ数える。横に動かせない
+                    # 一覧なら、横の向きは search_give_up であきらめる（run 2026-11-06_1846: 横に7列並ぶうち4列しか
+                    # 見えない回想の一覧で、上の行の右の列と下の行の右の列を「上にも下にもある」と数え、上下に動かし続けた）
+                    count["right" if cx > x1 else "left"] += 1
+                elif cy > y1:
                     count["down"] += 1
                 elif cy < y0:
                     count["up"] += 1
-                if cx > x1:
-                    count["right"] += 1
-                elif cx < x0:
-                    count["left"] += 1
             point = ((x0 + x1) / 2, (y0 + y1) / 2)
             labels = tuple(b.label for b in vis)
             out += [Lead(m.name, name, d, n, point, labels, kind) for d, n in sorted(count.items())]
