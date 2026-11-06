@@ -8,6 +8,9 @@ runs/_experience/<ゲーム>.json の "progress" に足し合わせる。random 
   読み直す行は、もう見たものなので数えない
 - 巻き戻し: ロードが始まった、またはタイトル画面に戻った
 
+ゲームの流れ（fuzz/flow.py）で外れと分かった組み合わせ（同じ質問にまた戻ってきた、その前の答え）も "flow_wrong" に覚え、
+次のランで同じ質問に答えるときに避ける。
+
 どちらも、起きる前 progress_window_sec のうちに押した最後の操作と、いま開いている寄り道の画面を開いた操作
 （右クリックメニューの「ロード」など）のものとして数える。
 """
@@ -39,6 +42,8 @@ class Experience:
         self.reached: set[str] = set()  # このランで届いた本文の行・scene・選択肢
         self.new: list[str] = []  # このランで初めて進行につながった操作（レポート用）
         self._loaded: set[tuple[str, str]] = set()  # 読み込んだ時点で進行につながったことのあった (state, 操作)
+        # ゲームの流れで外れと分かった組み合わせ ((流れの名前, 質問の本文の行), 選んだものの並び)。FlowTracker と共有する
+        self.flow_wrong: set[tuple[tuple[str, str], tuple[str, ...]]] = set()
         if path is not None and path.exists():
             self._load(path)
 
@@ -47,6 +52,13 @@ class Experience:
             doc = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return
+        for name, questions in (doc.get("flow_wrong") or {}).items():
+            if not isinstance(questions, dict):
+                continue
+            for line, paths in questions.items():
+                for path in paths if isinstance(paths, list) else []:
+                    if isinstance(path, list) and path and all(isinstance(x, str) for x in path):
+                        self.flow_wrong.add(((str(name), str(line)), tuple(path)))
         for key, ops in (doc.get("progress") or {}).items():
             if not isinstance(ops, dict):
                 continue
@@ -57,7 +69,7 @@ class Experience:
                         self._loaded.add((key, label))
 
     def save(self) -> None:
-        """ほかの記録（roles など）は残して、"progress" だけを書き換える。"""
+        """ほかの記録（roles など）は残して、"progress" と "flow_wrong" だけを書き換える。"""
         if self.path is None:
             return
         doc: dict[str, Any] = {}
@@ -67,6 +79,10 @@ class Experience:
             except (OSError, ValueError):
                 doc = {}
         doc["progress"] = {k: dict(sorted(v.items())) for k, v in sorted(self.ops.items())}
+        wrong: dict[str, dict[str, list[list[str]]]] = {}
+        for (name, line), path in sorted(self.flow_wrong):
+            wrong.setdefault(name, {}).setdefault(line, []).append(list(path))
+        doc["flow_wrong"] = wrong
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
