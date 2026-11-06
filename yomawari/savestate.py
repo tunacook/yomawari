@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
@@ -41,6 +42,25 @@ def _unique(p: Path) -> Path:
     return p.with_name(f"{p.name}.{stamp}")
 
 
+def previous_run_save(runs_dir: Path, build_name: str, exclude: Path | None = None) -> Path | None:
+    """前のラン（同じビルドの、いちばん新しいラン）が終わったときのセーブ（runs/<id>/backup/after_run*/save）。
+
+    ラン中のセーブは、ランの終わりに after_run へ移され、本物のセーブが戻される。--continue では、これを初期セーブとして置く。"""
+    pat = re.compile(rf"\d{{4}}-\d{{2}}-\d{{2}}_\d{{4}}_{re.escape(build_name)}(_\d+)?")
+    try:
+        dirs = sorted((p for p in runs_dir.iterdir() if p.is_dir() and pat.fullmatch(p.name)),
+                      key=lambda p: p.name, reverse=True)
+    except OSError:
+        return None
+    for d in dirs:
+        if exclude is not None and d.resolve() == exclude.resolve():
+            continue
+        saves = [a / "save" for a in (d / "backup").glob("after_run*") if (a / "save").is_dir()]
+        if saves:
+            return max(saves, key=lambda p: p.parent.stat().st_mtime)
+    return None
+
+
 class SaveState:
     def __init__(self, runs_dir: Path, platform: Platform) -> None:
         self.runs_dir = runs_dir
@@ -52,7 +72,8 @@ class SaveState:
             return None
         return json.loads(self.marker.read_text(encoding="utf-8"))
 
-    def backup(self, run_dir: Path, target: SaveTarget, initial_save: Path | None) -> list[str]:
+    def backup(self, run_dir: Path, target: SaveTarget, initial_save: Path | None,
+               initial_label: str = "テスト用初期セーブ") -> list[str]:
         if self.pending():
             raise RuntimeError("未復元の退避があります。先に yomawari restore を実行してください")
         bdir = run_dir / "backup"
@@ -87,7 +108,7 @@ class SaveState:
             if target.save_dir.exists():
                 shutil.move(str(target.save_dir), str(_unique(bdir / "replaced_by_initial")))
             shutil.copytree(initial_save, target.save_dir, symlinks=True)
-            notes.append(f"テスト用初期セーブを配置: {initial_save}")
+            notes.append(f"{initial_label}を配置: {initial_save}")
         return notes
 
     def restore(self) -> list[str]:
