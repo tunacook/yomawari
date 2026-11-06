@@ -39,6 +39,7 @@ class Lead:
     # unseen: まだ見ていない項目を探す / known: 前に見て明るかった（開示済みと分かっている）項目へ戻る /
     # flow: ゲームの流れで、まだ試していない選び方を探す
     kind: str = "unseen"
+    near: float = 0.0  # 見えているボタンの範囲の端から、その向きでいちばん近い項目の中心までの距離
 
 
 def searchable_menus(state: GameState) -> list[Menu]:
@@ -84,6 +85,7 @@ def _directions(state: GameState, want, kind: str) -> list[Lead]:
             x1 = max(b.rect[2] for b in vis)
             y1 = max(b.rect[3] for b in vis)
             count: Counter[str] = Counter()
+            near: dict[str, float] = {}
             for b in bs:
                 if b.visible or b.covered or not want(vis, b):
                     continue
@@ -92,14 +94,36 @@ def _directions(state: GameState, want, kind: str) -> list[Lead]:
                     # 見えている列の外（斜めも）は、縦に動かしても見えてこないので、横の向きにだけ数える。横に動かせない
                     # 一覧なら、横の向きは search_give_up であきらめる（run 2026-11-06_1846: 横に7列並ぶうち4列しか
                     # 見えない回想の一覧で、上の行の右の列と下の行の右の列を「上にも下にもある」と数え、上下に動かし続けた）
-                    count["right" if cx > x1 else "left"] += 1
+                    d, gap = ("right", cx - x1) if cx > x1 else ("left", x0 - cx)
                 elif cy > y1:
-                    count["down"] += 1
+                    d, gap = "down", cy - y1
                 elif cy < y0:
-                    count["up"] += 1
+                    d, gap = "up", y0 - cy
+                else:
+                    continue
+                count[d] += 1
+                near[d] = min(near.get(d, gap), gap)
             point = ((x0 + x1) / 2, (y0 + y1) / 2)
             labels = tuple(b.label for b in vis)
-            out += [Lead(m.name, name, d, n, point, labels, kind) for d, n in sorted(count.items())]
+            out += [Lead(m.name, name, d, n, point, labels, kind, near[d]) for d, n in sorted(count.items())]
+    return out
+
+
+def one_way(found: list[Lead], keep: dict[str, str]) -> list[Lead]:
+    """並び（menu/name）ごとに、動かす向きを1つに絞る。前に決めた向き（keep）にまだ項目があればその向きを続け、なければ
+    いちばん近い項目のある向きにする。
+
+    いくつもの向きに項目があるとき、向きの違う操作を混ぜて候補に入れると、逆の向きへ動かして打ち消し合い、一覧の中を
+    行ったり来たりする。動かせば中身は動く（反応がある）ので、search_give_up であきらめることもない（run 2026-11-06_2334:
+    縦にも横にも広い回想の一覧で、まだ試していない思い出を探して上下左右に 5 時間動かし続け、押せたのは数分〜20 分ほどに 1 つだった）。
+    人は、一覧をめくるとき、端に着くか見たいものがなくなるまで同じ向きにめくる。"""
+    rows: dict[str, list[Lead]] = {}
+    for lead in found:
+        rows.setdefault(f"{lead.menu}/{lead.name}", []).append(lead)
+    out: list[Lead] = []
+    for row, these in rows.items():
+        kept = [lead for lead in these if lead.direction == keep.get(row)]
+        out += kept or [min(these, key=lambda lead: (lead.near, lead.direction))]
     return out
 
 

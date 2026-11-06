@@ -615,6 +615,47 @@ def test_tried_all_visible_options_looks_off_screen():
     assert any("すべて試しても" in e for e in run.flow.events)
 
 
+def test_off_screen_search_keeps_one_direction():
+    # run 2026-11-06_2334: 縦にも横にも広い思い出の一覧で、まだ試していない思い出が上にも下にも右にもあり、上下左右へ
+    # 動かす操作を混ぜて候補に入れた。逆の向きへ動かして打ち消し合い、5 時間行ったり来たりした（動かせば中身は動くので、
+    # あきらめることもない）。いちばん近いものの向きに絞り、見えるものが変わらなくなるまで同じ向きに続ける
+    s, st, run, _ = _session()
+    run.flow = FlowTracker(parse_flows(tomllib.loads(ONCE_PROFILE)["flow"]))
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    give_up = FUZZ_DEFAULTS["search_give_up"]
+    slots = [{"name": "MemoryListGridSlot (Clone)", "rect": [0.1 + 0.2 * i, 0.3, 0.25 + 0.2 * i, 0.5]} for i in range(2)]
+    slots += [{"name": "MemoryListGridSlot (Clone)", "rect": [0.1, -0.5, 0.25, -0.3], "hidden": True},  # 上（遠い）
+              {"name": "MemoryListGridSlot (Clone)", "rect": [0.1, 0.6, 0.25, 0.8], "hidden": True},  # 下（近い）
+              {"name": "MemoryListGridSlot (Clone)", "rect": [0.85, 0.3, 1.0, 0.5], "hidden": True}]  # 右（中くらい）
+    _feed(st, "line", line_id="main/scenarioB_004:323.0", text="アカウント名を選ぼう。")
+    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=slots)
+    _weights(s, st)
+    ctx = run.flow.ctx
+    run.flow.leaves |= {(ctx, (SLOT,)), (ctx, (f"{SLOT}#1",))}
+
+    def boosted():
+        w = _weights(s, st)
+        return {label for label in ("wheel_up 3", "drag down", "wheel_down 3", "drag up", "drag left", "drag right")
+                if w.get(label, 0) >= click * k}
+
+    assert boosted() == {"wheel_down 3", "drag up"}  # 下だけ
+    row = ("MemoryListUI", "MemoryListGridSlot (Clone)")
+    # 下へ動かしても見えるものが変わらない（端で跳ね返るだけ）: give_up 回までは下のまま、そのあとはほかの向き
+    for _ in range(give_up - 1):
+        run.flow_moved.add(row)
+        assert boosted() == {"wheel_down 3", "drag up"}
+    run.flow_moved.add(row)
+    assert boosted() == {"drag left"}  # 次に近いのは右（上より近い）
+    # 右へ動かして見えるものが変わったら、数え直して右を続ける
+    run.flow_moved.add(row)
+    run.flow_way[row] = ("right", (), give_up - 1)
+    assert boosted() == {"drag left"} and run.flow_way[row][2] == 0
+    # 一覧を閉じたら、決めた向きもあきらめた向きも忘れる
+    _feed(st, "menu_close", name="MemoryListUI")
+    s._search_candidates()
+    assert not run.flow_way and not run.flow_stuck
+
+
 def test_wrong_answers_are_remembered_across_runs(tmp_path):
     # 外れと分かった組み合わせ（同じ質問にまた戻ってきた、その前の答え）を runs/_experience に覚え、次のランで避ける。
     # 最後の答え（そのあと同じ質問に戻らなかった）は正解かもしれないので覚えない
