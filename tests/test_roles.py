@@ -181,7 +181,7 @@ def test_front_change_after_silent_click_confirms_external():
 
 
 def test_estimated_exit_is_cancelled_when_game_keeps_running():
-    cfg = {**CFG, "exit_min_interval_sec": 0, "role_window_sec": 0.1}
+    cfg = {**CFG, "exit_min_interval_sec": 0, "role_window_sec": 0.1, "save_before_exit_sec": 0}
     book = RoleBook(HINTS)
     game, _, issues, events, exits = run_sim("random", 0.6, title={"QuitButton": TITLE["QuitButton"]},
                                                cfg=cfg, book=book)
