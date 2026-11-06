@@ -53,7 +53,7 @@ def _hit(target: Target, texts: list[str], names: list[str]) -> bool:
 
 
 def stamp_key(text: str | None) -> tuple[int, ...] | None:
-    """スロットの文字の日時を、新しいほど大きくなる並びにする。読めた分だけ使う（日付は OCR で崩れやすいので、時刻だけでも）。
+    """スロットの文字の日時を、新しいほど大きくなる並びにする。読めた分だけ使う（日付は OCR で崩れやすいので、時刻だけでも。比べ方は newest_slots）。
 
     "16. 2026-11-06 10:46:59" → (2026, 11, 6, 10, 46, 59)。日付が読めなければ (0, 0, 0, 10, 46, 59)。"""
     if not text:
@@ -64,6 +64,21 @@ def stamp_key(text: str | None) -> tuple[int, ...] | None:
     d = re.search(r"(20\d\d)\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})", text[:t.start()])
     date = tuple(int(x) for x in d.groups()) if d else (0, 0, 0)
     return (*date, int(t.group(1)), int(t.group(2)), int(t.group(3) or 0))
+
+
+def newest_slots(texts: dict[str, str | None]) -> set[str]:
+    """スロットの label → 文字 から、いちばん新しいセーブのスロット。日時が読めないものは除く。
+
+    日付が読めないスロットが1つでもあれば、どれも時刻だけで比べる（日付の読めたものが、読めなかったものより
+    いつも新しくなってしまうため。run 2026-11-06_1418: 「8.2026 1F06 14:51:52」より「9. 2026-1-06 12:58:58」を選び、
+    B_004 から A_004 に戻った）。"""
+    keys = {label: k for label, text in texts.items() if (k := stamp_key(text)) is not None}
+    if not keys:
+        return set()
+    if any(k[:3] == (0, 0, 0) for k in keys.values()):
+        keys = {label: k[3:] for label, k in keys.items()}
+    top = max(keys.values())
+    return {label for label, k in keys.items() if k == top}
 
 
 def load_save_hints(path: Path) -> SaveHints:

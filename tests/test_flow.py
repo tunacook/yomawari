@@ -662,3 +662,19 @@ def test_wrong_answers_are_remembered_across_runs(tmp_path):
     w = answer(s, st, run, frag + "#1")
     assert w[f"click {frag}"] == pytest.approx(click * low) and w[f"click {frag}#1"] == click * k
     assert any("前のランまでに外れと分かっていた組み合わせ 1 通りを避けた" in n for n in run.flow.summary())
+
+
+def test_flow_step_ops_are_not_worn_down_by_repeats():
+    # run 2026-11-06_1418: 同じ質問に答え直すたびに同じボタンを押すので、押した回数で重みを下げると、
+    # 答え直すほどドラッグ・Esc などの寄り道が増えた。流れの手順の操作は回数で下げない
+    s, st, run, events = _session()
+    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=LIST)
+    cands = normal_candidates(st, Guard({}), s.cfg["weights"], False)
+    out = {op.label: op for op in s._apply_flow(cands, 0.0)}
+    slot = out["click MemoryListUI/MemoryListGridSlot (Clone)"]
+    assert not slot.novelty
+    assert out["click MemoryListUI/SelectButton"].novelty  # 手順の外のボタンは今までどおり
+    dec = run.decider
+    for _ in range(50):
+        dec.tries[("k", slot.label)] += 1
+    assert dec.weight("k", slot) == slot.weight
