@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from yomawari.savestate import SaveState, SaveTarget
+from yomawari.savestate import SaveState, SaveTarget, previous_run_save
 
 
 def write(p: Path, text: str) -> None:
@@ -68,3 +68,16 @@ def test_refuses_second_backup_while_pending(tmp_path, fake_platform):
 
 def test_restore_without_pending_is_noop(tmp_path, fake_platform):
     assert SaveState(tmp_path / "runs", fake_platform).restore() == []
+
+
+def test_previous_run_save_is_newest_after_run_of_same_build(tmp_path):
+    # --continue: 前のラン（同じビルドのいちばん新しいラン）が終わったときのセーブ
+    runs = tmp_path / "runs"
+    for name in ("2026-11-05_2230_mac_dev", "2026-11-06_1012_mac_dev", "2026-11-06_1100_other"):
+        (runs / name / "backup" / "after_run" / "save").mkdir(parents=True)
+    (runs / "2026-11-06_1200_mac_dev").mkdir()  # セーブが残っていないラン（中断など）は飛ばす
+    now = runs / "2026-11-06_1300_mac_dev"
+    now.mkdir()
+    assert previous_run_save(runs, "mac_dev", now) == runs / "2026-11-06_1012_mac_dev" / "backup" / "after_run" / "save"
+    assert previous_run_save(runs, "nothing", now) is None
+    assert previous_run_save(tmp_path / "none", "mac_dev") is None

@@ -39,13 +39,14 @@ def _label(i):
     return "SaveLoadUI/SaveLoadSlot (Clone)" + (f"#{i}" if i else "")
 
 
-def _session(launch):
+def _session(launch, cont=False):
     st = GameState()
     cfg = {**FUZZ_DEFAULTS, "hover_wait_sec": 0}
     run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2),
                   guard=Guard({}, None, RoleBook(load_role_hints(RULES))), rng=random.Random(1), cfg=cfg,
-                  response_timeout=0.1, inactive_words=load_inactive_words(RULES), save_hints=load_save_hints(RULES))
-    run.plays = 1  # 2回目以降の起動
+                  response_timeout=0.1, inactive_words=load_inactive_words(RULES), save_hints=load_save_hints(RULES),
+                  continue_previous=cont)
+    run.plays = 1 if launch else 0
     windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
     events = []
     s = FuzzSession(run, st, Pointer(windows, None, 1, st, activate_wait=0), events.append, launch, lambda _: None)
@@ -114,6 +115,19 @@ def test_first_launch_and_timeout_do_not_resume():
     assert w["click TitleUI/NewGameButton"] == CLICK  # セーブが見つからないまま時間がたったら、はじめからも選ぶ
     assert run.resume_until is None
     assert any("ロードも本文の始まりもなかった" in n for n in run.notes)
+
+
+def test_continue_option_resumes_on_first_launch():
+    # --continue: 前のランが終わりまで届かなかったとき、はじめから遊び直さずにその先を見る
+    s, st, run = _session(launch=0, cont=True)
+    assert run.resume_until is not None
+    _show(st, "TitleUI", TITLE, TITLE_TEXT)
+    w = _weights(s, st, 0.0)
+    assert w["click TitleUI/ContinueButton"] == CLICK * BOOST
+    assert w["click TitleUI/NewGameButton"] == pytest.approx(CLICK * LOW)
+    s.on_event(Event("game", "load", {"slot": "GameSave016", "phase": "start"}, 0))
+    assert run.resume_until is None
+    assert any("前のランの続きから遊ぶ（--continue）ので" in n for n in run.notes)
 
 
 def test_saved_slots_are_not_pressed_without_purpose():

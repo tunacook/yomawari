@@ -41,7 +41,7 @@ from .platform import Platform
 from .profile import GameSpec
 from .post.report import RunSummary, write_report
 from .purpose import Purpose
-from .savestate import SaveState, resolve_target
+from .savestate import SaveState, previous_run_save, resolve_target
 from .state import GameState
 from .sensors.crash import watch_crash_dir
 from .sensors.logtail import InvalidRecord, Record, UnityEntry, YomawariRecord, tail_file
@@ -61,6 +61,7 @@ class RunOptions:
     purpose: Purpose | None = None  # ランの目的。fuzz_cfg にはすでに重ねてある
     display_off: bool = False  # ゲームが起動したあと、画面を消す
     display_off_delay_sec: float = 10.0
+    continue_previous: bool = False  # ランの最初の起動から、前のランのセーブの続きを遊ぶ
 
 
 @dataclass
@@ -377,6 +378,11 @@ class Harness:
 
     async def run(self, opts: RunOptions) -> RunResult:
         run_dir = new_run_dir(self.runs_dir, self.build.name)
+        # --continue: 前のランが終わったときのセーブを置いて、その続きから遊ぶ（DESIGN.md §9「続きから遊ぶ」）。
+        # 見つからなければ、はじめから遊ぶ（そのときにあるのは人のセーブで、前のランの続きではない）
+        prev_save = previous_run_save(self.runs_dir, self.build.name, run_dir) if opts.continue_previous else None
+        if opts.continue_previous and prev_save is None:
+            self.notes.append("--continue: 前のランのセーブが見つからないため、はじめから遊びました")
         self._bus = EventBus(run_dir / "events.jsonl")
         self._bus.subscribe(self._on_event)
         self._started = time.monotonic()
@@ -398,6 +404,7 @@ class Harness:
                 inactive_words=load_inactive_words(self.rules_path),
                 masked_chars=load_masked_chars(self.rules_path),
                 save_hints=load_save_hints(self.rules_path),
+                continue_previous=prev_save is not None,
                 # 進め方の経験は、ボタンの役割と同じファイル（runs/_experience/<ゲーム>.json）に覚える
                 experience=Experience(self.roles.path),
             )
@@ -442,7 +449,11 @@ class Harness:
         try:
             if saves.pending():
                 self.notes += ["前回のランの未復元の退避を見つけたため復元しました"] + saves.restore()
-            self.notes += saves.backup(run_dir, resolve_target(self.build, self.platform), self.build.initial_save)
+            if prev_save is not None:
+                self.notes += saves.backup(run_dir, resolve_target(self.build, self.platform), prev_save,
+                                           "前のランが終わったときのセーブ（--continue）")
+            else:
+                self.notes += saves.backup(run_dir, resolve_target(self.build, self.platform), self.build.initial_save)
             backed_up = True
             deadline = self._started + opts.hours * 3600
             launch = 0
