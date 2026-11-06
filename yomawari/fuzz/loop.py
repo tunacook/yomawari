@@ -47,6 +47,7 @@ from .ops import (
     state_key,
 )
 from .flow import FlowTracker
+from .resume import SaveHints, stamp_key
 from .search import (
     REVEAL, Lead, blind_candidates, known_leads, leads, search_candidates, searchable_menus, stuck_rows, toward,
 )
@@ -85,6 +86,8 @@ class FuzzRun:
     notes: list[str] = field(default_factory=list)  # report.md の「ハーネスの記録」に載せること
     inactive_words: list[str] = field(default_factory=list)  # rules.yaml の inactive_hints.text
     masked_chars: str = ""  # rules.yaml の inactive_hints.masked（伏せ字の文字）
+    save_hints: SaveHints = field(default_factory=SaveHints)  # rules.yaml の save_hints（セーブ済みのスロット・続きから）
+    resume_until: float | None = None  # 起動し直して、続きから遊ぼうとしているあいだ（この時刻まで）
     text_decided: set[str] = field(default_factory=set)  # 文字で押せるかを決めた並び（「ハーネスの記録」に1回書く）
     # 見た目（fuzz/looks.py）。ランのあいだ覚えておく
     dim_seen: set[str] = field(default_factory=set)  # 暗いボタンがあると記録した並び
@@ -257,6 +260,7 @@ class FuzzSession:
         # 再起動の前に抜け出す操作を試している間: {"rule", "left", "since", "ops", "on_fail"}
         self._recovery: dict[str, Any] | None = None
         self._choose_intent("起動した")
+        self._start_resume()
 
     # --- イベント（バスから同期で呼ばれる） ---
 
@@ -363,6 +367,11 @@ class FuzzSession:
         elif ev.kind == "choices" and d.get("items"):
             # 選択肢の id は表示のたびに変わるので、本文で表す
             place = "choices:" + "|".join(str(c.get("text")) for c in d["items"] if isinstance(c, dict))
+        if self.run.resume_until is not None:
+            if ev.kind == "load" and d.get("phase") == "start":
+                self._end_resume(f"セーブ（{d.get('slot')}）をロードした")
+            elif ev.kind == "line":
+                self._end_resume("本文が始まった（ロードせずに始めた）")
         if place is not None and self.run.experience.reach(place):
             self._credit("progress")
         elif ev.kind == "load" and d.get("phase") == "start":
@@ -458,6 +467,7 @@ class FuzzSession:
                 cands = [op for op in cands if op.group != "move" or op.label == "key enter"]
             cands += search
         cands = self._apply_intent(cands)
+        cands = self._apply_resume(cands, now)
         cands = self._apply_flow(cands, now)
         top = self.state.top_modal()
         if top is not None and not top.buttons and not self.state.busy:
@@ -702,6 +712,56 @@ class FuzzSession:
             return hud and op.target is not None and op.target.kind == "button"
 
         return [dataclasses.replace(op, weight=op.weight * f) if detour(op) else op for op in cands]
+
+    # --- 続きから遊ぶ（fuzz/resume.py） ---
+
+    def _start_resume(self) -> None:
+        """ラン中にゲームを起動し直したら（終了ボタンを確かめた・再起動した）、人がするように続きから遊ぶ。
+        ロードするか本文が始まるか、resume_sec たったら終える。ランの最初の起動では、はじめから遊ぶ。"""
+        run = self.run
+        if self.launch == 0 or float(self.cfg["resume_sec"]) <= 0:
+            return
+        run.resume_until = time.monotonic() + float(self.cfg["resume_sec"])
+
+    def _end_resume(self, how: str) -> None:
+        self.run.resume_until = None
+        self.run.notes.append(f"起動し直したので続きから遊ぼうとした: {how}（起動 #{self.launch}）")
+
+    def _apply_resume(self, cands: list[Op], now: float) -> list[Op]:
+        """続きから遊ぶあいだは、「続きから」のボタンと、いちばん新しいセーブ済みのスロットを先に押し、「はじめから」を
+        後回しにする。見えているスロットがどれも空（文字で分かる）なら、ページを送るボタンを先に押す。
+        続きから遊ぶとき以外は、セーブ済みのスロットに saved_slot_factor を掛ける（既定 0 で押さない。自分のセーブのロードは
+        目的があるときだけにする。run 2026-11-06_1012 で、B_004 から A_009 のセーブをロードして 12 分やり直した）。"""
+        run, hints = self.run, self.run.save_hints
+        if run.resume_until is not None and now >= run.resume_until:
+            self._end_resume(f"{float(self.cfg['resume_sec']):g} 秒のうちにロードも本文の始まりもなかった")
+        targets = [op.target for op in cands if op.target is not None and op.target.kind == "button"]
+        saved = [t for t in targets if hints.saved(t)]
+        if run.resume_until is None:
+            low = float(self.cfg["saved_slot_factor"])
+            if not saved or low == 1.0:
+                return cands
+            labels = {t.label for t in saved}
+            if low <= 0:
+                return [op for op in cands if op.target is None or op.target.label not in labels]
+            return [dataclasses.replace(op, weight=op.weight * low)
+                    if op.target is not None and op.target.label in labels else op for op in cands]
+        boost, low = float(self.cfg["resume_factor"]), float(self.cfg["resume_new_game_factor"])
+        keys = {t.label: k for t in saved if (k := stamp_key(t.text)) is not None}
+        newest = {label for label, k in keys.items() if k == max(keys.values())} if keys else {t.label for t in saved}
+        empty = inactive(targets, run.inactive_words, run.masked_chars)
+        paging = not saved and bool(stuck_rows(self.state, empty))
+        out = []
+        for op in cands:
+            t = op.target
+            f = 1.0
+            if t is not None and t.kind == "button":
+                if t.label in newest or hints.resume(t) or (paging and hints.next_page(t)):
+                    f = boost
+                elif run.guard.book.role_of(t) == "new_game":
+                    f = low
+            out.append(dataclasses.replace(op, weight=op.weight * f) if f != 1.0 else op)
+        return out
 
     # --- 再起動の前に抜け出す ---
 

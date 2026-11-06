@@ -26,7 +26,8 @@ PURPOSE_DEFAULTS: dict[str, dict[str, Any]] = {
                        "進めなくなったら、抜け出す操作を試さずにそのまま記録する",
         "mode": "random",
         "focus": ["S-02", "S-03", "S-01", "H-01"],
-        "fuzz": {"intent_progress": 1.0, "intent_explore": 1.0, "recover_ops": 0, "learn": True},
+        "fuzz": {"intent_progress": 1.0, "intent_explore": 1.0, "recover_ops": 0, "learn": True,
+                 "saved_slot_factor": 1.0},
     },
     "play": {
         "description": "通常のプレイ。人が遊ぶように本編を先へ進め、寄り道は少なめにする",
@@ -42,7 +43,7 @@ PURPOSE_DEFAULTS: dict[str, dict[str, Any]] = {
         "fuzz": {"intent_progress": 1.0, "intent_explore": 0.0, "learn": True},
         "burst": {"sec": 60, "prob": 0.3, "share": 0.5, "mode": "random", "intent": "explore",
                   "fuzz": {"learn": False, "use_flow": False, "ai_choice": False, "dim_factor": 0.3,
-                           "weights": {"click": 10}}},
+                           "saved_slot_factor": 1.0, "weights": {"click": 10}}},
     },
     "gacha": {
         "description": "ガチャプレイ。通常のプレイで先へ進めながら、初めて来た画面・scene で、ときどきその場で連打・"
@@ -52,7 +53,7 @@ PURPOSE_DEFAULTS: dict[str, dict[str, Any]] = {
         "fuzz": {"intent_progress": 1.0, "intent_explore": 0.0, "learn": True},
         "burst": {"sec": 60, "prob": 0.3, "share": 0.5, "mode": "fuzz",
                   "fuzz": {"irregular_prob": 0.3, "trigger_prob": 0.6, "learn": False, "use_flow": False,
-                           "ai_choice": False}},
+                           "ai_choice": False, "saved_slot_factor": 1.0}},
     },
     "rta": {
         "description": "最短で進める。進行につながった操作を強く優先し、寄り道と巻き戻しを避ける。どこまで届いたかを記録する",
