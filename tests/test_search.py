@@ -20,7 +20,8 @@ def _grid(dx=0.0, dy=0.0, modal=False, extra=None):
 def test_leads_point_to_unseen_buttons_in_both_axes():
     st = _grid()
     found = {(lead.direction, lead.unseen) for lead in leads(st, set())}
-    assert found == {("down", 8), ("right", 8)}
+    # 斜め（右下）の 4 つは、縦に動かしても見えてこないので右にだけ数える
+    assert found == {("down", 4), ("right", 8)}
     lead = leads(st, set())[0]
     assert lead.menu == "ListUI" and lead.name == "Slot"
     assert lead.point == (0.45, 0.45)  # 見えているボタンの範囲の中心
@@ -43,6 +44,20 @@ def test_leads_skip_seen_and_covered_and_hidden_flag_works():
     assert [(lead.direction, lead.unseen) for lead in leads(st, set())] == [("down", 1)]
 
 
+def test_leads_do_not_go_up_and_down_for_columns_outside_the_view():
+    # run 2026-11-06_1846: 横に7列並ぶうち左の4列しか見えない回想の一覧。上の行にも下の行にも右の3列があり、
+    # それを「上にも下にもある」と数えて、上下に動かし続けた。見えている列の外は、横の向きにだけ数える
+    buttons = [{"name": "Slot", "rect": [0.08 + 0.25 * c, 0.1 + 0.3 * r, 0.3 + 0.25 * c, 0.35 + 0.3 * r]}
+               for r in range(-3, 6) for c in range(7)]
+    st = GameState()
+    st.feed(Event("game", "menu", {"name": "ListUI", "modal": True, "buttons": buttons}, 0))
+    vis = {b.label for b in st.menus["ListUI"].visible_buttons}
+    hidden_left_columns = {b.label for b in st.menus["ListUI"].buttons if b.rect[0] < 0.9} - vis
+    # 左の4列はすべて見たことがある。残りは右の3列だけ
+    found = leads(st, vis | hidden_left_columns)
+    assert [lead.direction for lead in found] == ["right"]
+
+
 def test_nothing_to_search_when_all_seen():
     st = _grid()
     seen = {"ListUI/Slot"} | {f"ListUI/Slot#{i}" for i in range(1, 16)}
@@ -55,7 +70,7 @@ def test_known_leads_go_back_to_bright_button():
     seen = {"ListUI/Slot"} | {f"ListUI/Slot#{i}" for i in range(1, 16)}
     assert leads(st, seen) == []
     found = known_leads(st, {"ListUI/Slot#15"})
-    assert [(lead.direction, lead.unseen, lead.kind) for lead in found] == [("down", 1, "known"), ("right", 1, "known")]
+    assert [(lead.direction, lead.unseen, lead.kind) for lead in found] == [("right", 1, "known")]  # 右下は右へ
     assert {lead.kind for lead in leads(st, set())} == {"unseen"}
     # 見えている項目に明るかったものがあれば、それを押せばよいので戻らない
     assert known_leads(st, {"ListUI/Slot#15", "ListUI/Slot#1"}) == []
