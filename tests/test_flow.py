@@ -723,3 +723,22 @@ def test_reveals_are_forgotten_when_progress_is_replaced():
     s.on_event(Event("game", "load", {"slot": "GameSave004", "phase": "start"}, 0))
     assert not tr.done_once and dead not in tr.leaves and wrong in tr.leaves
     assert any("GameSave004" in e and "忘れた" in e for e in tr.events)
+
+
+def test_answered_option_that_keeps_missing_is_no_longer_favored():
+    # run 2026-11-06_2050: 前に押して読めた思い出のサムネが、起動し直してロードしたあとはロックされていた。押して反応した
+    # ことがあるので「反応しないボタン」とせず、暗いものの番で流れの選び方として優先し続け、反応しないまま押し続けた
+    s, st, run, _ = _session()
+    run.flow = FlowTracker(parse_flows(tomllib.loads(ONCE_PROFILE)["flow"]))
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    _to_fragments(s, st, run, 2)
+    labels = [FRAG, f"{FRAG}#1"]
+    s._dim = {labels[1]}
+    ctx, path = run.flow.ctx, tuple(run.flow.path)
+    run.flow.leaves.add((ctx, (*path, labels[0])))  # 明るいほうは外れだった
+    run.answered.add(labels[1])
+    run.silent.add(labels[1])
+    run.miss_streak[labels[1]] = 1
+    assert _weights(s, st)[f"click {labels[1]}"] == click * k  # 1回反応しなかっただけなら、まだ選ぶ
+    run.miss_streak[labels[1]] = FUZZ_DEFAULTS["answered_miss_limit"]
+    assert _weights(s, st)[f"click {labels[1]}"] == click  # 続けて反応しなければ、選ばない
