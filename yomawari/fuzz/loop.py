@@ -47,7 +47,7 @@ from .ops import (
     state_key,
 )
 from .flow import FlowTracker
-from .resume import SaveHints, stamp_key
+from .resume import SaveHints, newest_slots
 from .rollback import EDGE_OPS, EDGE_TIMINGS, PATTERNS, RollbackWatch, Step, describe, edge_timing, step_of
 from .search import (
     REVEAL, Lead, blind_candidates, known_leads, leads, search_candidates, searchable_menus, stuck_rows, toward,
@@ -666,6 +666,12 @@ class FuzzSession:
                     f = low
                 elif not going or o in going:
                     f = boost * (ai if o in favored else 1.0)
+            if f >= boost:
+                # 流れの手順の操作は、同じ質問に答え直すたびに同じボタン（言葉を選ぶ・この言葉で答える・答えを決める）を押す。
+                # 押した回数で重みを下げる（novelty）と、答え直すほど流れの優先が薄れ、ドラッグ・Esc などの寄り道が増える
+                # （run 2026-11-06_1418: 「この言葉で答える」を 45 回押したあとは、手順の外の操作のほうが多くなった）。
+                # 同じ組み合わせを繰り返さないことは、試行錯誤（exhausted・tried）で見る
+                op = dataclasses.replace(op, novelty=False)
             out.append(dataclasses.replace(op, weight=op.weight * f) if f != 1.0 else op)
         if away:
             labels = {op.label for op in away}
@@ -798,8 +804,7 @@ class FuzzSession:
             return [dataclasses.replace(op, weight=op.weight * low)
                     if op.target is not None and op.target.label in labels else op for op in cands]
         boost, low = float(self.cfg["resume_factor"]), float(self.cfg["resume_new_game_factor"])
-        keys = {t.label: k for t in saved if (k := stamp_key(t.text)) is not None}
-        newest = {label for label, k in keys.items() if k == max(keys.values())} if keys else {t.label for t in saved}
+        newest = newest_slots({t.label: t.text for t in saved}) or {t.label for t in saved}
         empty = inactive(targets, run.inactive_words, run.masked_chars)
         paging = not saved and bool(stuck_rows(self.state, empty))
         out = []

@@ -12,7 +12,7 @@ from yomawari.fuzz.guard import Guard
 from yomawari.fuzz.loop import FuzzRun, FuzzSession
 from yomawari.fuzz.looks import load_inactive_words
 from yomawari.fuzz.ops import normal_candidates
-from yomawari.fuzz.resume import load_save_hints, stamp_key
+from yomawari.fuzz.resume import load_save_hints, newest_slots, stamp_key
 from yomawari.fuzz.roles import RoleBook, load_role_hints
 from yomawari.input.pointer import Pointer
 from yomawari.sensors.window import ScreenRect, WindowInfo
@@ -130,3 +130,11 @@ def test_saved_slots_are_not_pressed_without_purpose():
     # ロードとの行き来を試す目的（stuck）では押す
     s.cfg["saved_slot_factor"] = 1.0
     assert _weights(s, st, 0.0)[f"click {_label(6)}"] == CLICK
+
+
+def test_newest_slot_compares_time_only_when_some_date_is_unreadable():
+    # run 2026-11-06_1418: 「8.2026 1F06 14:51:52」（日付が崩れた）より「9. 2026-1-06 12:58:58」を選び、A_004 に戻った
+    texts = {"a": "6. 2026-0-06 12:58:22", "b": "8.2026 1F06 14:51:52", "c": "9. 2026-1-06 12:58:58", "d": "7. Empty"}
+    assert newest_slots(texts) == {"b"}
+    assert newest_slots({"a": "1. 2026-11-05 23:00:00", "b": "2. 2026-11-06 01:00:00"}) == {"b"}
+    assert newest_slots({"d": "7. Empty"}) == set()
