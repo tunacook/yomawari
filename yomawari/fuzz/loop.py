@@ -109,6 +109,7 @@ class FuzzRun:
     seen: set[str] = field(default_factory=set)  # 一度でも見えたボタンの label
     silent: set[str] = field(default_factory=set)  # 最後に押したとき反応しなかったボタンの label
     answered: set[str] = field(default_factory=set)  # 押して反応があったことのあるボタンの label
+    miss_streak: Counter[str] = field(default_factory=Counter)  # ボタンの label → 続けて反応しなかった回数（このラン）
     # 見た目の推定（明るさ・半透明・文字）。並び → 測ったボタン、見分けられた（押せなさそうなものがあった）並び
     look_groups: dict[str, set[str]] = field(default_factory=dict)
     look_split: set[str] = field(default_factory=set)
@@ -623,7 +624,7 @@ class FuzzSession:
         # 見た目だけで押せなさそうと見たもの（暗い、反応しなかったものと同じ見た目）は、ほかを試し終えてから選ぶ
         # （人も、明るいものが外れなら暗いものも試す。絵柄が暗いだけで選べるものがある。run 2026-11-05_1346）
         quiet = self._quiet() | run.silent
-        sure = (run.silent - run.answered) | inactive(self.state.targets(), run.inactive_words, run.masked_chars)
+        sure = (run.silent - self._trusted()) | inactive(self.state.targets(), run.inactive_words, run.masked_chars)
         done = tracker.done_steps()
 
         def option(t: Any, skip: set[str]) -> str | None:
@@ -1105,13 +1106,25 @@ class FuzzSession:
         self.run.search_noted.add(key)
         self.run.notes.append(f"{text}（起動 #{self.launch}）")
 
+    def _trusted(self) -> set[str]:
+        """押して反応したことのあるボタン（このランで反応した、前のランまでに押して先へ進んだ）のうち、続けて反応しなかった
+        回数が answered_miss_limit 未満のもの。1回反応しなかっただけでは、反応しないボタンとして後回しにしない。
+
+        続けて何度も反応しなければ、いまは押せない（ゲームの進み具合が変わって、開示済みだった思い出がロックされているなど）
+        として、ほかのボタンと同じに後回しにする（run 2026-11-06_2050: 前に押して読めた思い出のサムネが、起動し直してロード
+        したあとはロックされていて、反応しないのに約 7 分で 227 回押し続けた）。"""
+        run = self.run
+        limit = int(self.cfg["answered_miss_limit"])
+        return {label for label in run.answered | run.experience.progressed_targets()
+                if run.miss_streak[label] < limit}
+
     def _quiet(self) -> set[str]:
         """押しても反応しないと見込んでいるボタン（暗い、文字で空と分かる、押しても一度も反応しなかったもの・それと
         同じ見た目のもの）の label。一度も反応しなかったボタンは S-05 の対象でないので、押し直しても待つ時間は短くてよい。"""
         # 前のランまでに押して先へ進んだボタン（タイトルの「はじめから」など）は、1回反応しなかっただけでは後回しにしない
         # （画面が切り替わる途中に押して反応しなかったなど。run 2026-11-06_1830: 起動直後に「はじめから」を1回押して反応せず、
         # 以後ほとんど押さずに、設定やロード画面の開け閉めを 4 分続けた）
-        silent = self.run.silent - self.run.answered - self.run.experience.progressed_targets()
+        silent = self.run.silent - self._trusted()
         return (self._dim | self._locked_alike() | silent
                 | inactive(self.state.targets(), self.run.inactive_words, self.run.masked_chars))
 
@@ -1419,6 +1432,10 @@ class FuzzSession:
             self._verify_behind(op.target, responded)
         if op.target is not None and op.target.kind == "button":
             (self.run.silent.discard if responded else self.run.silent.add)(op.target.label)
+            if responded:
+                self.run.miss_streak.pop(op.target.label, None)
+            else:
+                self.run.miss_streak[op.target.label] += 1
             if responded:
                 self.run.answered.add(op.target.label)
             if not responded:

@@ -681,3 +681,6 @@ def test_button_that_progressed_before_is_not_quiet_after_one_miss():
     run.experience.ops.setdefault("menus:TitleUI", {})["click TitleUI/NewGameButton"] = {"tries": 42, "progress": 28, "rewind": 0}
     quiet = s._quiet()
     assert "TitleUI/NewGameButton" not in quiet and "TitleUI/SettingsButton" in quiet
+    # 続けて何度も反応しなければ、ほかのボタンと同じに後回しにする（run 2026-11-06_2050）
+    run.miss_streak["TitleUI/NewGameButton"] = FUZZ_DEFAULTS["answered_miss_limit"]
+    assert "TitleUI/NewGameButton" in s._quiet()
