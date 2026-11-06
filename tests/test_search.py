@@ -1,7 +1,7 @@
 """画面の外を探す（fuzz/search.py）。"""
 
 from yomawari.events import Event
-from yomawari.fuzz.search import blind_candidates, known_leads, leads, search_candidates, stuck_rows
+from yomawari.fuzz.search import Lead, blind_candidates, known_leads, leads, one_way, search_candidates, stuck_rows
 from yomawari.state import GameState
 
 
@@ -201,3 +201,24 @@ def test_buttons_that_look_like_a_locked_one_are_skipped():
     run.locked_look["ListUI/Slot"] = (0.2, 0.3)
     s._values = {"ListUI/Slot": {"ListUI/Slot#8": (0.2, 0.3), "ListUI/Slot#9": (0.7, 0.9), "ListUI/Slot#12": (0.21, 0.3)}}
     assert s._locked_alike() == {"ListUI/Slot#8", "ListUI/Slot#12"}
+
+
+def test_one_way_keeps_one_direction_per_row():
+    # run 2026-11-06_2334: 縦にも横にも広い回想の一覧で、上下左右の向きの操作を混ぜて候補に入れ、逆の向きへ動かして
+    # 打ち消し合い、5 時間行ったり来たりした。並びごとに向きを1つに絞る
+    st = _grid()
+    found = leads(st, set())
+    assert {lead.direction: lead.near for lead in found} == {"down": 0.25, "right": 0.25}
+
+    def lead(d, near, name="Slot"):
+        return Lead("ListUI", name, d, 1, (0.5, 0.5), (), "flow", near)
+    found = [lead("up", 0.6), lead("down", 0.2), lead("right", 0.4), lead("left", 0.1, "Other")]
+    # 決めた向きがなければ、いちばん近い項目のある向き（並びごと）
+    assert {(x.name, x.direction) for x in one_way(found, {})} == {("Slot", "down"), ("Other", "left")}
+    # 決めた向きにまだ項目があれば、近い向きがほかにあっても続ける
+    assert [x.direction for x in one_way(found, {"ListUI/Slot": "up"}) if x.name == "Slot"] == ["up"]
+    # 決めた向きに項目がなくなれば、決め直す
+    assert [x.direction for x in one_way(found[1:], {"ListUI/Slot": "up"}) if x.name == "Slot"] == ["down"]
+    # 動かす操作は、その向きのものだけ
+    ops = search_candidates(one_way(found[:3], {}), {"ListUI/Slot": 1.0})
+    assert {op.label for op in ops} == {"wheel_down 3", "drag up", "key down"}

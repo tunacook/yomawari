@@ -50,7 +50,7 @@ from .flow import FlowTracker
 from .resume import SaveHints, newest_slots, older_than, stamp_key
 from .rollback import EDGE_OPS, EDGE_TIMINGS, PATTERNS, RollbackWatch, Step, describe, edge_timing, step_of
 from .search import (
-    REVEAL, Lead, blind_candidates, known_leads, leads, search_candidates, searchable_menus, stuck_rows, toward,
+    REVEAL, Lead, blind_candidates, known_leads, leads, one_way, search_candidates, searchable_menus, stuck_rows, toward,
 )
 
 # プレイの目的（random モード）→ レポートでの呼び方
@@ -128,6 +128,11 @@ class FuzzRun:
     behind_refuted: set[str] = field(default_factory=set)  # 押した結果で、後ろに下がっていないと分かった menu（閉じるまで）
     behind_noted: set[str] = field(default_factory=set)  # 「後ろに下がった」と記録に書いた menu  # 「同じ見た目も押せないとみなした」と記録に書いた並び
     search_dead: Counter[tuple[str, str]] = field(default_factory=Counter)  # (menu, 探す操作) → 続けて反応しなかった回数
+    # 手順の画面の外を探すとき、並び (menu, name) → (決めた向き, 前に決めたとき見えていたボタンの label,
+    # その向きへ動かしても見えるボタンが変わらなかった回数)。向きは1つに絞って続ける（fuzz/search.py の one_way）
+    flow_way: dict[tuple[str, str], tuple[str, tuple[str, ...], int]] = field(default_factory=dict)
+    flow_moved: set[tuple[str, str]] = field(default_factory=set)  # 決めた向きへ動かしたあと、見えるボタンをまだ比べていない並び
+    flow_stuck: set[tuple[str, str, str]] = field(default_factory=set)  # 動かしても見えるボタンが変わらなくなった (menu, name, 向き)
     blind_tries: Counter[str] = field(default_factory=Counter)  # menu → 向きを決めずに探した回数（開き直すと 0 に戻す）
     search_noted: set[str] = field(default_factory=set)  # 「ハーネスの記録」に書いた探し方（menu ごと）
     # 進め方の経験（fuzz/experience.py）
@@ -293,6 +298,7 @@ class FuzzSession:
         # 探す・戻る操作の label → それが向かう ("<unseen|known>:<menu>/<name>:<向き>", menu)
         self._search: dict[str, list[tuple[str, str]]] = {}
         self._blind: dict[str, list[str]] = {}  # 向きを決めずに探す操作の label → その menu
+        self._flow_rows: dict[str, set[tuple[str, str]]] = {}  # 手順の画面の外を探す操作の label → 動かす並び (menu, name)
         self._title_returns = state.title_returns
         self._resolution_changes = state.resolution_changes
         self._play_start = 0  # このプレイを始めたときに届いていた本文・scene・選択肢の数
@@ -720,7 +726,9 @@ class FuzzSession:
             return (not b.locked and b.label not in skip and step.presses(b.label, b.name, b.text)
                     and not tracker.exhausted(b.label))
         found = [lead for lead in toward(self.state, menu.name, want)
-                 if run.search_miss[self._lead_key(lead)] < give_up]
+                 if run.search_miss[self._lead_key(lead)] < give_up
+                 and (lead.menu, lead.name, lead.direction) not in run.flow_stuck]
+        found = self._one_way(found, give_up)
         if not found:
             return []
         w = float(self.cfg["weights"]["click"]) * run.screen_weights.get(menu.name, 1.0) * boost
@@ -730,10 +738,40 @@ class FuzzSession:
             targets = [lead for lead in found if (op.kind, op.arg) in REVEAL[lead.direction]]
             op = dataclasses.replace(op, weight=op.weight * low ** run.search_dead[(menu.name, op.label)])
             self._search[op.label] = [(self._lead_key(lead), lead.menu) for lead in targets]
+            self._flow_rows[op.label] = {(lead.menu, lead.name) for lead in targets}
             ops.append(op)
         self._note_search(menu.name, f"`{menu.name}` で、見えている選び方をすべて試したので、画面の外のまだ試していない"
                                      "項目を探した", final=False, tag="flow")
         return ops
+
+    def _one_way(self, found: list[Lead], give_up: int) -> list[Lead]:
+        """手順の画面の外を探す向きを、並びごとに1つに絞って続ける（fuzz/search.py の one_way）。
+
+        決めた向きへ動かしても、見えるボタンが続けて give_up 回変わらなければ（端に着いて中身が跳ね返るだけなど。動いては
+        いるので反応はある）、その向きは画面を閉じるまで探さず、ほかの向きにする。"""
+        run = self.run
+        while found:
+            picked = one_way(found, {f"{m}/{n}": way[0] for (m, n), way in run.flow_way.items()})
+            stuck = []
+            for lead in picked:
+                row = (lead.menu, lead.name)
+                way = run.flow_way.get(row)
+                n = 0
+                if way is not None and way[0] == lead.direction:
+                    n = way[2]
+                    if row in run.flow_moved:
+                        n = n + 1 if way[1] == lead.visible else 0
+                run.flow_moved.discard(row)
+                if n >= give_up:
+                    stuck.append(lead)
+                    run.flow_stuck.add((*row, lead.direction))
+                    run.flow_way.pop(row, None)
+                else:
+                    run.flow_way[row] = (lead.direction, lead.visible, n)
+            if not stuck:
+                return picked
+            found = [lead for lead in found if lead not in stuck]
+        return []
 
     def _step_bright_anywhere(self, step: Any, quiet: set[str]) -> bool:
         """手順の画面に、手順のボタンで押せそうに見えるもの（見た目で押せなさそうとしていないもの）があるか。
@@ -1043,7 +1081,11 @@ class FuzzSession:
         for name in [n for n in run.opened_by if n not in self.state.menus]:
             del run.opened_by[name]  # 閉じた
             run.opened_press.pop(name, None)
-        self._search, self._blind = {}, {}
+        for row in [r for r in run.flow_way if r[0] not in self.state.menus]:
+            del run.flow_way[row]  # 閉じた画面を探す向きは、開き直したら決め直す
+        run.flow_moved = {r for r in run.flow_moved if r[0] in self.state.menus}
+        run.flow_stuck = {k for k in run.flow_stuck if k[0] in self.state.menus}
+        self._search, self._blind, self._flow_rows = {}, {}, {}
         found = self._choose_leads()
         stuck = self._quiet() | run.silent
         if not found:
@@ -1480,6 +1522,8 @@ class FuzzSession:
         if op.group in ("search", "return"):
             for menu in self._blind.get(op.label, []):
                 self.run.blind_tries[menu] += 1
+            if responded:
+                self.run.flow_moved |= self._flow_rows.get(op.label, set())
             for k, _menu in self._search.get(op.label, []):
                 if responded:
                     self.run.search_miss.pop(k, None)
