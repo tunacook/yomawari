@@ -41,6 +41,15 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "settle_sec": 0.5,
     "advance_point": [0.5, 0.5],
     "trigger_prob": 0.3,
+    # random モード（通常のプレイ）で、壊れやすいタイミング（選択肢の直後、scene の境目、演出の途中、セーブ・ロード、
+    # 質問に答えた直後。本文が出るたびには差し込まない）に、エッジケースの操作を差し込む確率。fuzz モードは trigger_prob
+    "edge_prob": 0.03,
+    "menu_flash_sec": 0.05,  # メニューを開いてすぐ閉じる操作で、開いてから閉じるまでの時間
+    # 巻き戻しのエッジケース: 続けて戻る・戻ってすぐ送るの回数の上限、モーダル（バックログ）の巻き戻しボタンが出るまで待つ時間、
+    # 差し込んだあと本文が前の行に戻ったかを見るまで待つ時間
+    "rollback_repeat_max": 4,
+    "rollback_menu_wait_sec": 1.0,
+    "rollback_check_sec": 2.0,
     "trigger_delay_max_sec": 0.5,
     "irregular_prob": 0.05,
     "rapid_count": 10,

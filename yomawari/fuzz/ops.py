@@ -135,8 +135,10 @@ def escape_candidates() -> list[Op]:
     return [Op("key", arg="esc"), Op("right_click"), Op("advance")]
 
 
-def irregular_candidates(state: GameState, guard: Guard, rapid_count: int) -> list[Op]:
-    """イレギュラー操作の候補。暗転中・セーブ中でも作る（そのときこそ差し込みたい）。"""
+def irregular_candidates(state: GameState, guard: Guard, rapid_count: int, rollback: bool = False) -> list[Op]:
+    """イレギュラー操作の候補。暗転中・セーブ中でも作る（そのときこそ差し込みたい）。
+
+    rollback: 巻き戻しの操作を覚えていれば、巻き戻し（1回・続けて・戻ってすぐ送る）も候補にする（fuzz/rollback.py）。"""
     ops = [
         Op("rapid_click", arg=rapid_count, irregular=True, novelty=True),
         Op("rapid_key", arg="enter", irregular=True, novelty=True),
@@ -145,7 +147,10 @@ def irregular_candidates(state: GameState, guard: Guard, rapid_count: int) -> li
         Op("key", arg="esc", irregular=True, novelty=True),
         Op("wheel_up", arg=3, irregular=True, novelty=True),
         Op("wheel_down", arg=3, irregular=True, novelty=True),
+        Op("menu_flash", irregular=True, novelty=True),  # メニューを開いてすぐ閉じる
     ]
+    if rollback:
+        ops.append(Op("rollback", irregular=True, novelty=True))
     for t in state.targets():
         kind = guard.kind_of(t)
         if kind is None and t.locked:
