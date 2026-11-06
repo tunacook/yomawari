@@ -613,3 +613,52 @@ def test_tried_all_visible_options_looks_off_screen():
     w = _weights(s, st)
     assert w["wheel_up 3"] < click * k
     assert any("すべて試しても" in e for e in run.flow.events)
+
+
+def test_wrong_answers_are_remembered_across_runs(tmp_path):
+    # 外れと分かった組み合わせ（同じ質問にまた戻ってきた、その前の答え）を runs/_experience に覚え、次のランで避ける。
+    # 最後の答え（そのあと同じ質問に戻らなかった）は正解かもしれないので覚えない
+    from yomawari.fuzz.experience import Experience
+
+    slot = "MemoryListUI/MemoryListGridSlot (Clone)"
+    frag = "MemoryFragmentListUI/MemoryFragmentListSlot(Clone)"
+    k, low = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"]
+    click = FUZZ_DEFAULTS["weights"]["click"]
+    path = tmp_path / "game.json"
+
+    def new_run():
+        s, st, run, _ = _session()
+        run.flow = FlowTracker(parse_flows(tomllib.loads(TRIAL)["flow"]))
+        exp = Experience(path)
+        run.flow.remember(exp.flow_wrong)
+        return s, st, run, exp
+
+    def ask(s, st):
+        _feed(st, "scene", name="main/s6")
+        _feed(st, "line", line_id="main/s6:70", text="ねぇ、どこだって？")
+        _only(st, "MemoryListUI", LIST)
+
+    def answer(s, st, run, fragment):
+        _press(s, st, run, slot)
+        _only(st, "MemorySummaryUI", SUMMARY)
+        _weights(s, st)
+        run.flow.pressed("MemorySummaryUI/ShowFragmentListButton", "ShowFragmentListButton", True)
+        _only(st, "MemoryFragmentListUI", FRAGS)
+        w = _press(s, st, run, fragment)
+        _only(st, "FragmentSelectDialogUI", [{"name": "Accept", "rect": [0.5, 0.6, 0.7, 0.7]}])
+        _press(s, st, run, "FragmentSelectDialogUI/Accept")
+        return w
+
+    s, st, run, exp = new_run()
+    ask(s, st)
+    answer(s, st, run, frag)
+    ask(s, st)  # 同じ質問に戻った: 前の答えは外れ
+    answer(s, st, run, frag + "#1")  # これが正解だった（このあと同じ質問に戻らない）
+    exp.save()
+    assert exp.flow_wrong == {(("質問に答える", "main/s6:70"), (slot, frag))}
+
+    s, st, run, exp = new_run()
+    ask(s, st)
+    w = answer(s, st, run, frag + "#1")
+    assert w[f"click {frag}"] == pytest.approx(click * low) and w[f"click {frag}#1"] == click * k
+    assert any("前のランまでに外れと分かっていた組み合わせ 1 通りを避けた" in n for n in run.flow.summary())

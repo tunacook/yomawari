@@ -235,12 +235,24 @@ class FlowTracker:
         self.done_once: set[tuple[str, int, Path]] = set()  # (流れ, 手順, 選んだものの並び) で済ませた once の手順
         self.ctx_seen: set[Ctx] = set()
         self.last_done: Ctx | None = None  # 最後まで進めた（答えた）ときの質問
+        self.last_leaf: tuple[Ctx, Path] | None = None  # 最後まで進めた（答えた）組み合わせ
+        # 外れと分かった組み合わせ（同じ質問にまた戻ってきた、その前の答え）。進め方の経験と共有し、ランをまたいで覚える
+        self.wrong: set[tuple[Ctx, Path]] = set()
+        self.wrong_loaded = 0  # 前のランまでに外れと分かっていた組み合わせの数
+        self._loaded_leaves: set[tuple[Ctx, Path]] = set()
         self.lines_after = 0  # 最後まで進めてから届いた本文の行の数
         self.exhausted_noted: set[Ctx] = set()
 
     @property
     def step(self) -> Step | None:
         return self.active.steps[self.index] if self.active is not None else None
+
+    def remember(self, wrong: set[tuple[Ctx, Path]]) -> None:
+        """前のランまでに外れと分かった組み合わせを使う（同じ set に、このランで外れと分かったものを足す）。"""
+        self.wrong = wrong
+        self.wrong_loaded = len(wrong)
+        self.leaves |= wrong
+        self._loaded_leaves = set(wrong)
 
     def line_seen(self) -> None:
         """本文の行が届いた。"""
@@ -264,6 +276,11 @@ class FlowTracker:
                     self.path = []
                     if self.ctx in self.ctx_seen:
                         self.stats[f.name].retried += 1
+                    if self.last_leaf is not None and self.last_leaf[0] == self.ctx:
+                        # 同じ質問に戻ってきた: 前の答えは外れだった。ランをまたいで覚える
+                        # （行き止まり（言葉がまだない思い出）は、開示の状態で変わるので覚えない）
+                        self.wrong.add(self.last_leaf)
+                    self.last_leaf = None
                     self.ctx_seen.add(self.ctx)
                     break
             else:
@@ -426,6 +443,7 @@ class FlowTracker:
             if self.ctx is not None:
                 self.leaves.add((self.ctx, tuple(self.path)))
                 self.last_done, self.lines_after = self.ctx, 0
+                self.last_leaf = (self.ctx, tuple(self.path))
             self._complete(f"`{label}`")
 
     def _complete(self, how: str) -> None:
@@ -459,9 +477,13 @@ class FlowTracker:
                 s = f.steps[st.furthest - 1]
                 line += f"（{s.note or s.when}）"
             if st.retried:
-                tried = sum(1 for c, _p in self.leaves if c[0] == f.name)
+                tried = sum(1 for c, p in self.leaves - self._loaded_leaves if c[0] == f.name)
                 line += f"。同じ質問でもう一度始めた（前の組み合わせが外れだった）のは {st.retried} 回、試した組み合わせは {tried} 通り"
             if st.broken:
                 line += "。途切れたところ（直近）: " + " / ".join(st.broken)
             out.append(line)
+        new = len(self.wrong) - self.wrong_loaded
+        if self.wrong_loaded or new:
+            out.append(f"流れの答えで、前のランまでに外れと分かっていた組み合わせ {self.wrong_loaded} 通りを避けた。"
+                       f"このランで新しく外れと分かったのは {new} 通り（runs/_experience/<ゲーム>.json の flow_wrong に覚える）")
         return out + [e for e in self.events if "すべて試しても" in e]
