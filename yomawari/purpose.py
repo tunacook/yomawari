@@ -60,7 +60,7 @@ PURPOSE_DEFAULTS: dict[str, dict[str, Any]] = {
         "mode": "random",
         "focus": ["S-02", "S-03"],
         "fuzz": {"intent_progress": 1.0, "intent_explore": 0.0, "learn": True, "progress_bonus": 20.0,
-                 "rewind_factor": 0.02, "progress_detour_factor": 0.05},
+                 "rewind_factor": 0.02, "progress_detour_factor": 0.05, "edge_prob": 0.0},
     },
     "aging": {
         "description": "放置。操作せずに起動したままにして、ハング・メモリの増加・ログの異常を見る",
