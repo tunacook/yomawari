@@ -69,6 +69,21 @@ class Step:
         """押すボタンを書いた手順か。"""
         return bool(self.press or self.text)
 
+    @property
+    def picks(self) -> bool:
+        """いくつかの中から選ぶ手順か（選択肢、ワイルドカードで書いたボタン、ボタンを書いていない押す手順）。
+
+        決まった1つのボタンを押すだけの手順（言葉を選ぶ・これにする）は、選び方が分かれないので組み合わせに数えない。
+        数えると、その手順を通ったかどうか（ゲームが一覧を直接開いたなど）で、同じ組み合わせが別のものとして
+        覚えられ、外れを何度も試す（run 2026-11-06_1012）。"""
+        if self.choose is not None:
+            return True
+        if self.advance:
+            return False
+        if not self.targets:
+            return True
+        return any(c in p for p in (*self.press, *self.text) for c in "*?[")
+
     def presses(self, label: str, name: str, text: str | None) -> bool:
         """ボタンが、この手順で押すボタンか（名前か、画面に見える文字で）。"""
         return matches(label, name, self.press) or text_matches(text, self.text)
@@ -219,13 +234,20 @@ class FlowTracker:
         self.leaves: set[tuple[Ctx, Path]] = set()  # 最後まで進めた組み合わせ
         self.done_once: set[tuple[str, int, Path]] = set()  # (流れ, 手順, 選んだものの並び) で済ませた once の手順
         self.ctx_seen: set[Ctx] = set()
+        self.last_done: Ctx | None = None  # 最後まで進めた（答えた）ときの質問
+        self.lines_after = 0  # 最後まで進めてから届いた本文の行の数
         self.exhausted_noted: set[Ctx] = set()
 
     @property
     def step(self) -> Step | None:
         return self.active.steps[self.index] if self.active is not None else None
 
-    def update(self, state: GameState, opened_by: dict[str, str], now: float, idle_sec: float) -> Step | None:
+    def line_seen(self) -> None:
+        """本文の行が届いた。"""
+        self.lines_after += 1
+
+    def update(self, state: GameState, opened_by: dict[str, str], now: float, idle_sec: float,
+               retry_lines: int = 0) -> Step | None:
         """いまの状態から、流れの始まり・手順の進み・途切れを判定し、いまの手順を返す。"""
         if self.active is None:
             for f in self.flows:
@@ -233,6 +255,12 @@ class FlowTracker:
                     self.active, self.index, self.idle_since = f, 0, None
                     self.stats[f.name].started += 1
                     self.ctx = (f.name, (state.line or {}).get("line_id") or state.scene or "")
+                    if (self.last_done is not None and self.last_done[0] == f.name
+                            and self.lines_after <= retry_lines):
+                        # 答えてから数行で同じ流れがまた始まった: 外れへの返事を読んで、同じ質問に戻った。
+                        # 返事の行は外れ方ごとに違うので、行で見ると同じ質問が別々になり、外れを何度も試す
+                        # （run 2026-11-06_1012: 外れ方で 318 行目と 323 行目に分かれた）
+                        self.ctx = self.last_done
                     self.path = []
                     if self.ctx in self.ctx_seen:
                         self.stats[f.name].retried += 1
@@ -300,7 +328,7 @@ class FlowTracker:
         flow = self.active
         if flow is None:
             return 0
-        return sum(1 for s in flow.steps[:i] if not s.once and (s.targets or s.choose is not None))
+        return sum(1 for s in flow.steps[:i] if not s.once and s.picks)
 
     def is_done(self, i: int) -> bool:
         """手順 i が once で、いまの選び方で一度済ませたか。"""
@@ -315,13 +343,17 @@ class FlowTracker:
 
     def offer(self, options: list[str]) -> None:
         """いまの手順で選べるもの（押しても反応しないと見込んでいるものを除く）を覚える。"""
-        if self.ctx is None or not options or (self.step is not None and self.step.once):
+        step = self.step
+        if self.ctx is None or not options or step is None or step.once or not step.picks:
             return
         self.options.setdefault((self.ctx, tuple(self.path)), set()).update(options)
 
     def exhausted(self, option: str) -> bool:
-        """いまの選び方に option を足した枝を、すべて試し終えたか（外れだった）。"""
-        return self.ctx is not None and self._exhausted(self.ctx, (*self.path, option), 0)
+        """いまの選び方に option を足した枝を、すべて試し終えたか（外れだった）。選ぶ手順でなければ見ない。"""
+        step = self.step
+        if self.ctx is None or step is None or not step.picks:
+            return False
+        return self._exhausted(self.ctx, (*self.path, option), 0)
 
     def _exhausted(self, ctx: Ctx, path: Path, depth: int) -> bool:
         if (ctx, path) in self.leaves:
@@ -357,7 +389,8 @@ class FlowTracker:
 
     def tried(self, option: str) -> bool:
         """いまの選び方に option を足した枝を、前に試しはじめたことがあるか（同じ思い出の、ほかの言葉を試すため）。"""
-        if self.ctx is None:
+        step = self.step
+        if self.ctx is None or step is None or not step.picks:
             return False
         p = (*self.path, option)
         return (self.ctx, p) in self.options or (self.ctx, p) in self.leaves
@@ -386,12 +419,13 @@ class FlowTracker:
             picked = label
         if step.once:
             self.done_once.add((flow.name, self.index, tuple(self.path[:self._picks_before(self.index)])))
-        else:
+        elif step.picks:
             # 同じ手順で選び直したら置き換える（思い出を選んで反応があったが、要約が出ずに一覧のままだったなど）
             self.path = [*self.path[:self._picks_before(self.index)], picked]
         if self.index == len(flow.steps) - 1:
             if self.ctx is not None:
                 self.leaves.add((self.ctx, tuple(self.path)))
+                self.last_done, self.lines_after = self.ctx, 0
             self._complete(f"`{label}`")
 
     def _complete(self, how: str) -> None:

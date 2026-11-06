@@ -385,6 +385,7 @@ class FuzzSession:
                 self._spot(ev)
             if ev.kind == "line" and ev.launch == self.launch:
                 self._remember_line(ev.data)
+                self.run.flow.line_seen()
         if self.run.mode != "fuzz" or ev.source != "game" or ev.kind not in TRIGGERS or ev.launch != self.launch:
             return
         if ev.kind in ("transition", "save", "load") and ev.data.get("phase") != "start":
@@ -527,7 +528,8 @@ class FuzzSession:
         if not tracker.flows or not cfg["use_flow"] or run.intent == "explore":
             return cands
         before = (tracker.active.name if tracker.active else None, tracker.index)
-        step = tracker.update(self.state, run.opened_by, now, float(cfg["flow_idle_sec"]))
+        step = tracker.update(self.state, run.opened_by, now, float(cfg["flow_idle_sec"]),
+                              int(cfg["flow_retry_lines"]))
         after = (tracker.active.name if tracker.active else None, tracker.index)
         if after != before:
             self._note_flow(before, after)

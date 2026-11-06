@@ -298,6 +298,55 @@ def test_retrying_the_same_question_tries_other_answers():
                for n in run.flow.summary())
 
 
+def test_same_question_after_different_wrong_replies():
+    # run 2026-11-06_1012: 外れへの返事の行が外れ方ごとに違い（318 行目と 323 行目）、同じ質問が別々に覚えられた。
+    # また「言葉を選ぶ」を押したときと押さずに一覧が出たときで組み合わせが分かれ、同じ外れを何度も答えた
+    s, st, run, _ = _session()
+    run.flow = FlowTracker(parse_flows(tomllib.loads(TRIAL)["flow"]))
+    k, low = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"]
+    click = FUZZ_DEFAULTS["weights"]["click"]
+    slot = "MemoryListUI/MemoryListGridSlot (Clone)"
+    frag = "MemoryFragmentListUI/MemoryFragmentListSlot(Clone)"
+
+    def ask(line_ids):
+        _feed(st, "scene", name="main/s6")
+        for n, line_id in enumerate(line_ids):
+            _feed(st, "line", line_id=line_id, text=f"返事{n}")
+        _only(st, "MemoryListUI", LIST)
+
+    def answer(fragment, show_list):
+        _press(s, st, run, slot)
+        _only(st, "MemorySummaryUI", SUMMARY)
+        _weights(s, st)
+        if show_list:
+            run.flow.pressed("MemorySummaryUI/ShowFragmentListButton", "ShowFragmentListButton", True)
+        _only(st, "MemoryFragmentListUI", FRAGS)
+        w = _press(s, st, run, fragment)
+        _only(st, "FragmentSelectDialogUI", [{"name": "Accept", "rect": [0.5, 0.6, 0.7, 0.7]}])
+        _press(s, st, run, "FragmentSelectDialogUI/Accept")
+        assert run.flow.active is None
+        return w
+
+    ask(["main/s6:70"])
+    answer(frag, show_list=True)
+    ask(["main/s6:75", "main/s6:76"])  # 外れ方 A への返事
+    assert run.flow.ctx == ("質問に答える", "main/s6:70")
+    w = answer(frag + "#1", show_list=False)
+    assert w[f"click {frag}"] == pytest.approx(click * low) and w[f"click {frag}#1"] == click * k
+    ask(["main/s6:80", "main/s6:81"])  # 外れ方 B への返事
+    w = _weights(s, st)
+    # 思い出 slot の言葉は（言葉を選ぶを押したかどうかによらず）すべて外れた
+    assert w[f"click {slot}"] == pytest.approx(click * low) and w[f"click {slot}#1"] == click * k
+    assert run.flow.stats["質問に答える"].retried == 2
+    # 答えてから本文が flow_retry_lines を超えて進んだら、別の質問
+    run.flow.active = None
+    for n in range(FUZZ_DEFAULTS["flow_retry_lines"] + 1):
+        s.on_event(Event("game", "line", {"line_id": f"main/s6:{100 + n}", "text": "続き"}, 0.0, 0))
+    _only(st, "MemoryListUI", LIST)
+    _weights(s, st)
+    assert run.flow.ctx[1] != "main/s6:70"
+
+
 def test_all_answers_tried_is_noted():
     s, st, run, _ = _session()
     run.flow = FlowTracker(parse_flows(tomllib.loads("""
@@ -452,7 +501,7 @@ def test_empty_fragment_list_is_dead_end_and_reading_is_remembered():
     run.flow = FlowTracker(parse_flows(tomllib.loads(ONCE_PROFILE)["flow"]))
     _to_fragments(s, st, run, 0)
     _weights(s, st)
-    assert (run.flow.ctx, (SLOT, "MemorySummaryUI/ShowFragmentListButton")) in run.flow.leaves
+    assert (run.flow.ctx, (SLOT,)) in run.flow.leaves
     # 言葉の一覧から戻って、要約で「この思い出を読む」を押した（いまの手順は言葉を選ぶ）
     run.flow.done_once.clear()
     run.flow.pressed("MemorySummaryUI/StartToMemoryScenario", "StartToMemoryScenario", True)

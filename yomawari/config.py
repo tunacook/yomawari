@@ -119,6 +119,7 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "flow_factor": 20.0,  # いまの手順で押すボタン・本文送り・選択肢の重みに掛ける
     "flow_avoid_factor": 0.02,  # 流れの途中で押すと流れから外れるボタン（avoid）の重みに掛ける
     "flow_idle_sec": 10.0,  # 流れのどの画面・scene でもない状態がこれだけ続いたら、流れが途切れたとする
+    "flow_retry_lines": 6,  # 流れを最後まで進めて（答えて）からこの行数以内に同じ流れが始まったら、同じ質問に戻ったとする
     "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")
