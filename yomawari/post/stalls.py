@@ -131,9 +131,6 @@ def find_stalls(events: list[dict], min_sec: float) -> list[Stall]:
         if since is None and k == "launch":
             since, at_since = ev, (scene, line)  # 起動してから最初に届くまで
             continue
-        if since is None and k == "launch":
-            since = ev  # 起動してから最初に届くまで
-            continue
         if since is not None:
             pending.append(ev)
     if since is not None and events:
