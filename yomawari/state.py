@@ -109,7 +109,10 @@ class GameState:
     choices: list[Target] = field(default_factory=list)
     # 選び終えた選択肢の id（choices_done）。選んだあと消えていく途中のボタンを、古いパッケージ（0.7.0 まで）が
     # 同じ id の choices として出し直し、消えたことは伝えないので、それを選択肢として扱わない。
-    # ロールバック・ロードで同じ選択肢が出直したときに無視しないように、次の本文・scene・ロードで忘れる
+    # ロールバック・ロードで同じ選択肢が出直したときに無視しないように、次の scene・ロードで忘れる。
+    # 次の本文では忘れない（選んだ直後の本文のあとに出し直すことがある。run 2026-11-06_1757 で、0.7.0 のビルドが
+    # 選んだあとの本文 160 行目のあとに同じ id の選択肢を 3 回出し直し、ハーネスは 2 分半のあいだ消えた選択肢の位置を
+    # 押し続けた）。選択肢の id は出るたびに変わる（同じ選択肢でも、出直せば別の id になる）ので、長く覚えても無視し続けない
     handled_choices: set[str] = field(default_factory=set)
     transitions: set[str] = field(default_factory=set)
     resolution: dict[str, Any] | None = None
@@ -166,7 +169,6 @@ class GameState:
         self.line = {k: d.get(k) for k in ("label", "line_id", "speaker", "text")}
         self.line_done = False
         self.last_progress_t = t
-        self.handled_choices.clear()
         for m in self.menus.values():
             m.read_over = True
         if self.title_menu is not None and self.title_menu not in self.menus:

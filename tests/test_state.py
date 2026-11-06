@@ -77,12 +77,16 @@ def test_choices_redisplayed_after_done_are_ignored():
     s.feed(game("choices", items=items))  # 消えていく途中の出し直し
     assert s.choices == []
     assert [t.key for t in s.targets()] == []
-    # 次の本文が出たら忘れる（ロールバック・ロードで同じ選択肢が出直したときは、選択肢として扱う）
-    s.feed(game("line", label="m", line_id="m:162.0", speaker=None, text="本文"))
+    # 次の本文のあとの出し直しも無視する（run 2026-11-06_1757: 選んだあとの本文 160 行目のあとに 3 回出し直した）
+    s.feed(game("line", label="m", line_id="m:160.0", speaker=None, text="レイチェルには話さないことにした。"))
+    s.feed(game("choices", items=items))
+    assert s.choices == []
+    # ロード・scene の切り替えのあとは忘れる（同じ選択肢が出直したときは、選択肢として扱う）
+    s.feed(game("load", slot="1", phase="start"))
     s.feed(game("choices", items=items))
     assert len(s.choices) == 2
     s.feed(game("choices_done", id="8f51", index=0))
-    s.feed(game("load", slot="1", phase="start"))
+    s.feed(game("scene", name="main/scenarioA_007"))
     s.feed(game("choices", items=items))
     assert len(s.choices) == 2
 
