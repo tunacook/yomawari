@@ -1328,9 +1328,12 @@ class FuzzSession:
         if op.target is not None:
             t = op.target
             done = sum(st.completed for st in self.run.flow.stats.values())
-            self.run.flow.pressed(t.label, t.name, responded, t.text if t.kind == "choice" else None,
-                                  t.text if t.kind == "button" else None)
-            if sum(st.completed for st in self.run.flow.stats.values()) > done:
+            tracker = self.run.flow
+            before = (tracker.active.name if tracker.active else None, tracker.index)
+            tracker.pressed(t.label, t.name, responded, t.text if t.kind == "choice" else None,
+                            t.text if t.kind == "button" else None)
+            if sum(st.completed for st in tracker.stats.values()) > done:
+                self._note_flow(before, (None, 0))  # 最後まで進めた（events.jsonl に流れの終わりを残す）
                 self._maybe_edge("answer")
         if responded:
             self.run.responsive.add((key, op.label))
