@@ -611,3 +611,17 @@ def test_grey_buttons_are_found_when_brightness_is_even():
     assert disabled_looks(slots, labels, shot, 0.6, 0.3, 0.05) == {labels[2]: "grey"}
     mono = _color_shot([(s.rect, grey) for s in slots])
     assert disabled_looks(slots, labels, mono, 0.6, 0.3, 0.05) == {}
+
+
+def test_empty_slot_is_not_newly_bright():
+    # run 2026-11-06_1830: 空のセーブスロットの明るさが揺れて「明るくなった」と見なし、空のスロットを次々に先に押した。
+    # 文字で空と分かるものは、明るく見えても先に押さない
+    slots = [_slot(i) for i in range(4)]
+    s, st, run, windows, mouse, events = _list_session(slots, _shot([(slots[0].rect, 230)] +
+                                                                    [(x.rect, 46) for x in slots[1:]]))
+    run.inactive_words = ["Empty"]
+    asyncio.run(s._look())
+    st.set_read_text({"MemoryListUI/Slot#3": "4. Empty"})
+    windows.shot = _shot([(slots[0].rect, 230), (slots[3].rect, 230)] + [(x.rect, 46) for x in slots[1:3]])
+    asyncio.run(s._look())
+    assert run.newly_bright == set() and not any("明るくなった" in n for n in run.notes)

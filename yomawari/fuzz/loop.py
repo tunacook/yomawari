@@ -36,7 +36,7 @@ from ..state import GameState, Rect, Target
 from .decider import Decider
 from .experience import Experience, Press
 from .guard import Guard
-from .looks import Values, alike, brightest, dark, disabled_looks, groups, inactive, masked, measure
+from .looks import Values, alike, brightest, dark, disabled_looks, groups, inactive, masked, measure, text_inactive
 from .advisor import ChoiceAdvisor
 from .reading import assign, unread
 from .ops import (
@@ -1108,7 +1108,11 @@ class FuzzSession:
     def _quiet(self) -> set[str]:
         """押しても反応しないと見込んでいるボタン（暗い、文字で空と分かる、押しても一度も反応しなかったもの・それと
         同じ見た目のもの）の label。一度も反応しなかったボタンは S-05 の対象でないので、押し直しても待つ時間は短くてよい。"""
-        return (self._dim | self._locked_alike() | (self.run.silent - self.run.answered)
+        # 前のランまでに押して先へ進んだボタン（タイトルの「はじめから」など）は、1回反応しなかっただけでは後回しにしない
+        # （画面が切り替わる途中に押して反応しなかったなど。run 2026-11-06_1830: 起動直後に「はじめから」を1回押して反応せず、
+        # 以後ほとんど押さずに、設定やロード画面の開け閉めを 4 分続けた）
+        silent = self.run.silent - self.run.answered - self.run.experience.progressed_targets()
+        return (self._dim | self._locked_alike() | silent
                 | inactive(self.state.targets(), self.run.inactive_words, self.run.masked_chars))
 
     def _verify_behind(self, target: Target, responded: bool) -> None:
@@ -1281,7 +1285,10 @@ class FuzzSession:
             # 並びがすべて同じ明るさなら、暗い・明るいは分からないので、前の記録を残す
             for label in values if dk else ():
                 now = label in dk
-                if run.dim_history.get(label) and not now and label not in run.bright_noted:
+                # 文字で空と分かるもの（空のセーブスロットなど）は、明るさが揺れて明るく見えても先に押さない
+                # （run 2026-11-06_1830: 空のスロットを「明るくなった」として次々に先に押し、ロード画面で空のスロットを押し続けた）
+                empty = text_inactive(texts.get(label), run.inactive_words, run.masked_chars)
+                if run.dim_history.get(label) and not now and label not in run.bright_noted and not empty:
                     run.bright_noted.add(label)
                     run.newly_bright.add(label)
                     run.notes.append(f"`{label}` は前に見たときは暗かったのに明るくなったので、先に押す（起動 #{self.launch}）")
@@ -1495,6 +1502,18 @@ class FuzzSession:
         front = await asyncio.to_thread(self.pointer.platform.frontmost_pid)
         if front is None or front == self.pointer.pid:
             return
+        if key in self.run.answered or key in self.run.experience.progressed_targets():
+            # 前にゲームの中で反応したボタン。ほかのアプリ（前に開いた Web サイトのブラウザなど）が、あとから前面に出ていた
+            # だけなので、external とはしない（run 2026-11-06_1830: ロード画面の「戻る」「次のページ」を external と確定し、
+            # 1回のランで1回しか押さなくなって、ロード画面から抜けにくくなった）。ゲームを前面に戻し、押し直せるようにする
+            try:
+                await asyncio.to_thread(self.pointer.ensure_front)
+            except PointerError:
+                pass
+            self.run.notes.append(f"`{key}` を押したとき、ほかのアプリが前面に出ていた（前にゲームの中で反応したボタンなので"
+                                  f" external とはせず、ゲームを前面に戻した。起動 #{self.launch}）")
+            self._verify_next = True
+            return
         self.run.guard.book.confirm(key, "external", "前面のアプリがゲーム以外に切り替わった")
         self.run.guard.use_external(key)
         try:
@@ -1544,6 +1563,9 @@ class FuzzSession:
         changed = front is not None and front != self.pointer.pid
         if changed:
             self.run.guard.book.confirm(op.target.label, "external", "前面のアプリがゲーム以外に切り替わった")
+        else:
+            # external と確定していたのに、押しても前面のアプリが変わらなかった（誤って確定していた）。ふつうのボタンに戻す
+            self.run.guard.book.revoke(op.target.label, "external", "前面のアプリが変わらなかった")
         try:
             await asyncio.to_thread(self.pointer.ensure_front)
             back = True

@@ -177,6 +177,32 @@ def test_front_change_after_silent_click_confirms_external():
     assert [e.kind for e in events if e.kind != "intent"] == ["external"]
 
 
+def test_front_change_does_not_make_known_button_external():
+    # run 2026-11-06_1830: 前に開いた Web サイトのブラウザがあとから前面に出ていたときに、ロード画面の「戻る」を押して
+    # external と確定し、1回のランで1回しか押さなくなった。前にゲームの中で反応したボタンは external にしない
+    s, _, book, windows, events = _session(front=2)
+    s.run.answered.add("SaveLoadUI/ReturnButton")
+    asyncio.run(s._check_front("SaveLoadUI/ReturnButton"))
+    assert "SaveLoadUI/ReturnButton" not in book.entries
+    assert windows.activated == [1] and s.run.guard.external_available("SaveLoadUI/ReturnButton")
+    assert any("ほかのアプリが前面に出ていた" in n for n in s.run.notes)
+
+
+def test_wrong_external_is_revoked_when_front_does_not_change():
+    # 前のランで誤って external と確定したボタンは、押しても前面のアプリが変わらなければ、ふつうのボタンに戻す
+    s, st, book, windows, events = _session(front=1)
+    s.run.cfg = {**s.run.cfg, "external_wait_sec": 0}
+    s.pointer.driver = RecordingDriver()
+    book.confirm("SaveLoadUI/ReturnButton", "external", "前面のアプリがゲーム以外に切り替わった")
+    _feed(s, st, "resolution", w=1000, h=500, mode="Windowed")
+    _feed(s, st, "menu", name="SaveLoadUI", modal=True, buttons=[{"name": "ReturnButton", "rect": [0.45, 0.85, 0.55, 0.9]}])
+    op = next(o for o in normal_candidates(st, s.run.guard, s.cfg["weights"], False) if o.kind == "external")
+    asyncio.run(s._external(op))
+    assert book.entries["SaveLoadUI/ReturnButton"].status == "cancelled"
+    assert book.role_of(st.find("SaveLoadUI/ReturnButton")) is None
+    assert any("取り消した" in n for n in book.new)
+
+
 # --- ループ: 推定だけの exit ---
 
 
