@@ -670,3 +670,14 @@ def test_verify_does_not_use_move_ops():
     verified = [e.data for e in events if e.kind == "op_result" and e.data["verify"]]
     assert verified
     assert not any(d["kind"] in ("drag", "wheel_down", "wheel_up") or d["label"].startswith("key ") for d in verified)
+
+
+def test_button_that_progressed_before_is_not_quiet_after_one_miss():
+    # run 2026-11-06_1830: 起動直後に「はじめから」を1回押して反応せず（画面が切り替わる途中など）、押しても反応しない
+    # ボタンとして後回しにし、設定やロード画面の開け閉めを 4 分続けた。前のランまでに押して先へ進んだボタンは後回しにしない
+    from .test_flow import _session as flow_session
+    s, st, run, _ = flow_session()
+    run.silent |= {"TitleUI/NewGameButton", "TitleUI/SettingsButton"}
+    run.experience.ops.setdefault("menus:TitleUI", {})["click TitleUI/NewGameButton"] = {"tries": 42, "progress": 28, "rewind": 0}
+    quiet = s._quiet()
+    assert "TitleUI/NewGameButton" not in quiet and "TitleUI/SettingsButton" in quiet

@@ -175,6 +175,15 @@ class RoleBook:
         self.new.append(f"`{key}` は押すと{observed}ので `{role}` と推定した（押し直して確かめる）")
         return True
 
+    def revoke(self, key: str, role: str, observed: str) -> bool:
+        """確定した役割が誤りだった（ほかのアプリが前面に出ていたときに押して、external と確定したなど）。取り消したら True。"""
+        e = self.entries.get(key)
+        if e is None or e.status != "confirmed" or e.role != role:
+            return False
+        e.status = "cancelled"
+        self.new.append(f"`{key}` は `{role}` と確定していたが、押すと{observed}ので取り消した")
+        return True
+
     def cancel(self, key: str, observed: str) -> None:
         """推定が外れていた。以降は推定を使わない（同じキーワードでまた推定し直さない）。"""
         e = self.entries.get(key)
