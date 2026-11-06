@@ -109,6 +109,8 @@ class FuzzRun:
     locked_noted: set[str] = field(default_factory=set)
     # ボタン（label）→ 画面が手前にあったときに測った (位置, 明るさ)。後ろに下がったかを判定するのに使う
     look_base: dict[str, tuple[Rect, tuple[float, float]]] = field(default_factory=dict)
+    behind_miss: int = 0  # 後ろに下がったとみなした画面があるあいだに、手前のものを押して続けて反応がなかった回数
+    behind_refuted: set[str] = field(default_factory=set)  # 押した結果で、後ろに下がっていないと分かった menu（閉じるまで）
     behind_noted: set[str] = field(default_factory=set)  # 「後ろに下がった」と記録に書いた menu  # 「同じ見た目も押せないとみなした」と記録に書いた並び
     search_dead: Counter[tuple[str, str]] = field(default_factory=Counter)  # (menu, 探す操作) → 続けて反応しなかった回数
     blind_tries: Counter[str] = field(default_factory=Counter)  # menu → 向きを決めずに探した回数（開き直すと 0 に戻す）
@@ -853,6 +855,28 @@ class FuzzSession:
         return (self._dim | self._locked_alike() | (self.run.silent - self.run.answered)
                 | inactive(self.state.targets(), self.run.inactive_words, self.run.masked_chars))
 
+    def _verify_behind(self, target: Target, responded: bool) -> None:
+        """後ろに下がったとみなした画面があるあいだに手前のものを押した結果で、見た目での判定を確かめる。続けて
+        behind_verify_misses 回反応がなければ、その画面は実は手前で入力を受けていた（開いている途中で測った、など）として
+        判定を取り消す。押しても画面が変わらないと測り直すきっかけもないので、押した結果で直す。"""
+        run, state = self.run, self.state
+        run.behind_refuted &= set(state.menus)
+        behind = {name for name in state.behind if name in state.menus and name != target.menu}
+        if not behind or responded:
+            run.behind_miss = 0
+            return
+        run.behind_miss += 1
+        if run.behind_miss < int(self.cfg["behind_verify_misses"]):
+            return
+        run.behind_miss = 0
+        run.behind_refuted |= behind
+        state.behind -= behind
+        run.notes.append(
+            f"{'・'.join(f'`{m}`' for m in sorted(behind))} を見た目から後ろに下がったとみなしたが、手前のものを続けて "
+            f"{self.cfg['behind_verify_misses']} 回押しても反応がなかったので、手前で入力を受けているとして判定を取り消した"
+            f"（起動 #{self.launch}）"
+        )
+
     def _judge_behind(self, measured: dict[str, Values], rects: dict[str, Rect]) -> None:
         """画面の見た目から、後ろに下がった画面を判定する。
 
@@ -878,13 +902,16 @@ class FuzzSession:
                     continue  # 手前にあったときに、同じ位置で測っていない（スクロールした）
                 compared[menu] += 1
                 changed[menu] += not alike(v, base[1], ratio, gap)
+        run.behind_refuted &= set(self.state.menus)
         behind = {name for name in self.state.behind if name in self.state.menus}
         for menu, values in by_menu.items():
             ahead = bool(self.state.choices) or any(
                 m.visible_buttons for name, m in self.state.menus.items() if name != menu and name not in behind
             )
             if compared[menu] >= 3:
-                if changed[menu] / compared[menu] >= share and ahead:
+                if menu in run.behind_refuted:
+                    behind.discard(menu)  # 押した結果で、手前にあると分かっている（閉じるまで）
+                elif changed[menu] / compared[menu] >= share and ahead:
                     if menu not in behind and menu not in run.behind_noted:
                         run.behind_noted.add(menu)
                         run.notes.append(
@@ -1119,6 +1146,8 @@ class FuzzSession:
             self.run.responsive.add((key, op.label))
         else:
             self.run.stats["no_response"] += 1
+        if op.target is not None:
+            self._verify_behind(op.target, responded)
         if op.target is not None and op.target.kind == "button":
             (self.run.silent.discard if responded else self.run.silent.add)(op.target.label)
             if responded:
