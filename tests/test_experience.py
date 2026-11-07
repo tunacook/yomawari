@@ -131,3 +131,61 @@ def test_choices_are_keyed_by_text():
     run.presses.append(Press("reading", "advance", time.monotonic()))
     _game(s, st, "choices", items=[{"id": "x2", "text": "はい", "rect": [0.1, 0.1, 0.2, 0.2]}])  # id が変わっても同じ選択肢
     assert run.experience.ops["reading"]["advance"]["progress"] == 1
+
+
+# --- 覚えたことを消す（yomawari experience forget / yomawari run --forget） ---
+
+def _exp_file(tmp_path):
+    from yomawari.fuzz.experience import experience_path
+
+    path = experience_path(tmp_path / "runs", "Rachel")
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "roles": {"TitleUI/ExitButton": {"role": "exit"}},
+        "progress": {"s1": {"advance": {"tries": 1, "progress": 1, "rewind": 0}}, "s2": {}},
+        "flow_wrong": {"選択肢で答える": {"main/a:1.0": [["話す"], ["話さない"]]}},
+    }, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def test_forget_sections_keeps_the_rest_and_backs_up(tmp_path):
+    from yomawari.fuzz.experience import forget
+
+    path = _exp_file(tmp_path)
+    before = path.read_text(encoding="utf-8")
+    done = forget(path, ["flow_wrong"], "20261107-150000")
+    assert done.removed == {"flow_wrong": 2} and not done.deleted
+    assert done.backup == path.with_name("Rachel.json.bak-20261107-150000")
+    assert done.backup.read_text(encoding="utf-8") == before
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    assert set(doc) == {"roles", "progress"}
+
+
+def test_forget_all_removes_the_file(tmp_path):
+    from yomawari.fuzz.experience import Experience, forget
+
+    path = _exp_file(tmp_path)
+    done = forget(path, None, "20261107-150000")
+    assert done.deleted and not path.exists() and done.backup.exists()
+    assert done.removed == {"roles": 1, "progress": 2, "flow_wrong": 2}
+    assert not Experience(path).flow_wrong  # 次のランは何も覚えていない状態から
+    assert forget(path, None, "x").backup is None  # 消すものがなければ何もしない
+
+
+def test_experience_forget_command(tmp_path):
+    from typer.testing import CliRunner
+
+    from yomawari.cli import app
+
+    path = _exp_file(tmp_path)
+    cfg = tmp_path / "yomawari.toml"
+    cfg.write_text(f'runs_dir = "{tmp_path / "runs"}"\n', encoding="utf-8")
+    runner = CliRunner()
+    # 端末でなければ、--yes がないと消さない
+    res = runner.invoke(app, ["--config", str(cfg), "experience", "forget", "--game", "Rachel"])
+    assert res.exit_code != 0 and path.exists()
+    res = runner.invoke(app, ["--config", str(cfg), "experience", "forget", "--game", "Rachel", "--flow-wrong", "-y"])
+    assert res.exit_code == 0, res.output
+    assert "flow_wrong" not in json.loads(path.read_text(encoding="utf-8")) and "消しました" in res.output
+    res = runner.invoke(app, ["--config", str(cfg), "experience", "forget", "--game", "Nope", "-y"])
+    assert res.exit_code == 0 and "覚えたことはありません" in res.output and "Rachel" in res.output

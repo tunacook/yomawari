@@ -159,6 +159,22 @@ def test_cli_run_and_builds(tmp_path, mock_app, monkeypatch, fake_platform):
     assert "未復元の退避はありません" in res.output
 
 
+def test_cli_run_forget_clears_experience_first(tmp_path, mock_app, monkeypatch, fake_platform):
+    monkeypatch.setattr(cli, "get_platform", lambda: fake_platform)
+    cfg = write_config(tmp_path, f'default_build = "mock"\n[run]\nopen_report = false\n[builds.mock]\npath = "{mock_app}"\n')
+    exp = tmp_path / "runs" / "_experience" / "mock.json"
+    exp.parent.mkdir(parents=True)
+    exp.write_text('{"flow_wrong": {"選択肢で答える": {"main/a:1.0": [["話さない"]]}}}', encoding="utf-8")
+    res = CliRunner().invoke(cli.app, ["--config", str(cfg), "run", "--hours", str(1 / 3600), "--forget"])
+    assert res.exit_code == 0, res.output
+    assert "覚えたこと（mock）をすべて消した" in res.output
+    assert list(exp.parent.glob("mock.json.bak-*"))
+    # ランのあとに書き直されたもの（覚えた外れは残っていない）
+    assert "話さない" not in (exp.read_text(encoding="utf-8") if exp.exists() else "")
+    report = next((tmp_path / "runs").glob("*_mock/report.md")).read_text()
+    assert "--forget: ランの前に" in report
+
+
 def test_cli_builds_check_boot(tmp_path, mock_app, monkeypatch, fake_platform):
     """builds check は rules.yaml の C-03 の時間だけ boot を待つ（モックはすぐ boot を出す）。"""
     monkeypatch.setattr(cli, "get_platform", lambda: fake_platform)

@@ -132,3 +132,64 @@ class Experience:
         prog = min(c["progress"], tries) / tries
         rew = min(c["rewind"], tries) / tries
         return (1 + (bonus - 1) * prog) * (1 - (1 - rewind_factor) * rew)
+
+
+# --- 覚えたことを消す（yomawari experience forget） ---
+
+# 集計ファイルの節 → 人に見せる名前。役割は fuzz/roles.py、ほかはこのファイルが書く
+SECTIONS = {
+    "roles": "ボタンの役割",
+    "progress": "進行につながった操作・巻き戻した操作",
+    "flow_wrong": "ゲームの流れで外れと分かった答え",
+    "flow_right": "ゲームの流れで正解と分かった答え",
+}
+
+
+def experience_path(runs_dir: Path, game: str) -> Path:
+    return runs_dir / "_experience" / f"{game}.json"
+
+
+def section_sizes(path: Path) -> dict[str, int]:
+    """集計ファイルの節ごとの件数（flow_wrong・flow_right は組み合わせの数）。読めなければ空。"""
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(doc, dict):
+        return {}
+    out: dict[str, int] = {}
+    for key, v in doc.items():
+        if key in ("flow_wrong", "flow_right") and isinstance(v, dict):
+            out[key] = sum(len(paths) for qs in v.values() if isinstance(qs, dict)
+                           for paths in qs.values() if isinstance(paths, list))
+        else:
+            out[key] = len(v) if isinstance(v, (dict, list)) else 1
+    return out
+
+
+@dataclass
+class Forgotten:
+    backup: Path | None  # 消す前の集計ファイルの写し
+    removed: dict[str, int]  # 消した節 → 件数
+    deleted: bool  # 集計ファイルごと消した
+
+
+def forget(path: Path, sections: list[str] | None, stamp: str) -> Forgotten:
+    """集計ファイルから sections の節を消す（None ならファイルごと）。消す前に <名前>.bak-<stamp> に写す。
+
+    覚えたことは、ハーネスの仕様が変わったときや、ビルドでボタンの並びが変わったときに合わなくなる（DESIGN.md §9）。
+    ランの途中ではなく、ランの合間に人が消す。"""
+    if not path.exists():
+        return Forgotten(None, {}, False)
+    sizes = section_sizes(path)
+    backup = path.with_name(f"{path.name}.bak-{stamp}")
+    backup.write_bytes(path.read_bytes())
+    if sections is None:
+        path.unlink()
+        return Forgotten(backup, sizes, True)
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    removed = {s: sizes.get(s, 0) for s in sections if s in doc}
+    for s in removed:
+        doc.pop(s)
+    path.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return Forgotten(backup, removed, False)
