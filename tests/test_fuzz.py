@@ -385,7 +385,7 @@ def test_s02_counts_advances_until_progress():
     engine.feed(Event("game", "line", {"line_id": "a:2.0"}, 0))  # 進んだら数え直す
     out = []
     # 進めなくなった原因の操作（回想一覧を Esc で閉じた）は、本文送りが続くと「直前の操作」から押し出される。前の操作として載せる
-    first = {**adv, "recent": ["click MemoryListUI/Slot#17", "wheel_down 3", "key esc", "advance"]}
+    first = {**adv, "recent": ["click AlbumUI/Slot#17", "wheel_down 3", "key esc", "advance"]}
     out += engine.feed(Event("harness", "op_result", first, 0))
     for _ in range(9):
         out += engine.feed(Event("harness", "op_result", {**adv, "recent": ["advance"] * 10}, 0))
@@ -593,31 +593,31 @@ def test_reading_with_hud_button_still_advances():
     # 回想中のように、本文を読んでいる途中で操作のボタン（「本編へ戻る」）が出ている。ボタンだけでなく本文送りも候補に入れる
     st = GameState()
     feed = lambda kind, **d: st.feed(Event("game", kind, d, 0))
-    feed("scene", name="memories/m1")
+    feed("scene", name="episodes/m1")
     # 最初は画面の外から滑り込んでくる（hidden）。見えるようになってから本文が来る
-    feed("menu", name="MemoryScenarioPlaying", modal=False,
+    feed("menu", name="EpisodePlaying", modal=False,
          buttons=[{"name": "OpenDialog", "rect": [0, -0.18, 0.23, -0.1], "hidden": True}])
-    feed("menu", name="MemoryScenarioPlaying", modal=False,
+    feed("menu", name="EpisodePlaying", modal=False,
          buttons=[{"name": "OpenDialog", "rect": [0, 0.0, 0.23, 0.08]}])
     assert not st.reading_with_buttons()  # まだ本文が来ていない
-    feed("line", line_id="memories/m1:1", text="a")
+    feed("line", line_id="episodes/m1:1", text="a")
     # ボタンの位置が動いて出し直されても、開いている間に本文が進んだ画面のまま
-    feed("menu", name="MemoryScenarioPlaying", modal=False,
+    feed("menu", name="EpisodePlaying", modal=False,
          buttons=[{"name": "OpenDialog", "rect": [0, 0.01, 0.23, 0.09]}])
     assert st.reading_with_buttons()
     # 確認ダイアログを開いている間はボタンが見えなくなり、「引き続き読む」で閉じるとまた見える。本文を読んでいる途中のまま
     # （run 2050 では、閉じたあとのボタンを本文のあとに出たものとみなし、本文を送らずにダイアログを開き直していた）
-    feed("menu", name="MemoryScenarioPlayingDialogUI", modal=True,
+    feed("menu", name="EpisodePlayingDialogUI", modal=True,
          buttons=[{"name": "ReturnScenarioCancelButton", "rect": [0.4, 0.5, 0.6, 0.6]}])
-    feed("menu", name="MemoryScenarioPlaying", modal=False, buttons=[])
+    feed("menu", name="EpisodePlaying", modal=False, buttons=[])
     assert not st.reading_with_buttons()  # ダイアログ（モーダル）が出ている
-    feed("menu_close", name="MemoryScenarioPlayingDialogUI")
-    feed("menu", name="MemoryScenarioPlaying", modal=False,
+    feed("menu_close", name="EpisodePlayingDialogUI")
+    feed("menu", name="EpisodePlaying", modal=False,
          buttons=[{"name": "OpenDialog", "rect": [0, 0.01, 0.23, 0.09]}])
     assert st.reading_with_buttons()
     ops = normal_candidates(st, Guard({}), FUZZ_DEFAULTS["weights"], allow_exit=False)
     labels = {op.label for op in ops}
-    assert {"advance", "click MemoryScenarioPlaying/OpenDialog"} <= labels
+    assert {"advance", "click EpisodePlaying/OpenDialog"} <= labels
     # 本文のあとにボタンのある画面が出た（タイトルに戻った、ボタンで一覧を開いた）ときは、本文を読んでいる途中ではない
     feed("menu", name="TitleUI", modal=False, buttons=[{"name": "NewGameButton", "rect": [0.1, 0.5, 0.3, 0.6]}])
     assert not st.reading_with_buttons()
@@ -629,16 +629,16 @@ def test_reading_with_hud_button_still_advances():
     # モーダル（右クリックメニュー）が出ているときも足さない
     feed("choices_done")
     assert st.reading_with_buttons()
-    feed("menu", name="RClickMenuUI", modal=True, buttons=[{"name": "ToSave", "rect": [0.1, 0.1, 0.2, 0.2]}])
+    feed("menu", name="QuickMenuUI", modal=True, buttons=[{"name": "ToSave", "rect": [0.1, 0.1, 0.2, 0.2]}])
     assert not st.reading_with_buttons()
-    feed("menu_close", name="RClickMenuUI")
+    feed("menu_close", name="QuickMenuUI")
     assert st.reading_with_buttons()
     # 閉じて開き直した画面は、また本文が進むまで読んでいる途中とはみなさない
-    feed("menu_close", name="MemoryScenarioPlaying")
-    feed("menu", name="MemoryScenarioPlaying", modal=False,
+    feed("menu_close", name="EpisodePlaying")
+    feed("menu", name="EpisodePlaying", modal=False,
          buttons=[{"name": "OpenDialog", "rect": [0, 0.01, 0.23, 0.09]}])
     assert not st.reading_with_buttons()
-    feed("line", line_id="memories/m1:2", text="b")
+    feed("line", line_id="episodes/m1:2", text="b")
     assert st.reading_with_buttons()
 
 
@@ -647,22 +647,22 @@ def test_fully_covered_modal_is_not_top():
     # 右クリックメニューを手前の画面とせず、選択画面のボタンを押す
     st = GameState()
     feed = lambda kind, **d: st.feed(Event("game", kind, d, 0))
-    feed("menu", name="MemoryListUI", modal=False, buttons=[{"name": "Slot", "rect": [0.1, 0.1, 0.3, 0.3]}])
-    feed("menu", name="RClickMenuUI", modal=True, buttons=[
+    feed("menu", name="AlbumUI", modal=False, buttons=[{"name": "Slot", "rect": [0.1, 0.1, 0.3, 0.3]}])
+    feed("menu", name="QuickMenuUI", modal=True, buttons=[
         {"name": "ToSave", "rect": [0.1, 0.1, 0.2, 0.2], "covered": True},
         {"name": "ToLoad", "rect": [0.1, 0.3, 0.2, 0.4], "covered": True},
     ])
     assert st.top_modal() is None
-    assert [t.label for t in st.targets()] == ["MemoryListUI/Slot"]
+    assert [t.label for t in st.targets()] == ["AlbumUI/Slot"]
     # 一部だけ覆われているモーダルは、手前のまま
-    feed("menu", name="RClickMenuUI", modal=True, buttons=[
+    feed("menu", name="QuickMenuUI", modal=True, buttons=[
         {"name": "ToSave", "rect": [0.1, 0.1, 0.2, 0.2], "covered": True},
         {"name": "ToLoad", "rect": [0.1, 0.3, 0.2, 0.4]},
     ])
-    assert st.top_modal().name == "RClickMenuUI"
+    assert st.top_modal().name == "QuickMenuUI"
     # ボタンのないモーダル（暗転の幕）も手前のまま
-    feed("menu", name="CurtainUI", modal=True, buttons=[])
-    assert st.top_modal().name == "CurtainUI"
+    feed("menu", name="BlackoutUI", modal=True, buttons=[])
+    assert st.top_modal().name == "BlackoutUI"
 
 
 def test_verify_does_not_use_move_ops():

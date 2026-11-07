@@ -37,8 +37,8 @@ def _t(name, text=None, menu="TitleUI", role=None):
 
 
 @pytest.mark.parametrize("name,text,role", [
-    ("ToExit", None, "exit"),                      # Rachel の TitleUI
-    ("ToExitGame", None, "exit"),                  # Rachel の RClickMenuUI
+    ("ToExit", None, "exit"),                      # タイトル画面の自作ボタン
+    ("ToExitGame", None, "exit"),                  # 右クリックメニューの自作ボタン
     ("TitleWebSiteButton", None, "external"),      # "title" だけでは to_title にしない
     ("ToTitleMenu", None, "to_title"),
     ("ResolutionDropdown", None, "system_setting"),
@@ -158,9 +158,9 @@ def test_title_return_and_resolution_change_confirm_last_press():
     _feed(s, st, "menu", name="TitleUI", buttons=[{"name": "Start", "rect": [0.1, 0.1, 0.2, 0.2]}])
     _feed(s, st, "menu_close", name="TitleUI")
     _feed(s, st, "line", line_id="s1:1")
-    s.run.last_press = ("RClickMenuUI/Back", time.monotonic())
+    s.run.last_press = ("QuickMenuUI/Back", time.monotonic())
     _feed(s, st, "menu", name="TitleUI", buttons=[{"name": "Start", "rect": [0.1, 0.1, 0.2, 0.2]}])
-    assert book.entries["RClickMenuUI/Back"].role == "to_title"
+    assert book.entries["QuickMenuUI/Back"].role == "to_title"
     s.run.last_press = ("SettingsUI/Item 1", time.monotonic() - 60)  # role_window_sec より前
     _feed(s, st, "resolution", w=1280, h=720, mode="Windowed")
     assert "SettingsUI/Item 1" not in book.entries
@@ -243,9 +243,9 @@ def test_harness_confirms_exit_it_expected(tmp_path):
     # 終わると見込んで押した（推定を確かめた）ボタンで終わったら確定する
     book = RoleBook(HINTS)
     h = _harness(tmp_path, book)
-    h._on_event(Event("proc", "proc_exit", {"code": 0, "by_harness": True, "after_op": "RClickMenuUI/ToExit"}, 0))
-    assert book.entries["RClickMenuUI/ToExit"].status == "confirmed"
-    assert book.entries["RClickMenuUI/ToExit"].build == "1.0/abc"
+    h._on_event(Event("proc", "proc_exit", {"code": 0, "by_harness": True, "after_op": "QuickMenuUI/ToExit"}, 0))
+    assert book.entries["QuickMenuUI/ToExit"].status == "confirmed"
+    assert book.entries["QuickMenuUI/ToExit"].build == "1.0/abc"
     assert h.issues == []
 
 
@@ -300,8 +300,8 @@ def test_title_menu_that_gets_buttons_later():
 
 def test_roles_are_per_button_not_per_name():
     book = RoleBook(HINTS)
-    book.confirm("MemoryListUI/Slot#3", "external", "前面のアプリがゲーム以外に切り替わった")
-    slot = lambda n: Target("button", "MemoryListUI", "Slot", (0, 0, 0.1, 0.1), nth=n)
+    book.confirm("AlbumUI/Slot#3", "external", "前面のアプリがゲーム以外に切り替わった")
+    slot = lambda n: Target("button", "AlbumUI", "Slot", (0, 0, 0.1, 0.1), nth=n)
     assert book.role_of(slot(3)) == "external"
     assert book.role_of(slot(4)) is None  # 同じ名前のほかのスロットには効かない
 

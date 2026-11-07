@@ -22,7 +22,7 @@ def test_sample_log_records(sample_log: Path):
     assert [r.data["ev"] for r in yom] == ["boot", "heartbeat", "line", "heartbeat", "heartbeat"]
     assert [r.data["seq"] for r in yom] == [0, 1, 2, 3, 5]
     line = yom[2].data
-    assert line["speaker"] == "レイチェル"
+    assert line["speaker"] == "アオイ"
     assert line["text"] == "「おはよう。\"今日\"も\\n晴れね」"
 
     invalid = [r for r in recs if isinstance(r, InvalidRecord)]

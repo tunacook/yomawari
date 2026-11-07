@@ -132,7 +132,7 @@ def test_continue_option_resumes_on_first_launch():
 
 
 def test_saved_slots_are_not_pressed_without_purpose():
-    # run 2026-11-06_1012: 本編の途中で A_009 のセーブをロードし、B_004 から戻って 12 分やり直した。
+    # run 2026-11-06_1012: 本編の途中で前の章のセーブをロードし、いまの章から戻って 12 分やり直した。
     # 通常のプレイでは、自分のセーブのロードは続きから遊ぶときだけにする
     s, st, run = _session(launch=0)
     texts = {_label(i): f"{i + 1}. Empty" for i in range(9)}
@@ -148,7 +148,7 @@ def test_saved_slots_are_not_pressed_without_purpose():
 
 
 def test_newest_slot_compares_time_only_when_some_date_is_unreadable():
-    # run 2026-11-06_1418: 「8.2026 1F06 14:51:52」（日付が崩れた）より「9. 2026-1-06 12:58:58」を選び、A_004 に戻った
+    # run 2026-11-06_1418: 「8.2026 1F06 14:51:52」（日付が崩れた）より「9. 2026-1-06 12:58:58」を選び、前の章に戻った
     texts = {"a": "6. 2026-0-06 12:58:22", "b": "8.2026 1F06 14:51:52", "c": "9. 2026-1-06 12:58:58", "d": "7. Empty"}
     assert newest_slots(texts) == {"b"}
     assert newest_slots({"a": "1. 2026-11-05 23:00:00", "b": "2. 2026-11-06 01:00:00"}) == {"b"}
@@ -158,8 +158,8 @@ def test_newest_slot_compares_time_only_when_some_date_is_unreadable():
 SAVE_FACTOR = FUZZ_DEFAULTS["save_first_factor"]
 RCLICK = [{"name": n, "rect": [0.4, 0.3 + 0.06 * i, 0.5, 0.35 + 0.06 * i]}
           for i, n in enumerate(["ToSave", "ToLoad", "ToTitle", "ToExit", "CloseButton"])]
-RCLICK_TEXT = {"RClickMenuUI/ToSave": "Save", "RClickMenuUI/ToLoad": "Load", "RClickMenuUI/ToTitle": "Title",
-               "RClickMenuUI/ToExit": "Exit", "RClickMenuUI/CloseButton": "back"}
+RCLICK_TEXT = {"QuickMenuUI/ToSave": "Save", "QuickMenuUI/ToLoad": "Load", "QuickMenuUI/ToTitle": "Title",
+               "QuickMenuUI/ToExit": "Exit", "QuickMenuUI/CloseButton": "back"}
 
 
 def _save_weights(s, st):
@@ -173,10 +173,10 @@ def test_saves_before_trying_exit_button():
     now = 1000.0
     assert not s._saved_for_exit(now) and run.save_first_until == now + FUZZ_DEFAULTS["save_first_sec"]
     # 右クリックメニュー: 「Save」を先に押す
-    _show(st, "RClickMenuUI", RCLICK, RCLICK_TEXT)
+    _show(st, "QuickMenuUI", RCLICK, RCLICK_TEXT)
     w = _save_weights(s, st)
-    assert w["click RClickMenuUI/ToSave"] == CLICK * SAVE_FACTOR
-    assert w["click RClickMenuUI/ToLoad"] == CLICK
+    assert w["click QuickMenuUI/ToSave"] == CLICK * SAVE_FACTOR
+    assert w["click QuickMenuUI/ToLoad"] == CLICK
     # セーブ画面: セーブのタブと空きのスロットを先に押す。セーブ済みのスロットは押さない（上書きしない）
     buttons = SLOTS[:3] + [{"name": "SaveToggle", "rect": [0.2, 0.2, 0.3, 0.25]},
                            {"name": "ReturnButton", "rect": [0.45, 0.85, 0.55, 0.9]}]
@@ -195,9 +195,9 @@ def test_saves_before_trying_exit_button():
 
 def test_save_first_gives_up_and_skips_inside_flow_saves():
     s, st, run = _session(launch=0)
-    # ゲームが流れの中で自分でするセーブ（思い出を読む前の MemoryReturn など）は数えない
+    # ゲームが流れの中で自分でするセーブ（思い出を読む前の EpisodeReturn など）は数えない
     run.flow.active = object()
-    s.on_event(Event("game", "save", {"slot": "MemoryReturn", "phase": "start"}, 0))
+    s.on_event(Event("game", "save", {"slot": "EpisodeReturn", "phase": "start"}, 0))
     assert run.saved_t is None
     assert not s._saved_for_exit(0.0) and run.save_first_until is None  # 流れの途中は待つ
     run.flow.active = None

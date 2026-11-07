@@ -185,12 +185,12 @@ def test_r08_command_that_drops_fps_twice(repo_rules, repo_perf):
     issues = [i for i in s.issues if i.rule_id == "R-08"]
     assert {i.key for i in issues} == {"R-08:@spawn Rain|fps", "R-08:@spawn Rain|gpu"}
     # 軽いコマンドは出さないが、レポートの一覧には載る
-    s.feed("game", "command", name="char", target="Kaori", line_id="Main:5.0")
+    s.feed("game", "command", name="char", target="Aoi", line_id="Main:5.0")
     s.step(10)
     stats = s.engine.perf.command_stats()
-    assert stats["@char Kaori"]["n"] == 1 and stats["@spawn Rain"]["fps"] > 0.4
+    assert stats["@char Aoi"]["n"] == 1 and stats["@spawn Rain"]["fps"] > 0.4
     lines = "\n".join(s.engine.perf.report_lines())
-    assert lines.index("@spawn Rain") < lines.index("@char Kaori")
+    assert lines.index("@spawn Rain") < lines.index("@char Aoi")
 
 
 def test_r08_one_slowdown_is_one_issue_for_commands_run_together(repo_rules, repo_perf):

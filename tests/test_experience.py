@@ -46,8 +46,8 @@ def test_credit_once_per_press_and_factor():
     assert exp.factor("modal:SaveLoadUI", "untried", 5, 0.1) == 1.0
     # 本文送りは当たり前なので記録に載せない。選択画面などで初めて進んだ操作だけ載せる
     assert exp.new == []
-    exp.pressed("modal:MemoryListUI", "click MemoryListUI/Slot#48")
-    exp.credit([Press("modal:MemoryListUI", "click MemoryListUI/Slot#48", 0.0)], "progress")
+    exp.pressed("modal:AlbumUI", "click AlbumUI/Slot#48")
+    exp.credit([Press("modal:AlbumUI", "click AlbumUI/Slot#48", 0.0)], "progress")
     assert len(exp.new) == 1 and "Slot#48" in exp.new[0]
 
 
@@ -57,17 +57,17 @@ def test_save_keeps_roles_and_loads_next_run(tmp_path):
     book.confirm("TitleUI/QuitButton", "exit", "終了コード 0 で終わった")
     book.save()
     exp = Experience(path)
-    exp.pressed("modal:MemoryListUI", "click MemoryListUI/Slot#48")
-    exp.credit([Press("modal:MemoryListUI", "click MemoryListUI/Slot#48", 0.0)], "progress")
+    exp.pressed("modal:AlbumUI", "click AlbumUI/Slot#48")
+    exp.credit([Press("modal:AlbumUI", "click AlbumUI/Slot#48", 0.0)], "progress")
     exp.save()
     book.save()  # 役割を書き直しても、経験は残る
     doc = json.loads(path.read_text(encoding="utf-8"))
     assert "TitleUI/QuitButton" in doc["roles"]
-    assert doc["progress"]["modal:MemoryListUI"]["click MemoryListUI/Slot#48"] == {"tries": 1, "progress": 1, "rewind": 0}
+    assert doc["progress"]["modal:AlbumUI"]["click AlbumUI/Slot#48"] == {"tries": 1, "progress": 1, "rewind": 0}
     # 次のランは、覚えていることを使い、同じ操作をもう一度「初めて進んだ」とは書かない
     again = Experience(path)
-    assert again.factor("modal:MemoryListUI", "click MemoryListUI/Slot#48", 5, 0.1) == 5
-    again.credit([Press("modal:MemoryListUI", "click MemoryListUI/Slot#48", 0.0)], "progress")
+    assert again.factor("modal:AlbumUI", "click AlbumUI/Slot#48", 5, 0.1) == 5
+    again.credit([Press("modal:AlbumUI", "click AlbumUI/Slot#48", 0.0)], "progress")
     assert again.new == []
 
 
@@ -105,13 +105,13 @@ def test_session_credits_progress_and_rewind_to_press_and_opener():
     assert run.experience.ops["reading"]["advance"]["progress"] == 1
     # 右クリックメニューの「ロード」で開いた画面（寄り道）で、スロットを押してロードが始まった → 両方を巻き戻しとして数える
     _game(s, st, "menu", name="SaveLoadUI", modal=True, buttons=[{"name": "Slot", "rect": [0.1, 0.1, 0.2, 0.2]}])
-    opener = Press("modal:RClickMenuUI", "click RClickMenuUI/ToLoad", now - 30)  # 開いたのは窓より前
-    run.opened_by["SaveLoadUI"] = "RClickMenuUI/ToLoad"
+    opener = Press("modal:QuickMenuUI", "click QuickMenuUI/ToLoad", now - 30)  # 開いたのは窓より前
+    run.opened_by["SaveLoadUI"] = "QuickMenuUI/ToLoad"
     run.opened_press["SaveLoadUI"] = opener
     run.presses.append(Press("modal:SaveLoadUI", "click SaveLoadUI/Slot", time.monotonic()))
     _game(s, st, "load", phase="start")
     assert run.experience.ops["modal:SaveLoadUI"]["click SaveLoadUI/Slot"]["rewind"] == 1
-    assert run.experience.ops["modal:RClickMenuUI"]["click RClickMenuUI/ToLoad"]["rewind"] == 1
+    assert run.experience.ops["modal:QuickMenuUI"]["click QuickMenuUI/ToLoad"]["rewind"] == 1
     # ロードで戻った先の行は、もう見たので進行ではない
     _game(s, st, "menu_close", name="SaveLoadUI")
     run.presses.append(Press("reading", "advance", time.monotonic()))

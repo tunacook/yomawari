@@ -23,15 +23,15 @@ from .test_window import FakeWindows
 PROFILE = """
 [[flow]]
 name = "質問に答える"
-start = { screen = "MemoryListUI", by = "game" }
-avoid = ["MemoryListUI/SelectButton", "MemorySummaryUI/CloseMemorySummary", "MemoryScenarioPlaying/OpenDialog"]
+start = { screen = "AlbumUI", by = "game" }
+avoid = ["AlbumUI/SelectButton", "EpisodeUI/CloseEpisodeButton", "EpisodePlaying/OpenDialog"]
 steps = [
-  { screen = "MemoryListUI", press = "MemoryListGridSlot*", note = "開示済みの思い出を選ぶ" },
-  { screen = "MemorySummaryUI", press = "StartToMemoryScenario", note = "思い出を読む" },
-  { scene = "memories/*", advance = true, note = "最後まで読む" },
-  { screen = "MemorySummaryUI", press = "ShowFragmentListButton", note = "言葉を選ぶ" },
-  { screen = "MemoryFragmentListUI", press = "MemoryFragmentListSlot*", note = "言葉を選ぶ" },
-  { screen = "FragmentSelectDialogUI", press = "FragmentSelectButton", note = "この言葉で答える" },
+  { screen = "AlbumUI", press = "AlbumSlot*", note = "開示済みの思い出を選ぶ" },
+  { screen = "EpisodeUI", press = "ReadEpisodeButton", note = "思い出を読む" },
+  { scene = "episodes/*", advance = true, note = "最後まで読む" },
+  { screen = "EpisodeUI", press = "ShowWordsButton", note = "言葉を選ぶ" },
+  { screen = "WordListUI", press = "WordSlot*", note = "言葉を選ぶ" },
+  { screen = "AnswerDialogUI", press = "AnswerButton", note = "この言葉で答える" },
 ]
 
 [[flow]]
@@ -41,11 +41,11 @@ steps = [{ choose = ["*はい*"], note = "はいと答える" }]
 """
 
 SUMMARY = [
-    {"name": "StartToMemoryScenario", "rect": [0.42, 0.76, 0.61, 0.84]},
-    {"name": "ShowFragmentListButton", "rect": [0.64, 0.76, 0.82, 0.83]},
-    {"name": "CloseMemorySummary", "rect": [0.18, 0.77, 0.24, 0.82]},
+    {"name": "ReadEpisodeButton", "rect": [0.42, 0.76, 0.61, 0.84]},
+    {"name": "ShowWordsButton", "rect": [0.64, 0.76, 0.82, 0.83]},
+    {"name": "CloseEpisodeButton", "rect": [0.18, 0.77, 0.24, 0.82]},
 ]
-LIST = [{"name": "MemoryListGridSlot (Clone)", "rect": [0.1 + 0.2 * i, 0.3, 0.25 + 0.2 * i, 0.5]} for i in range(3)]
+LIST = [{"name": "AlbumSlot (Clone)", "rect": [0.1 + 0.2 * i, 0.3, 0.25 + 0.2 * i, 0.5]} for i in range(3)]
 LIST += [{"name": "SelectButton", "rect": [0.08, 0.89, 0.32, 0.94]}]
 
 
@@ -76,7 +76,7 @@ def _weights(s, st, now=0.0):
 def test_parse_profile_and_errors():
     flows = _flows()
     assert [f.name for f in flows] == ["質問に答える", "選択肢で答える"]
-    assert flows[0].steps[2].advance and flows[0].steps[2].when.scene == "memories/*"
+    assert flows[0].steps[2].advance and flows[0].steps[2].when.scene == "episodes/*"
     assert flows[1].steps[0].when.choices and flows[1].steps[0].choose == ("*はい*",)
     spec = build_spec(tomllib.loads(PROFILE), {})
     assert len(spec.flows) == 2
@@ -91,19 +91,19 @@ def test_parse_profile_and_errors():
 def test_parse_answers():
     # 質問ごとの正解（DESIGN.md §9「答えの選び方」）。選ぶ手順（思い出・言葉）ごとに、画面に見える文字で書く
     raw = tomllib.loads(PROFILE)["flow"]
-    raw[0]["answers"] = [{"at": "main/scenarioA_004:44.0", "pick": ["No.050*", "屋上"], "note": "屋上の思い出"}]
+    raw[0]["answers"] = [{"at": "main/chapter1_04:44.0", "pick": ["No.030*", "屋上"], "note": "屋上の思い出"}]
     flows = parse_flows(raw)
     (ans,) = flows[0].answers
-    assert ans.at == ("main/scenarioA_004:44.0",) and ans.pick == ("No.050*", "屋上") and ans.note == "屋上の思い出"
+    assert ans.at == ("main/chapter1_04:44.0",) and ans.pick == ("No.030*", "屋上") and ans.note == "屋上の思い出"
     assert flows[1].answers == ()
     # 外れへの返事のあとに出し直す質問のように、同じ質問の行がいくつもあるときは配列で書ける
-    raw[0]["answers"] = [{"at": ["main/scenarioA_006:27.0", "main/scenarioA_006:47.0"], "pick": ["No.050*", "玄関"]}]
+    raw[0]["answers"] = [{"at": ["main/chapter1_06:27.0", "main/chapter1_06:47.0"], "pick": ["No.030*", "玄関"]}]
     (ans,) = parse_flows(raw)[0].answers
-    assert ans.at == ("main/scenarioA_006:27.0", "main/scenarioA_006:47.0")
+    assert ans.at == ("main/chapter1_06:27.0", "main/chapter1_06:47.0")
     # 何も選ばずに一覧を閉じるのが正解の質問は、pick の代わりに押すボタンを press に書く
-    raw[0]["answers"] = [{"at": "main/scenarioD_004:303.0", "press": "MemoryListUI/SelectButton"}]
+    raw[0]["answers"] = [{"at": "main/chapter4_04:303.0", "press": "AlbumUI/SelectButton"}]
     (ans,) = parse_flows(raw)[0].answers
-    assert ans.press == "MemoryListUI/SelectButton" and ans.pick == ()
+    assert ans.press == "AlbumUI/SelectButton" and ans.pick == ()
 
     def bad(answers):
         f = {"name": "x", "start": {"choices": True}, "steps": [{"choose": True}], "answers": answers}
@@ -133,62 +133,62 @@ def test_follows_question_flow_and_avoids_leaving():
     k, low = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"]
     click = FUZZ_DEFAULTS["weights"]["click"]
     # ハーネスがボタンで開いた一覧（寄り道）では始めない
-    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=LIST)
-    run.opened_by["MemoryListUI"] = "RClickMenuUI/ToMemoryList"
-    assert _weights(s, st)["click MemoryListUI/SelectButton"] == click and run.flow.active is None
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=LIST)
+    run.opened_by["AlbumUI"] = "QuickMenuUI/ToAlbum"
+    assert _weights(s, st)["click AlbumUI/SelectButton"] == click and run.flow.active is None
     # ゲームが開いた一覧（質問）: 思い出を選ぶのを優先し、「思い出を選ばない」は後回し
-    del run.opened_by["MemoryListUI"]
+    del run.opened_by["AlbumUI"]
     w = _weights(s, st)
     assert run.flow.active.name == "質問に答える" and run.flow.index == 0
     # 選ぶ手順は、候補の順番の先頭（目標）だけを優先し、ほかの候補はふだんの重み
-    slots = {k_: v for k_, v in w.items() if "GridSlot" in k_}
+    slots = {k_: v for k_, v in w.items() if "AlbumSlot" in k_}
     goal = next(k_ for k_, v in slots.items() if v == click * k)
     assert sorted(slots.values()) == [click, click, click * k]
-    assert w["click MemoryListUI/SelectButton"] == pytest.approx(click * low)
+    assert w["click AlbumUI/SelectButton"] == pytest.approx(click * low)
     # 押しても反応しなかったスロット（ロック中）は、手順のボタンでも優先しない（目標は次の候補へ移る）
     run.silent.add(goal.removeprefix("click "))
     w = _weights(s, st)
-    assert w[goal] == click and sum(1 for k_, v in w.items() if "GridSlot" in k_ and v == click * k) == 1
+    assert w[goal] == click and sum(1 for k_, v in w.items() if "AlbumSlot" in k_ and v == click * k) == 1
     # 要約が出た（読む前）: 「この思い出を読む」
-    _feed(st, "menu", name="MemorySummaryUI", modal=True, buttons=SUMMARY)
+    _feed(st, "menu", name="EpisodeUI", modal=True, buttons=SUMMARY)
     w = _weights(s, st)
     assert run.flow.index == 1
-    assert w["click MemorySummaryUI/StartToMemoryScenario"] == click * k
-    assert w["click MemorySummaryUI/ShowFragmentListButton"] == click
-    assert w["click MemorySummaryUI/CloseMemorySummary"] == pytest.approx(click * low)
+    assert w["click EpisodeUI/ReadEpisodeButton"] == click * k
+    assert w["click EpisodeUI/ShowWordsButton"] == click
+    assert w["click EpisodeUI/CloseEpisodeButton"] == pytest.approx(click * low)
     # 思い出を読んでいる: 本文送りを優先し、「本編へ戻る」は後回し
-    _feed(st, "menu_close", name="MemorySummaryUI")
-    _feed(st, "menu_close", name="MemoryListUI")
-    _feed(st, "scene", name="memories/memories_6011")
-    _feed(st, "menu", name="MemoryScenarioPlaying", modal=False,
+    _feed(st, "menu_close", name="EpisodeUI")
+    _feed(st, "menu_close", name="AlbumUI")
+    _feed(st, "scene", name="episodes/episode_11")
+    _feed(st, "menu", name="EpisodePlaying", modal=False,
           buttons=[{"name": "OpenDialog", "rect": [0, 0.0, 0.23, 0.08]}])
-    _feed(st, "line", line_id="memories/memories_6011:1", text="a")
+    _feed(st, "line", line_id="episodes/episode_11:1", text="a")
     w = _weights(s, st)
     assert run.flow.index == 2
     assert w["advance"] == FUZZ_DEFAULTS["weights"]["advance"] * k
-    assert w["click MemoryScenarioPlaying/OpenDialog"] == pytest.approx(click * low)
+    assert w["click EpisodePlaying/OpenDialog"] == pytest.approx(click * low)
     # 読み終えて要約に戻った: 同じ画面でも、手順の順番で「言葉を選ぶ」
-    _feed(st, "menu_close", name="MemoryScenarioPlaying")
-    _feed(st, "scene", name="main/scenarioA_004")
-    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=LIST)
-    _feed(st, "menu", name="MemorySummaryUI", modal=True, buttons=SUMMARY)
+    _feed(st, "menu_close", name="EpisodePlaying")
+    _feed(st, "scene", name="main/chapter1_04")
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=LIST)
+    _feed(st, "menu", name="EpisodeUI", modal=True, buttons=SUMMARY)
     w = _weights(s, st)
     assert run.flow.index == 3
-    assert w["click MemorySummaryUI/ShowFragmentListButton"] == click * k
-    assert w["click MemorySummaryUI/StartToMemoryScenario"] == click
+    assert w["click EpisodeUI/ShowWordsButton"] == click * k
+    assert w["click EpisodeUI/ReadEpisodeButton"] == click
     # 言葉の一覧 → 確認ダイアログ → 答える
-    _feed(st, "menu", name="MemoryFragmentListUI", modal=True, buttons=[
-        {"name": "MemoryFragmentListSlot(Clone)", "rect": [0.2, 0.2, 0.4, 0.3]},
+    _feed(st, "menu", name="WordListUI", modal=True, buttons=[
+        {"name": "WordSlot(Clone)", "rect": [0.2, 0.2, 0.4, 0.3]},
         {"name": "ReturnButton", "rect": [0.07, 0.9, 0.13, 0.95]},
     ])
-    assert _weights(s, st)["click MemoryFragmentListUI/MemoryFragmentListSlot(Clone)"] == click * k
-    _feed(st, "menu", name="FragmentSelectDialogUI", modal=True, buttons=[
-        {"name": "FragmentSelectButton", "rect": [0.5, 0.6, 0.7, 0.7]},
-        {"name": "FragmentCancelButton", "rect": [0.3, 0.6, 0.45, 0.7]},
+    assert _weights(s, st)["click WordListUI/WordSlot(Clone)"] == click * k
+    _feed(st, "menu", name="AnswerDialogUI", modal=True, buttons=[
+        {"name": "AnswerButton", "rect": [0.5, 0.6, 0.7, 0.7]},
+        {"name": "AnswerCancelButton", "rect": [0.3, 0.6, 0.45, 0.7]},
     ])
-    assert _weights(s, st)["click FragmentSelectDialogUI/FragmentSelectButton"] == click * k
+    assert _weights(s, st)["click AnswerDialogUI/AnswerButton"] == click * k
     assert run.flow.index == 5
-    run.flow.pressed("FragmentSelectDialogUI/FragmentSelectButton", "FragmentSelectButton", True)
+    run.flow.pressed("AnswerDialogUI/AnswerButton", "AnswerButton", True)
     assert run.flow.active is None
     assert [e.data["step"] for e in events if e.kind == "flow"] == [1, 2, 3, 4, 5, 6]
     summary = run.flow.summary()
@@ -222,8 +222,8 @@ def test_flow_is_not_used_while_exploring_or_when_disabled():
     for cfg, intent in (({}, "explore"), ({"use_flow": False}, "progress")):
         s, st, run, _ = _session(cfg)
         run.intent = intent
-        _feed(st, "menu", name="MemoryListUI", modal=True, buttons=LIST)
-        assert _weights(s, st)["click MemoryListUI/SelectButton"] == FUZZ_DEFAULTS["weights"]["click"]
+        _feed(st, "menu", name="AlbumUI", modal=True, buttons=LIST)
+        assert _weights(s, st)["click AlbumUI/SelectButton"] == FUZZ_DEFAULTS["weights"]["click"]
         assert run.flow.active is None
 
 
@@ -231,19 +231,19 @@ def test_flow_ending_with_reading_completes_when_leaving_it():
     flows = parse_flows(tomllib.loads("""
 [[flow]]
 name = "思い出を読む"
-start = { screen = "MemoryListUI", by = "harness" }
+start = { screen = "AlbumUI", by = "harness" }
 steps = [
-  { screen = "MemoryListUI", press = "MemoryListGridSlot*" },
-  { scene = "memories/*", advance = true },
+  { screen = "AlbumUI", press = "AlbumSlot*" },
+  { scene = "episodes/*", advance = true },
 ]
 """)["flow"])
     tracker = FlowTracker(flows)
     st = GameState()
-    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=LIST)
-    tracker.update(st, {"MemoryListUI": "RClickMenuUI/ToMemoryList"}, 0, 10)
-    _feed(st, "menu_close", name="MemoryListUI")
-    _feed(st, "scene", name="memories/m1")
-    _feed(st, "line", line_id="memories/m1:1", text="a")
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=LIST)
+    tracker.update(st, {"AlbumUI": "QuickMenuUI/ToAlbum"}, 0, 10)
+    _feed(st, "menu_close", name="AlbumUI")
+    _feed(st, "scene", name="episodes/m1")
+    _feed(st, "line", line_id="episodes/m1:1", text="a")
     assert tracker.update(st, {}, 1, 10).advance
     # 読み終えて本編に戻った
     _feed(st, "scene", name="main/s2")
@@ -254,17 +254,17 @@ steps = [
 TRIAL = """
 [[flow]]
 name = "質問に答える"
-start = { screen = "MemoryListUI", by = "game" }
+start = { screen = "AlbumUI", by = "game" }
 steps = [
-  { screen = "MemoryListUI", press = "MemoryListGridSlot*" },
-  { screen = "MemorySummaryUI", press = "StartToMemoryScenario", once = true },
-  { scene = "memories/*", advance = true, once = true },
-  { screen = "MemorySummaryUI", press = "ShowFragmentListButton" },
-  { screen = "MemoryFragmentListUI", press = "MemoryFragmentListSlot*" },
-  { screen = "FragmentSelectDialogUI", press = "Accept" },
+  { screen = "AlbumUI", press = "AlbumSlot*" },
+  { screen = "EpisodeUI", press = "ReadEpisodeButton", once = true },
+  { scene = "episodes/*", advance = true, once = true },
+  { screen = "EpisodeUI", press = "ShowWordsButton" },
+  { screen = "WordListUI", press = "WordSlot*" },
+  { screen = "AnswerDialogUI", press = "Accept" },
 ]
 """
-FRAGS = [{"name": "MemoryFragmentListSlot(Clone)", "rect": [0.2 + 0.2 * i, 0.2, 0.35 + 0.2 * i, 0.3]} for i in range(2)]
+FRAGS = [{"name": "WordSlot(Clone)", "rect": [0.2 + 0.2 * i, 0.2, 0.35 + 0.2 * i, 0.3]} for i in range(2)]
 
 
 def _only(st, name, buttons):
@@ -287,38 +287,38 @@ def test_retrying_the_same_question_tries_other_answers():
     run.flow = FlowTracker(parse_flows(tomllib.loads(TRIAL)["flow"]))
     k, low = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"]
     click = FUZZ_DEFAULTS["weights"]["click"]
-    slot = "MemoryListUI/MemoryListGridSlot (Clone)"
-    frag = "MemoryFragmentListUI/MemoryFragmentListSlot(Clone)"
+    slot = "AlbumUI/AlbumSlot (Clone)"
+    frag = "WordListUI/WordSlot(Clone)"
 
     def ask():
         _feed(st, "scene", name="main/s6")
         _feed(st, "line", line_id="main/s6:70", text="ねぇ、どこだって？")
-        _only(st, "MemoryListUI", LIST)
+        _only(st, "AlbumUI", LIST)
 
     def answer(memory, fragment, read):
         _press(s, st, run, memory)
-        _only(st, "MemorySummaryUI", SUMMARY)
+        _only(st, "EpisodeUI", SUMMARY)
         w = _weights(s, st)
         if read:
-            assert w["click MemorySummaryUI/StartToMemoryScenario"] == click * k
-            run.flow.pressed("MemorySummaryUI/StartToMemoryScenario", "StartToMemoryScenario", True)
+            assert w["click EpisodeUI/ReadEpisodeButton"] == click * k
+            run.flow.pressed("EpisodeUI/ReadEpisodeButton", "ReadEpisodeButton", True)
             for m in list(st.menus):
                 _feed(st, "menu_close", name=m)
-            _feed(st, "scene", name="memories/m1")
-            _feed(st, "line", line_id="memories/m1:1", text="a")
+            _feed(st, "scene", name="episodes/m1")
+            _feed(st, "line", line_id="episodes/m1:1", text="a")
             _weights(s, st)
             _feed(st, "scene", name="main/s6")
-            _only(st, "MemorySummaryUI", SUMMARY)
+            _only(st, "EpisodeUI", SUMMARY)
             w = _weights(s, st)
         else:
             # 読んだ思い出は読み直さず、言葉を選ぶ
-            assert w["click MemorySummaryUI/StartToMemoryScenario"] == pytest.approx(click * low)
-        assert w["click MemorySummaryUI/ShowFragmentListButton"] == click * k
-        run.flow.pressed("MemorySummaryUI/ShowFragmentListButton", "ShowFragmentListButton", True)
-        _only(st, "MemoryFragmentListUI", FRAGS)
+            assert w["click EpisodeUI/ReadEpisodeButton"] == pytest.approx(click * low)
+        assert w["click EpisodeUI/ShowWordsButton"] == click * k
+        run.flow.pressed("EpisodeUI/ShowWordsButton", "ShowWordsButton", True)
+        _only(st, "WordListUI", FRAGS)
         w = _press(s, st, run, fragment)
-        _only(st, "FragmentSelectDialogUI", [{"name": "Accept", "rect": [0.5, 0.6, 0.7, 0.7]}])
-        _press(s, st, run, "FragmentSelectDialogUI/Accept")
+        _only(st, "AnswerDialogUI", [{"name": "Accept", "rect": [0.5, 0.6, 0.7, 0.7]}])
+        _press(s, st, run, "AnswerDialogUI/Accept")
         assert run.flow.active is None
         return w
 
@@ -350,25 +350,25 @@ def test_same_question_after_different_wrong_replies():
     run.flow = FlowTracker(parse_flows(tomllib.loads(TRIAL)["flow"]))
     k, low = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"]
     click = FUZZ_DEFAULTS["weights"]["click"]
-    slot = "MemoryListUI/MemoryListGridSlot (Clone)"
-    frag = "MemoryFragmentListUI/MemoryFragmentListSlot(Clone)"
+    slot = "AlbumUI/AlbumSlot (Clone)"
+    frag = "WordListUI/WordSlot(Clone)"
 
     def ask(line_ids):
         _feed(st, "scene", name="main/s6")
         for n, line_id in enumerate(line_ids):
             _feed(st, "line", line_id=line_id, text=f"返事{n}")
-        _only(st, "MemoryListUI", LIST)
+        _only(st, "AlbumUI", LIST)
 
     def answer(fragment, show_list):
         _press(s, st, run, slot)
-        _only(st, "MemorySummaryUI", SUMMARY)
+        _only(st, "EpisodeUI", SUMMARY)
         _weights(s, st)
         if show_list:
-            run.flow.pressed("MemorySummaryUI/ShowFragmentListButton", "ShowFragmentListButton", True)
-        _only(st, "MemoryFragmentListUI", FRAGS)
+            run.flow.pressed("EpisodeUI/ShowWordsButton", "ShowWordsButton", True)
+        _only(st, "WordListUI", FRAGS)
         w = _press(s, st, run, fragment)
-        _only(st, "FragmentSelectDialogUI", [{"name": "Accept", "rect": [0.5, 0.6, 0.7, 0.7]}])
-        _press(s, st, run, "FragmentSelectDialogUI/Accept")
+        _only(st, "AnswerDialogUI", [{"name": "Accept", "rect": [0.5, 0.6, 0.7, 0.7]}])
+        _press(s, st, run, "AnswerDialogUI/Accept")
         assert run.flow.active is None
         return w
 
@@ -388,7 +388,7 @@ def test_same_question_after_different_wrong_replies():
     run.flow.active = None
     for n in range(FUZZ_DEFAULTS["flow_retry_lines"] + 1):
         s.on_event(Event("game", "line", {"line_id": f"main/s6:{100 + n}", "text": "続き"}, 0.0, 0))
-    _only(st, "MemoryListUI", LIST)
+    _only(st, "AlbumUI", LIST)
     _weights(s, st)
     assert run.flow.ctx[1] != "main/s6:70"
 
@@ -449,31 +449,31 @@ steps = [{ choose = true }]
 
 
 def test_screen_step_wins_over_lingering_scene_step():
-    # run 0946: 思い出を読み終えて要約に戻っても、答えるまで scene が memories/… のまま。「思い出を読む」手順（scene だけ）に
+    # run 0946: 思い出を読み終えて要約に戻っても、答えるまで scene が episodes/… のまま。「思い出を読む」手順（scene だけ）に
     # とどまらず、要約・言葉の一覧・確認ダイアログの手順に進み、答えたら最後まで進めたとする（試した組み合わせも覚える）
     s, st, run, _ = _session()
     run.flow = FlowTracker(parse_flows(tomllib.loads(TRIAL)["flow"]))
     _feed(st, "scene", name="main/s4")
     _feed(st, "line", line_id="main/s4:44", text="どこ？")
-    _only(st, "MemoryListUI", LIST)
-    _press(s, st, run, "MemoryListUI/MemoryListGridSlot (Clone)")
-    _only(st, "MemorySummaryUI", SUMMARY)
-    _press(s, st, run, "MemorySummaryUI/StartToMemoryScenario")
+    _only(st, "AlbumUI", LIST)
+    _press(s, st, run, "AlbumUI/AlbumSlot (Clone)")
+    _only(st, "EpisodeUI", SUMMARY)
+    _press(s, st, run, "EpisodeUI/ReadEpisodeButton")
     for m in list(st.menus):
         _feed(st, "menu_close", name=m)
-    _feed(st, "scene", name="memories/m1")
-    _feed(st, "line", line_id="memories/m1:1", text="a")
+    _feed(st, "scene", name="episodes/m1")
+    _feed(st, "line", line_id="episodes/m1:1", text="a")
     _weights(s, st)
     assert run.flow.index == 2
-    _only(st, "MemorySummaryUI", SUMMARY)  # scene は memories/m1 のまま
+    _only(st, "EpisodeUI", SUMMARY)  # scene は episodes/m1 のまま
     w = _weights(s, st)
     assert run.flow.index == 3
-    assert w["click MemorySummaryUI/ShowFragmentListButton"] == FUZZ_DEFAULTS["weights"]["click"] * FUZZ_DEFAULTS["flow_factor"]
-    run.flow.pressed("MemorySummaryUI/ShowFragmentListButton", "ShowFragmentListButton", True)
-    _only(st, "MemoryFragmentListUI", FRAGS)
-    _press(s, st, run, "MemoryFragmentListUI/MemoryFragmentListSlot(Clone)#1")
-    _only(st, "FragmentSelectDialogUI", [{"name": "Accept", "rect": [0.5, 0.6, 0.7, 0.7]}])
-    _press(s, st, run, "FragmentSelectDialogUI/Accept")
+    assert w["click EpisodeUI/ShowWordsButton"] == FUZZ_DEFAULTS["weights"]["click"] * FUZZ_DEFAULTS["flow_factor"]
+    run.flow.pressed("EpisodeUI/ShowWordsButton", "ShowWordsButton", True)
+    _only(st, "WordListUI", FRAGS)
+    _press(s, st, run, "WordListUI/WordSlot(Clone)#1")
+    _only(st, "AnswerDialogUI", [{"name": "Accept", "rect": [0.5, 0.6, 0.7, 0.7]}])
+    _press(s, st, run, "AnswerDialogUI/Accept")
     assert run.flow.active is None and run.flow.stats["質問に答える"].completed == 1
     assert len(run.flow.leaves) == 1
 
@@ -483,28 +483,28 @@ def test_steps_can_name_buttons_by_visible_text():
     flows = parse_flows(tomllib.loads("""
 [[flow]]
 name = "読む"
-start = { screen = "MemorySummaryUI" }
+start = { screen = "EpisodeUI" }
 avoid_text = ["閉じる"]
 steps = [
-  { screen = "MemorySummaryUI", text = "*読む*" },
-  { scene = "memories/*", advance = true },
+  { screen = "EpisodeUI", text = "*読む*" },
+  { scene = "episodes/*", advance = true },
 ]
 """)["flow"])
     s, st, run, _ = _session()
     run.flow = FlowTracker(flows)
     k, low = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"]
     click = FUZZ_DEFAULTS["weights"]["click"]
-    _only(st, "MemorySummaryUI", SUMMARY)
-    st.set_read_text({"MemorySummaryUI/StartToMemoryScenario": "この 思い出を 読む", "MemorySummaryUI/CloseMemorySummary": "閉じる",
-                      "MemorySummaryUI/ShowFragmentListButton": "言葉を選ぶ"})
+    _only(st, "EpisodeUI", SUMMARY)
+    st.set_read_text({"EpisodeUI/ReadEpisodeButton": "この 思い出を 読む", "EpisodeUI/CloseEpisodeButton": "閉じる",
+                      "EpisodeUI/ShowWordsButton": "言葉を選ぶ"})
     w = _weights(s, st)
-    assert w["click MemorySummaryUI/StartToMemoryScenario"] == click * k
-    assert w["click MemorySummaryUI/ShowFragmentListButton"] == click
-    assert w["click MemorySummaryUI/CloseMemorySummary"] == pytest.approx(click * low)
+    assert w["click EpisodeUI/ReadEpisodeButton"] == click * k
+    assert w["click EpisodeUI/ShowWordsButton"] == click
+    assert w["click EpisodeUI/CloseEpisodeButton"] == pytest.approx(click * low)
     # 文字がまだ読めていないボタンは、手順のボタンとみなさない
     st.read_text.clear()
-    _only(st, "MemorySummaryUI", SUMMARY)
-    assert _weights(s, st)["click MemorySummaryUI/StartToMemoryScenario"] == click
+    _only(st, "EpisodeUI", SUMMARY)
+    assert _weights(s, st)["click EpisodeUI/ReadEpisodeButton"] == click
     with pytest.raises(ConfigError, match="知らない項目"):
         parse_flows([{"name": "x", "start": {"screen": "A"}, "steps": [{"screen": "A"}], "avoid_txt": ["a"]}])
 
@@ -512,40 +512,40 @@ steps = [
 ONCE_PROFILE = """
 [[flow]]
 name = "質問に言葉で答える"
-start = { screen = "MemoryListUI", by = "game" }
+start = { screen = "AlbumUI", by = "game" }
 steps = [
-  { screen = "MemoryListUI", press = "MemoryListGridSlot*", note = "開示済みの思い出を選ぶ" },
-  { screen = "MemorySummaryUI", press = "StartToMemoryScenario", once = true, note = "この思い出を読む" },
-  { scene = "memories/*", advance = true, once = true, note = "最後まで読む" },
-  { screen = "MemorySummaryUI", press = "ShowFragmentListButton", note = "言葉を選ぶ" },
-  { screen = "MemoryFragmentListUI", press = "MemoryFragmentListSlot*", note = "開示済みの言葉を選ぶ" },
+  { screen = "AlbumUI", press = "AlbumSlot*", note = "開示済みの思い出を選ぶ" },
+  { screen = "EpisodeUI", press = "ReadEpisodeButton", once = true, note = "この思い出を読む" },
+  { scene = "episodes/*", advance = true, once = true, note = "最後まで読む" },
+  { screen = "EpisodeUI", press = "ShowWordsButton", note = "言葉を選ぶ" },
+  { screen = "WordListUI", press = "WordSlot*", note = "開示済みの言葉を選ぶ" },
 ]
 """
-FRAG = "MemoryFragmentListUI/MemoryFragmentListSlot(Clone)"
-SLOT = "MemoryListUI/MemoryListGridSlot (Clone)"
+FRAG = "WordListUI/WordSlot(Clone)"
+SLOT = "AlbumUI/AlbumSlot (Clone)"
 
 
 def _to_fragments(s, st, run, slots):
     """質問の一覧で 1 つめの思い出を選び、言葉の一覧まで進める（読むのは済ませたものとして飛ばす）。"""
-    _feed(st, "line", line_id="main/scenarioB_004:323.0", text="アカウント名を選ぼう。")
-    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=LIST)
+    _feed(st, "line", line_id="main/chapter2_04:323.0", text="アカウント名を選ぼう。")
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=LIST)
     _weights(s, st)
-    run.flow.pressed(SLOT, "MemoryListGridSlot (Clone)", True)
-    _feed(st, "menu", name="MemorySummaryUI", modal=True, buttons=SUMMARY)
+    run.flow.pressed(SLOT, "AlbumSlot (Clone)", True)
+    _feed(st, "menu", name="EpisodeUI", modal=True, buttons=SUMMARY)
     _weights(s, st)
-    run.flow.pressed("MemorySummaryUI/StartToMemoryScenario", "StartToMemoryScenario", True)
-    _feed(st, "menu", name="MemorySummaryUI", modal=True, buttons=SUMMARY)
+    run.flow.pressed("EpisodeUI/ReadEpisodeButton", "ReadEpisodeButton", True)
+    _feed(st, "menu", name="EpisodeUI", modal=True, buttons=SUMMARY)
     run.flow.index = 3
     _weights(s, st)
-    run.flow.pressed("MemorySummaryUI/ShowFragmentListButton", "ShowFragmentListButton", True)
-    _feed(st, "menu", name="MemoryFragmentListUI", modal=True, buttons=[
-        *[{"name": "MemoryFragmentListSlot(Clone)", "rect": [0.1 + 0.15 * i, 0.4, 0.2 + 0.15 * i, 0.5]} for i in range(slots)],
+    run.flow.pressed("EpisodeUI/ShowWordsButton", "ShowWordsButton", True)
+    _feed(st, "menu", name="WordListUI", modal=True, buttons=[
+        *[{"name": "WordSlot(Clone)", "rect": [0.1 + 0.15 * i, 0.4, 0.2 + 0.15 * i, 0.5]} for i in range(slots)],
         {"name": "ReturnButton", "rect": [0.07, 0.9, 0.13, 0.95]},
     ])
 
 
 def test_dim_options_are_tried_after_bright_ones():
-    # run 2026-11-05_1346: 「No.009 こわくない場所」の言葉の一覧で、下の3枚（答えの「rachel0612」を含む）が暗く写り、
+    # run 2026-11-05_1346: 「No.012 雨の日の約束」の言葉の一覧で、下の3枚（答えの「sample0101」を含む）が暗く写り、
     # 押せないとみなして選ばずに、上の3枚を試し終えたら「すべて試した」としていた。暗いものも、明るいものの次に試す
     s, st, run, _ = _session()
     run.flow = FlowTracker(parse_flows(tomllib.loads(ONCE_PROFILE)["flow"]))
@@ -573,7 +573,7 @@ def test_dim_options_are_tried_after_bright_ones():
 
 
 def test_empty_fragment_list_is_dead_end_and_reading_is_remembered():
-    # run 2026-11-05_1346: 言葉が1つも開示されていない思い出「あの計画」（一覧には戻るボタンだけ）を、選ぶたびに
+    # run 2026-11-05_1346: 言葉が1つも開示されていない思い出（一覧には戻るボタンだけ）を、選ぶたびに
     # 読み直していた。選べるものがない一覧は行き止まりとし、手順の順番から外れて読んだときも読んだと覚える
     s, st, run, _ = _session()
     run.flow = FlowTracker(parse_flows(tomllib.loads(ONCE_PROFILE)["flow"]))
@@ -582,7 +582,7 @@ def test_empty_fragment_list_is_dead_end_and_reading_is_remembered():
     assert (run.flow.ctx, (SLOT,)) in run.flow.leaves
     # 言葉の一覧から戻って、要約で「この思い出を読む」を押した（いまの手順は言葉を選ぶ）
     run.flow.done_once.clear()
-    run.flow.pressed("MemorySummaryUI/StartToMemoryScenario", "StartToMemoryScenario", True)
+    run.flow.pressed("EpisodeUI/ReadEpisodeButton", "ReadEpisodeButton", True)
     assert run.flow.is_done(1)
     # 同じ質問で同じ思い出を選び直したときも、読んだ思い出は読み直さない（「この思い出を読む」は後回し）
     run.flow.path = [SLOT]
@@ -593,13 +593,13 @@ def test_empty_fragment_list_is_dead_end_and_reading_is_remembered():
 def test_read_text_is_forgotten_when_menu_closes():
     # 言葉のスロットの名前は並びの番号なので、別の思い出の一覧でも同じ名前になる。閉じたら読んだ文字を忘れる
     st = GameState()
-    _feed(st, "menu", name="MemoryFragmentListUI", modal=True,
-          buttons=[{"name": "MemoryFragmentListSlot(Clone)", "rect": [0.1, 0.4, 0.2, 0.5]}])
-    st.set_read_text({FRAG: "階段", "MemoryListUI/X": "No.009"})
-    _feed(st, "menu_close", name="MemoryFragmentListUI")
-    assert st.read_text == {"MemoryListUI/X": "No.009"} and st.closed == {"MemoryFragmentListUI"}
-    _feed(st, "menu", name="MemoryFragmentListUI", modal=True,
-          buttons=[{"name": "MemoryFragmentListSlot(Clone)", "rect": [0.1, 0.4, 0.2, 0.5]}])
+    _feed(st, "menu", name="WordListUI", modal=True,
+          buttons=[{"name": "WordSlot(Clone)", "rect": [0.1, 0.4, 0.2, 0.5]}])
+    st.set_read_text({FRAG: "階段", "AlbumUI/X": "No.012"})
+    _feed(st, "menu_close", name="WordListUI")
+    assert st.read_text == {"AlbumUI/X": "No.012"} and st.closed == {"WordListUI"}
+    _feed(st, "menu", name="WordListUI", modal=True,
+          buttons=[{"name": "WordSlot(Clone)", "rect": [0.1, 0.4, 0.2, 0.5]}])
     assert st.find(FRAG).text is None
 
 
@@ -609,10 +609,10 @@ def test_dim_options_wait_while_bright_one_is_off_screen():
     s, st, run, _ = _session()
     run.flow = FlowTracker(parse_flows(tomllib.loads(ONCE_PROFILE)["flow"]))
     click = FUZZ_DEFAULTS["weights"]["click"]
-    slots = [{"name": "MemoryListGridSlot (Clone)", "rect": [0.1 + 0.2 * i, 0.3, 0.25 + 0.2 * i, 0.5]} for i in range(3)]
-    slots.append({"name": "MemoryListGridSlot (Clone)", "rect": [0.1, 1.3, 0.25, 1.5], "hidden": True})
-    _feed(st, "line", line_id="main/scenarioA_004:44.0", text="あの時——")
-    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=slots)
+    slots = [{"name": "AlbumSlot (Clone)", "rect": [0.1 + 0.2 * i, 0.3, 0.25 + 0.2 * i, 0.5]} for i in range(3)]
+    slots.append({"name": "AlbumSlot (Clone)", "rect": [0.1, 1.3, 0.25, 1.5], "hidden": True})
+    _feed(st, "line", line_id="main/chapter1_04:44.0", text="あの時——")
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=slots)
     s._dim = {SLOT, f"{SLOT}#1", f"{SLOT}#2"}
     w = _weights(s, st)
     assert run.flow.index == 0
@@ -626,42 +626,42 @@ def test_going_back_restarts_from_that_step():
     s, st, run, _ = _session()
     run.flow = FlowTracker(parse_flows(tomllib.loads(ONCE_PROFILE)["flow"]))
     k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
-    _feed(st, "line", line_id="main/scenarioA_004:44.0", text="あの時——")
-    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=LIST)
+    _feed(st, "line", line_id="main/chapter1_04:44.0", text="あの時——")
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=LIST)
     _weights(s, st)
-    run.flow.pressed(SLOT, "MemoryListGridSlot (Clone)", True)
-    _feed(st, "menu", name="MemorySummaryUI", modal=True, buttons=SUMMARY)
-    assert _weights(s, st)["click MemorySummaryUI/StartToMemoryScenario"] == click * k
+    run.flow.pressed(SLOT, "AlbumSlot (Clone)", True)
+    _feed(st, "menu", name="EpisodeUI", modal=True, buttons=SUMMARY)
+    assert _weights(s, st)["click EpisodeUI/ReadEpisodeButton"] == click * k
     # 読まずに「言葉を選ぶ」を押した。言葉の一覧は空（読む前なので当たり前）で、行き止まりにはしない
-    run.flow.pressed("MemorySummaryUI/ShowFragmentListButton", "ShowFragmentListButton", True)
-    _feed(st, "menu", name="MemoryFragmentListUI", modal=True,
+    run.flow.pressed("EpisodeUI/ShowWordsButton", "ShowWordsButton", True)
+    _feed(st, "menu", name="WordListUI", modal=True,
           buttons=[{"name": "ReturnButton", "rect": [0.07, 0.9, 0.13, 0.95]}])
     _weights(s, st)
     assert run.flow.index == 4 and not run.flow.leaves
     # 要約に戻った: まだ読んでいないので「この思い出を読む」からやり直す
-    _feed(st, "menu_close", name="MemoryFragmentListUI")
+    _feed(st, "menu_close", name="WordListUI")
     w = _weights(s, st)
     assert run.flow.index == 1 and run.flow.path == [SLOT]
-    assert w["click MemorySummaryUI/StartToMemoryScenario"] == click * k
+    assert w["click EpisodeUI/ReadEpisodeButton"] == click * k
     # 要約を閉じて思い出の一覧に戻った: 思い出を選ぶところからやり直す
-    _feed(st, "menu_close", name="MemorySummaryUI")
+    _feed(st, "menu_close", name="EpisodeUI")
     w = _weights(s, st)
     assert run.flow.index == 0 and run.flow.path == []
     assert sorted(w[f"click {x}"] for x in (SLOT, f"{SLOT}#1", f"{SLOT}#2")) == [click, click, click * k]
     # 一覧のまま選び直したら、選んだものを置き換える
-    run.flow.pressed(f"{SLOT}#1", "MemoryListGridSlot (Clone)", True)
-    run.flow.pressed(f"{SLOT}#2", "MemoryListGridSlot (Clone)", True)
+    run.flow.pressed(f"{SLOT}#1", "AlbumSlot (Clone)", True)
+    run.flow.pressed(f"{SLOT}#2", "AlbumSlot (Clone)", True)
     assert run.flow.path == [f"{SLOT}#2"]
     # 読んだ思い出の要約に、言葉の一覧から戻ったときは「言葉を選ぶ」
-    _feed(st, "menu", name="MemorySummaryUI", modal=True, buttons=SUMMARY)
+    _feed(st, "menu", name="EpisodeUI", modal=True, buttons=SUMMARY)
     _weights(s, st)
-    run.flow.pressed("MemorySummaryUI/StartToMemoryScenario", "StartToMemoryScenario", True)
+    run.flow.pressed("EpisodeUI/ReadEpisodeButton", "ReadEpisodeButton", True)
     run.flow.index = 4
-    _feed(st, "menu_close", name="MemorySummaryUI")
-    _feed(st, "menu", name="MemorySummaryUI", modal=True, buttons=SUMMARY)
+    _feed(st, "menu_close", name="EpisodeUI")
+    _feed(st, "menu", name="EpisodeUI", modal=True, buttons=SUMMARY)
     w = _weights(s, st)
     assert run.flow.index == 3
-    assert w["click MemorySummaryUI/ShowFragmentListButton"] == click * k
+    assert w["click EpisodeUI/ShowWordsButton"] == click * k
 
 
 def test_flow_fills_the_ledger_then_goes_to_an_off_screen_option():
@@ -676,10 +676,10 @@ def test_flow_fills_the_ledger_then_goes_to_an_off_screen_option():
     def slots(top):
         # top: 上の 2 つ（#2・#3）が見えているか。見えていなければ、上の 2 つは画面の上、下の 2 つが見えている
         y = (0.3, 1.3) if top else (-0.7, 0.3)
-        out = [{"name": "MemoryListGridSlot (Clone)", "rect": [0.1 + 0.2 * i, y[0] + (0 if top else 1.0),
+        out = [{"name": "AlbumSlot (Clone)", "rect": [0.1 + 0.2 * i, y[0] + (0 if top else 1.0),
                                                               0.25 + 0.2 * i, y[0] + 0.2 + (0 if top else 1.0)]}
                for i in range(2)]
-        out += [{"name": "MemoryListGridSlot (Clone)", "rect": [0.1 + 0.2 * i, y[0] if top else -0.7,
+        out += [{"name": "AlbumSlot (Clone)", "rect": [0.1 + 0.2 * i, y[0] if top else -0.7,
                                                                0.25 + 0.2 * i, (y[0] + 0.2) if top else -0.5]}
                 for i in range(2)]
         for b in out:
@@ -688,8 +688,8 @@ def test_flow_fills_the_ledger_then_goes_to_an_off_screen_option():
                 b["hidden"] = True
         return out
 
-    _feed(st, "line", line_id="main/scenarioB_004:323.0", text="アカウント名を選ぼう。")
-    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=slots(top=False))
+    _feed(st, "line", line_id="main/chapter2_04:323.0", text="アカウント名を選ぼう。")
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=slots(top=False))
     w = _weights(s, st)
     # 上の 2 つがまだ見えていない: 台帳を埋めるために上へ動かす（押す目標はまだ決めない）
     assert w["wheel_up 3"] == w["drag down"] == click * lf
@@ -699,14 +699,14 @@ def test_flow_fills_the_ledger_then_goes_to_an_off_screen_option():
     run.flow.leaves |= {(ctx, (SLOT,)), (ctx, (f"{SLOT}#1",))}
     # 上へ動かした: 上の 2 つが見えた（#3 は伏せ字）
     run.masked_chars = "?？"
-    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=slots(top=True))
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=slots(top=True))
     st.set_read_text({f"{SLOT}#3": "？？？"})
     w = _weights(s, st)
     assert run.ledger.items[f"{SLOT}#3"].status == "masked"
     assert w[f"click {SLOT}#2"] == click * k  # 目標: まだ試していない #2（伏せ字の #3 は選ばない）
     assert w[f"click {SLOT}#3"] == click
     # 下へ戻っても、目標の #2 へ向かう（上へ動かす）
-    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=slots(top=False))
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=slots(top=False))
     w = _weights(s, st)
     ops = {op.label: op for op in s._apply_flow(normal_candidates(st, Guard({}), s.cfg["weights"], False), 0.0)}
     assert ops["wheel_up 3"].goal == f"{SLOT}#2" and ops["wheel_up 3"].by == "flow"
@@ -727,12 +727,12 @@ def test_flow_goal_keeps_one_direction_and_gives_up():
     run.flow = FlowTracker(parse_flows(tomllib.loads(ONCE_PROFILE)["flow"]))
     click, lf = FUZZ_DEFAULTS["weights"]["click"], FUZZ_DEFAULTS["list_factor"]
     give_up = FUZZ_DEFAULTS["list_move_give_up"]
-    slots = [{"name": "MemoryListGridSlot (Clone)", "rect": [0.1 + 0.2 * i, 0.3, 0.25 + 0.2 * i, 0.5]} for i in range(2)]
-    slots += [{"name": "MemoryListGridSlot (Clone)", "rect": [0.1, -0.5, 0.25, -0.3], "hidden": True},  # 上（遠い）
-              {"name": "MemoryListGridSlot (Clone)", "rect": [0.1, 1.1, 0.25, 1.3], "hidden": True},  # 下（近い）
-              {"name": "MemoryListGridSlot (Clone)", "rect": [1.25, 0.3, 1.4, 0.5], "hidden": True}]  # 右（中くらい）
-    _feed(st, "line", line_id="main/scenarioB_004:323.0", text="アカウント名を選ぼう。")
-    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=slots)
+    slots = [{"name": "AlbumSlot (Clone)", "rect": [0.1 + 0.2 * i, 0.3, 0.25 + 0.2 * i, 0.5]} for i in range(2)]
+    slots += [{"name": "AlbumSlot (Clone)", "rect": [0.1, -0.5, 0.25, -0.3], "hidden": True},  # 上（遠い）
+              {"name": "AlbumSlot (Clone)", "rect": [0.1, 1.1, 0.25, 1.3], "hidden": True},  # 下（近い）
+              {"name": "AlbumSlot (Clone)", "rect": [1.25, 0.3, 1.4, 0.5], "hidden": True}]  # 右（中くらい）
+    _feed(st, "line", line_id="main/chapter2_04:323.0", text="アカウント名を選ぼう。")
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=slots)
     _weights(s, st)
     for item in run.ledger.items.values():
         item.shown = True  # 台帳は埋め終えた（前に見た）
@@ -747,19 +747,19 @@ def test_flow_goal_keeps_one_direction_and_gives_up():
     assert boosted() == {"wheel_down 3", "drag up"}  # いちばん近い下の #3 だけ
     w = _weights(s, st)
     assert w["drag up"] == click * lf
-    goal = run.ledger.goals["MemoryListUI/MemoryListGridSlot (Clone)"]
+    goal = run.ledger.goals["AlbumUI/AlbumSlot (Clone)"]
     assert goal.label == f"{SLOT}#3"
     # 下へ動かしても目標が近づかない（端で跳ね返るだけ）: give_up 回までは下のまま、そのあとは次に近い右
     # （近づかなかった手段のホイールは後回しにし、ドラッグを続ける）
     for n in range(give_up):
         now = boosted()
         assert now == {"wheel_down 3", "drag up"}, n
-        s._moving = ("MemoryListUI/MemoryListGridSlot (Clone)", f"{SLOT}#3", "drag up", goal.dist)
+        s._moving = ("AlbumUI/AlbumSlot (Clone)", f"{SLOT}#3", "drag up", goal.dist)
     assert boosted() == {"drag left"}
     assert f"{SLOT}#3" in run.ledger.unreachable
     assert any("近づかなかった" in n for n in run.notes)
     # 一覧を閉じたら、届かなかった目標も忘れる
-    _feed(st, "menu_close", name="MemoryListUI")
+    _feed(st, "menu_close", name="AlbumUI")
     s._sync_lists()
     assert not run.ledger.unreachable and not run.ledger.goals
 
@@ -769,8 +769,8 @@ def test_wrong_answers_are_remembered_across_runs(tmp_path):
     # 最後の答え（そのあと同じ質問に戻らなかった）は正解かもしれないので覚えない
     from yomawari.fuzz.experience import Experience
 
-    slot = "MemoryListUI/MemoryListGridSlot (Clone)"
-    frag = "MemoryFragmentListUI/MemoryFragmentListSlot(Clone)"
+    slot = "AlbumUI/AlbumSlot (Clone)"
+    frag = "WordListUI/WordSlot(Clone)"
     k, low = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"]
     click = FUZZ_DEFAULTS["weights"]["click"]
     path = tmp_path / "game.json"
@@ -785,17 +785,17 @@ def test_wrong_answers_are_remembered_across_runs(tmp_path):
     def ask(s, st):
         _feed(st, "scene", name="main/s6")
         _feed(st, "line", line_id="main/s6:70", text="ねぇ、どこだって？")
-        _only(st, "MemoryListUI", LIST)
+        _only(st, "AlbumUI", LIST)
 
     def answer(s, st, run, fragment):
         _press(s, st, run, slot)
-        _only(st, "MemorySummaryUI", SUMMARY)
+        _only(st, "EpisodeUI", SUMMARY)
         _weights(s, st)
-        run.flow.pressed("MemorySummaryUI/ShowFragmentListButton", "ShowFragmentListButton", True)
-        _only(st, "MemoryFragmentListUI", FRAGS)
+        run.flow.pressed("EpisodeUI/ShowWordsButton", "ShowWordsButton", True)
+        _only(st, "WordListUI", FRAGS)
         w = _press(s, st, run, fragment)
-        _only(st, "FragmentSelectDialogUI", [{"name": "Accept", "rect": [0.5, 0.6, 0.7, 0.7]}])
-        _press(s, st, run, "FragmentSelectDialogUI/Accept")
+        _only(st, "AnswerDialogUI", [{"name": "Accept", "rect": [0.5, 0.6, 0.7, 0.7]}])
+        _press(s, st, run, "AnswerDialogUI/Accept")
         return w
 
     s, st, run, exp = new_run()
@@ -817,12 +817,12 @@ def test_flow_step_ops_are_not_worn_down_by_repeats():
     # run 2026-11-06_1418: 同じ質問に答え直すたびに同じボタンを押すので、押した回数で重みを下げると、
     # 答え直すほどドラッグ・Esc などの寄り道が増えた。流れの手順の操作は回数で下げない
     s, st, run, events = _session()
-    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=LIST)
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=LIST)
     cands = normal_candidates(st, Guard({}), s.cfg["weights"], False)
     out = {op.label: op for op in s._apply_flow(cands, 0.0)}
     slot = next(op for op in out.values() if op.goal is not None)  # 手順の目標の思い出
     assert not slot.novelty and slot.by == "flow"
-    assert out["click MemoryListUI/SelectButton"].novelty  # 手順の外のボタンは今までどおり
+    assert out["click AlbumUI/SelectButton"].novelty  # 手順の外のボタンは今までどおり
     dec = run.decider
     for _ in range(50):
         dec.tries[("k", slot.label)] += 1
@@ -833,23 +833,23 @@ def test_spent_choice_goes_back_instead_of_reopening_empty_list():
     # run 2026-11-06_1646: 言葉のない思い出で、「言葉を選ぶ」と空の言葉の一覧を閉じるのを繰り返した。
     # 選んだ思い出を試し終えたら（行き止まり）、流れから外れるボタン（要約を閉じる）で思い出の一覧へ戻るのを優先する
     s, st, run, _ = _session()
-    profile = ONCE_PROFILE.replace('by = "game" }', 'by = "game" }\navoid = ["MemorySummaryUI/CloseMemorySummary"]', 1)
+    profile = ONCE_PROFILE.replace('by = "game" }', 'by = "game" }\navoid = ["EpisodeUI/CloseEpisodeButton"]', 1)
     run.flow = FlowTracker(parse_flows(tomllib.loads(profile)["flow"]))
     k, low, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"], FUZZ_DEFAULTS["weights"]["click"]
     _to_fragments(s, st, run, 0)
     _weights(s, st)
     assert run.flow.spent()
-    _feed(st, "menu_close", name="MemoryFragmentListUI")
-    _feed(st, "menu", name="MemorySummaryUI", modal=True, buttons=SUMMARY)
+    _feed(st, "menu_close", name="WordListUI")
+    _feed(st, "menu", name="EpisodeUI", modal=True, buttons=SUMMARY)
     w = _weights(s, st)
     assert run.flow.index == 3
-    assert w["click MemorySummaryUI/CloseMemorySummary"] == click * k
-    assert w["click MemorySummaryUI/ShowFragmentListButton"] == click
+    assert w["click EpisodeUI/CloseEpisodeButton"] == click * k
+    assert w["click EpisodeUI/ShowWordsButton"] == click
     # 試し終えていない思い出なら、今までどおり「言葉を選ぶ」を優先し、要約を閉じるのは後回し
     run.flow.leaves.clear()
     w = _weights(s, st)
-    assert w["click MemorySummaryUI/ShowFragmentListButton"] == click * k
-    assert w["click MemorySummaryUI/CloseMemorySummary"] == pytest.approx(click * low)
+    assert w["click EpisodeUI/ShowWordsButton"] == click * k
+    assert w["click EpisodeUI/CloseEpisodeButton"] == pytest.approx(click * low)
 
 
 def test_reveals_are_forgotten_when_progress_is_replaced():
@@ -865,7 +865,7 @@ def test_reveals_are_forgotten_when_progress_is_replaced():
     tr.wrong.add(wrong)
     assert tr.done_once and dead in tr.leaves
     # 流れの中のロード（思い出から本編に戻る）では忘れない
-    s.on_event(Event("game", "load", {"slot": "MemoryReturn", "phase": "start"}, 0))
+    s.on_event(Event("game", "load", {"slot": "EpisodeReturn", "phase": "start"}, 0))
     assert tr.done_once and dead in tr.leaves
     # 流れの外でセーブをロードしたら、読んだ思い出と行き止まりを忘れる。外れと分かった答えは覚えておく
     tr.active = None
@@ -897,48 +897,48 @@ def test_flow_records_its_factor_on_ops():
     # 流れが重みを変えた操作には、why に ("flow", 倍率) が残る（events.jsonl の op で、なぜ選ばれたかを見る）
     s, st, run, _ = _session()
     k, low = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"]
-    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=LIST)
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=LIST)
     cands = normal_candidates(st, Guard({}), s.cfg["weights"], False)
     ops = {op.label: op for op in s._apply_flow(cands, 0.0)}
     goal = next(op for op in ops.values() if op.goal is not None)
-    assert goal.why == (("flow", k),) and goal.target.name == "MemoryListGridSlot (Clone)"
-    assert ops["click MemoryListUI/SelectButton"].why == (("flow", low),)
+    assert goal.why == (("flow", k),) and goal.target.name == "AlbumSlot (Clone)"
+    assert ops["click AlbumUI/SelectButton"].why == (("flow", low),)
 
 
 def test_read_memory_is_remembered_across_flows_and_outside_them():
     # 質問の流れで読んだ思い出（once の手順）は、ほかの流れ（once を書いていない「思い出を読む」）や流れの外でも
-    # 読み直さない（run 2026-11-07_1511: memories_6011 を 4 回、7021 を 3 回読んだ）
+    # 読み直さない（run 2026-11-07_1511: episode_11 を 4 回、7021 を 3 回読んだ）
     flows = parse_flows(tomllib.loads("""
 [[flow]]
 name = "質問"
-start = { screen = "MemoryListUI", by = "game" }
+start = { screen = "AlbumUI", by = "game" }
 steps = [
-  { screen = "MemoryListUI", press = "MemoryListGridSlot*" },
-  { screen = "MemorySummaryUI", press = "StartToMemoryScenario", once = true },
-  { screen = "MemorySummaryUI", press = "ShowFragmentListButton" },
+  { screen = "AlbumUI", press = "AlbumSlot*" },
+  { screen = "EpisodeUI", press = "ReadEpisodeButton", once = true },
+  { screen = "EpisodeUI", press = "ShowWordsButton" },
 ]
 
 [[flow]]
 name = "思い出を読む"
-start = { screen = "MemoryListUI", by = "harness" }
+start = { screen = "AlbumUI", by = "harness" }
 steps = [
-  { screen = "MemoryListUI", press = "MemoryListGridSlot*" },
-  { screen = "MemorySummaryUI", press = "StartToMemoryScenario" },
+  { screen = "AlbumUI", press = "AlbumSlot*" },
+  { screen = "EpisodeUI", press = "ReadEpisodeButton" },
 ]
 """)["flow"])
     tr = FlowTracker(flows)
-    read = ("MemorySummaryUI/StartToMemoryScenario", "StartToMemoryScenario", None)
+    read = ("EpisodeUI/ReadEpisodeButton", "ReadEpisodeButton", None)
     # 流れの外で思い出 #1 を選んで読んだ
-    tr.seen("MemoryListUI/MemoryListGridSlot (Clone)#1", "MemoryListGridSlot (Clone)", None)
+    tr.seen("AlbumUI/AlbumSlot (Clone)#1", "AlbumSlot (Clone)", None)
     assert not tr.read_before(*read)
     tr.seen(*read)
     assert tr.read_before(*read)
     # ほかの思い出を選んだら、まだ読んでいない
-    tr.seen("MemoryListUI/MemoryListGridSlot (Clone)#2", "MemoryListGridSlot (Clone)", None)
+    tr.seen("AlbumUI/AlbumSlot (Clone)#2", "AlbumSlot (Clone)", None)
     assert not tr.read_before(*read)
     # #1 に戻れば読んだもの
-    tr.seen("MemoryListUI/MemoryListGridSlot (Clone)#1", "MemoryListGridSlot (Clone)", None)
+    tr.seen("AlbumUI/AlbumSlot (Clone)#1", "AlbumSlot (Clone)", None)
     assert tr.read_before(*read)
     # 質問の流れの中でも、同じ選び方なら済ませたとみなす（流れの名前を鍵に入れない）
-    tr.active, tr.index, tr.path = flows[0], 1, ["MemoryListUI/MemoryListGridSlot (Clone)#1"]
+    tr.active, tr.index, tr.path = flows[0], 1, ["AlbumUI/AlbumSlot (Clone)#1"]
     assert tr.is_done(1)

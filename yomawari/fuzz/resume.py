@@ -93,7 +93,7 @@ def newest_slots(texts: dict[str, str | None]) -> set[str]:
 
     日付が読めないスロットが1つでもあれば、どれも時刻だけで比べる（日付の読めたものが、読めなかったものより
     いつも新しくなってしまうため。run 2026-11-06_1418: 「8.2026 1F06 14:51:52」より「9. 2026-1-06 12:58:58」を選び、
-    B_004 から A_004 に戻った）。"""
+    前の章に戻った）。"""
     keys = {label: k for label, text in texts.items() if (k := stamp_key(text)) is not None}
     if not keys:
         return set()

@@ -14,12 +14,12 @@ def test_menu_and_modal_targets():
     ]))
     assert [t.key for t in s.targets()] == ["TitleUI/NewGameButton"]
 
-    s.feed(game("menu", name="RClickMenuUI", modal=True, buttons=[{"name": "ToSave", "rect": [0.8, 0.1, 0.9, 0.2]}]))
-    assert s.top_modal().name == "RClickMenuUI"
-    assert [t.key for t in s.targets()] == ["RClickMenuUI/ToSave"]
+    s.feed(game("menu", name="QuickMenuUI", modal=True, buttons=[{"name": "ToSave", "rect": [0.8, 0.1, 0.9, 0.2]}]))
+    assert s.top_modal().name == "QuickMenuUI"
+    assert [t.key for t in s.targets()] == ["QuickMenuUI/ToSave"]
     assert s.find("TitleUI/NewGameButton") is not None  # モーダルの下にあっても find では見つかる
 
-    s.feed(game("menu_close", name="RClickMenuUI"))
+    s.feed(game("menu_close", name="QuickMenuUI"))
     assert [t.key for t in s.targets()] == ["TitleUI/NewGameButton"]
 
 
@@ -32,10 +32,10 @@ def test_menu_update_keeps_order():
 
 
 def test_modal_without_buttons_blocks_targets():
-    # Rachel の CurtainUI（暗転）はボタン0個のモーダルとして出る。その間は押せるものがない
+    # 暗転の画面（自作の UI）はボタン0個のモーダルとして出る。その間は押せるものがない
     s = GameState()
     s.feed(game("menu", name="TitleUI", modal=False, buttons=[{"name": "b", "rect": [0, 0, 1, 1]}]))
-    s.feed(game("menu", name="CurtainUI", modal=True, buttons=[]))
+    s.feed(game("menu", name="BlackoutUI", modal=True, buttons=[]))
     assert s.targets() == []
 
 
@@ -68,8 +68,8 @@ def test_line_choices_transition_save():
 def test_choices_redisplayed_after_done_are_ignored():
     # run 2026-11-05_0921: 選んだあと消えていくボタンを、パッケージ 0.7.0 までは同じ id の choices で出し直し、
     # 消えたことは出さなかった。選択肢が出たままと思って、本文の行ごとに選択肢の位置を押し続けていた
-    items = [{"id": "8f51", "text": "レイチェルに話す", "rect": [0.03, 0.31, 0.97, 0.44], "locked": False},
-             {"id": "281c", "text": "レイチェルに話さない", "rect": [0.03, 0.45, 0.97, 0.58], "locked": False}]
+    items = [{"id": "8f51", "text": "彼女に話す", "rect": [0.03, 0.31, 0.97, 0.44], "locked": False},
+             {"id": "281c", "text": "彼女に話さない", "rect": [0.03, 0.45, 0.97, 0.58], "locked": False}]
     s = GameState()
     s.feed(game("choices", items=items))
     assert len(s.choices) == 2
@@ -78,7 +78,7 @@ def test_choices_redisplayed_after_done_are_ignored():
     assert s.choices == []
     assert [t.key for t in s.targets()] == []
     # 次の本文のあとの出し直しも無視する（run 2026-11-06_1757: 選んだあとの本文 160 行目のあとに 3 回出し直した）
-    s.feed(game("line", label="m", line_id="m:160.0", speaker=None, text="レイチェルには話さないことにした。"))
+    s.feed(game("line", label="m", line_id="m:160.0", speaker=None, text="彼女には話さないことにした。"))
     s.feed(game("choices", items=items))
     assert s.choices == []
     # ロード・scene の切り替えのあとは忘れる（同じ選択肢が出直したときは、選択肢として扱う）
@@ -86,7 +86,7 @@ def test_choices_redisplayed_after_done_are_ignored():
     s.feed(game("choices", items=items))
     assert len(s.choices) == 2
     s.feed(game("choices_done", id="8f51", index=0))
-    s.feed(game("scene", name="main/scenarioA_007"))
+    s.feed(game("scene", name="main/chapter1_07"))
     s.feed(game("choices", items=items))
     assert len(s.choices) == 2
 

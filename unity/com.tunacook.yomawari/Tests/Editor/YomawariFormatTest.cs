@@ -18,7 +18,7 @@ namespace Yomawari.Tests
         [Test]
         public void 文字列をJSONのリテラルにする ()
         {
-            Assert.AreEqual("\"レイチェル\"", YomawariFormat.Str("レイチェル"));
+            Assert.AreEqual("\"アオイ\"", YomawariFormat.Str("アオイ"));
             Assert.AreEqual("\"a\\\"b\\\\c\"", YomawariFormat.Str("a\"b\\c"));
             Assert.AreEqual("\"1\\n2\\r3\\t4\"", YomawariFormat.Str("1\n2\r3\t4"));
             Assert.AreEqual("\"\\u0001\"", YomawariFormat.Str("\u0001"));
