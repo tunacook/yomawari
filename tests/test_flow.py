@@ -942,3 +942,172 @@ steps = [
     # 質問の流れの中でも、同じ選び方なら済ませたとみなす（流れの名前を鍵に入れない）
     tr.active, tr.index, tr.path = flows[0], 1, ["AlbumUI/AlbumSlot (Clone)#1"]
     assert tr.is_done(1)
+
+
+ANSWER_PROFILE = """
+[[flow]]
+name = "選択肢で答える"
+start = { choices = true }
+steps = [{ choose = [], note = "選択肢で答える" }]
+answers = [{ at = "main/s1:1*", pick = ["いいえ"], note = "いいえが正解" }]
+"""
+YES_NO = [{"id": "a", "text": "はい", "rect": [0.4, 0.4, 0.6, 0.5]},
+          {"id": "b", "text": "いいえ", "rect": [0.4, 0.5, 0.6, 0.6]}]
+
+
+def _answer_session(cfg):
+    s, st, run, _ = _session({"ai_context_lines": 3, **cfg})
+    run.flow = FlowTracker(parse_flows(tomllib.loads(ANSWER_PROFILE)["flow"]))
+    return s, st, run
+
+
+def _line(s, st, line_id, text):
+    # 本文の行は、状態とハーネスの両方に流す（ハーネスは行を覚えて、プロファイルの正解の質問と照らす）
+    ev = Event("game", "line", {"line_id": line_id, "text": text}, 0)
+    st.feed(ev)
+    s.on_event(ev)
+
+
+def _ask_yes_no(s, st, line_id="main/s1:10"):
+    _feed(st, "choices_done")
+    _line(s, st, line_id, "どうする？")
+    _feed(st, "choices", items=YES_NO)
+
+
+def _choose(s, run, text, cid):
+    run.flow.pressed(f"choices/{text}", cid, True, text)
+    s._answered()
+
+
+def test_profile_answer_is_tried_first():
+    # プロファイルの正解（質問の行が at に当たる）を、ほかの候補より先に選ぶ
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    s, st, run = _answer_session({"wrong_answer_prob": 0.0})
+    _ask_yes_no(s, st)
+    w = _weights(s, st)
+    assert w["click choices/いいえ"] == click * k and w["click choices/はい"] == click
+    # 行が当たらない質問では、正解が分からない
+    s, st, run = _answer_session({"wrong_answer_prob": 0.0})
+    _ask_yes_no(s, st, "main/s2:10")
+    _weights(s, st)
+    assert s._answer_options({"はい", "いいえ"}, {"はい": "はい", "いいえ": "いいえ"}) is None
+    # answer_source が learn なら、プロファイルの正解を使わない
+    s, st, run = _answer_session({"wrong_answer_prob": 0.0, "answer_source": "learn"})
+    _ask_yes_no(s, st)
+    _weights(s, st)
+    assert s._answer_options({"はい", "いいえ"}, {"はい": "はい", "いいえ": "いいえ"}) is None
+
+
+def test_deliberate_wrong_answer_then_the_right_one():
+    # wrong_answer_prob の確率で、正解の前にわざと外れを答える。外れは wrong_answers_per_question 回まで、そのあと正解
+    k, low = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"]
+    click = FUZZ_DEFAULTS["weights"]["click"]
+    s, st, run = _answer_session({"wrong_answer_prob": 1.0})
+    _ask_yes_no(s, st)
+    w = _weights(s, st)
+    assert w["click choices/はい"] == click * k and w["click choices/いいえ"] == click
+    _choose(s, run, "はい", "a")
+    assert any("わざと外れを 1 回答えた" in n for n in run.flow.summary())
+    # 外れへの返事を読んで、同じ質問に戻った: 今度は正解
+    _feed(st, "choices_done")
+    _line(s, st, "main/s1:11", "ちがうよ")
+    _feed(st, "choices", items=YES_NO)
+    w = _weights(s, st)
+    # 外れと分かった「はい」は後回し
+    assert w["click choices/いいえ"] == click * k and w["click choices/はい"] == pytest.approx(click * low)
+    assert (("選択肢で答える", "main/s1:10"), ("はい",)) in run.flow.wrong
+    # 正解は、このランで一度答えて試し終えた枝でも選ぶ（タイトルから遊び直したなど）
+    _choose(s, run, "いいえ", "b")
+    assert (("選択肢で答える", "main/s1:10"), ("いいえ",)) in run.flow.leaves
+    s.cfg["wrong_answer_prob"] = 0.0
+    run.wrong_left.clear()  # タイトルに戻ったときと同じ
+    run.flow.title_returned()
+    _ask_yes_no(s, st)
+    w = _weights(s, st)
+    assert w["click choices/いいえ"] == click * k
+
+
+def test_right_answer_is_learned_and_unexpected_progress_is_noted():
+    # 答えたあと、同じ質問に戻らずに、ゲームが出した別の質問に着いたら、その答えを正解として覚える。
+    # わざと答えた外れでそうなったら、「ハーネスの記録」に書く（プロファイルの正解が古いか、ゲームの判定の不具合）
+    s, st, run = _answer_session({"wrong_answer_prob": 1.0})
+    _ask_yes_no(s, st)
+    _weights(s, st)
+    _choose(s, run, "はい", "a")
+    _feed(st, "choices_done")
+    for n in range(FUZZ_DEFAULTS["flow_retry_lines"] + 1):
+        _line(s, st, f"main/s2:{n}", "つづき")
+    _feed(st, "choices", items=YES_NO)
+    _weights(s, st)
+    assert run.flow.ctx == ("選択肢で答える", "main/s2:6")
+    assert (("選択肢で答える", "main/s1:10"), ("はい",)) in run.flow.right
+    notes = run.flow.summary()
+    assert any("外れのはずの答え（はい）のあと、同じ質問に戻らずに先へ進んだ" in n for n in notes)
+    assert any("このランで新しく正解と分かったのは 1 通り" in n for n in notes)
+
+
+def test_answer_is_not_judged_after_returning_to_title():
+    # 答えのあとタイトルに戻った（バッドエンドなど）なら、当たり外れは分からないので覚えない
+    s, st, run = _answer_session({"wrong_answer_prob": 0.0})
+    _ask_yes_no(s, st)
+    _weights(s, st)
+    _choose(s, run, "いいえ", "b")
+    run.flow.title_returned()
+    _feed(st, "choices_done")
+    for n in range(FUZZ_DEFAULTS["flow_retry_lines"] + 1):
+        _line(s, st, f"main/s2:{n}", "つづき")
+    _feed(st, "choices", items=YES_NO)
+    _weights(s, st)
+    assert not run.flow.right
+
+
+def test_learned_answer_is_used_when_source_is_learn():
+    # answer_source が learn なら、覚えた正解（flow_right）だけを使う
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    s, st, run = _answer_session({"wrong_answer_prob": 0.0, "answer_source": "learn"})
+    run.flow.right.add((("選択肢で答える", "main/s9:1"), ("はい",)))
+    _ask_yes_no(s, st, "main/s9:1")
+    w = _weights(s, st)
+    assert w["click choices/はい"] == click * k and w["click choices/いいえ"] == click
+
+
+def test_profile_answer_by_visible_text_and_press_answer():
+    # pick は、選ぶものの画面に見える文字で照らす。press は、選ぶ代わりに押すボタン（avoid に書いたものでも押す）
+    k, low = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"]
+    click = FUZZ_DEFAULTS["weights"]["click"]
+
+    def ask(answers):
+        s, st, run, _ = _session({"wrong_answer_prob": 0.0})
+        doc = tomllib.loads(PROFILE)
+        doc["flow"][0]["answers"] = answers
+        run.flow = FlowTracker(parse_flows(doc["flow"]))
+        _feed(st, "scene", name="main/s6")
+        _line(s, st, "main/s6:70", "ねぇ、どこだって？")
+        _only(st, "AlbumUI", LIST)
+        st.set_read_text({f"{SLOT}#1": "No.002 屋上 の 昼", SLOT: "No.001 教室", f"{SLOT}#2": "No.003 公園"})
+        return _weights(s, st)
+
+    w = ask([{"at": "main/s6:7*", "pick": ["*屋上の*", "空"]}])
+    assert w[f"click {SLOT}#1"] == click * k
+    assert w[f"click {SLOT}"] == click and w[f"click {SLOT}#2"] == click
+    w = ask([{"at": "main/s6:7*", "press": "AlbumUI/SelectButton"}])
+    assert w["click AlbumUI/SelectButton"] == click * k
+    w = ask([])
+    assert w["click AlbumUI/SelectButton"] == pytest.approx(click * low)
+
+
+def test_right_answers_are_remembered_across_runs(tmp_path):
+    from yomawari.fuzz.experience import Experience
+
+    path = tmp_path / "game.json"
+    exp = Experience(path)
+    tr = FlowTracker(_flows())
+    tr.remember(exp.flow_wrong, exp.flow_right)
+    tr.right.add((("選択肢で答える", "main/s1:10"), ("いいえ",)))
+    exp.save()
+    exp = Experience(path)
+    assert exp.flow_right == {(("選択肢で答える", "main/s1:10"), ("いいえ",))}
+    tr = FlowTracker(_flows())
+    tr.remember(exp.flow_wrong, exp.flow_right)
+    assert tr.known_right(("選択肢で答える", "main/s1:10")) == [("いいえ",)]
+    assert any("前のランまでに正解と分かっていた組み合わせは 1 通り" in n for n in tr.summary())
