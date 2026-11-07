@@ -903,3 +903,42 @@ def test_flow_records_its_factor_on_ops():
     goal = next(op for op in ops.values() if op.goal is not None)
     assert goal.why == (("flow", k),) and goal.target.name == "MemoryListGridSlot (Clone)"
     assert ops["click MemoryListUI/SelectButton"].why == (("flow", low),)
+
+
+def test_read_memory_is_remembered_across_flows_and_outside_them():
+    # 質問の流れで読んだ思い出（once の手順）は、ほかの流れ（once を書いていない「思い出を読む」）や流れの外でも
+    # 読み直さない（run 2026-11-07_1511: memories_6011 を 4 回、7021 を 3 回読んだ）
+    flows = parse_flows(tomllib.loads("""
+[[flow]]
+name = "質問"
+start = { screen = "MemoryListUI", by = "game" }
+steps = [
+  { screen = "MemoryListUI", press = "MemoryListGridSlot*" },
+  { screen = "MemorySummaryUI", press = "StartToMemoryScenario", once = true },
+  { screen = "MemorySummaryUI", press = "ShowFragmentListButton" },
+]
+
+[[flow]]
+name = "思い出を読む"
+start = { screen = "MemoryListUI", by = "harness" }
+steps = [
+  { screen = "MemoryListUI", press = "MemoryListGridSlot*" },
+  { screen = "MemorySummaryUI", press = "StartToMemoryScenario" },
+]
+""")["flow"])
+    tr = FlowTracker(flows)
+    read = ("MemorySummaryUI/StartToMemoryScenario", "StartToMemoryScenario", None)
+    # 流れの外で思い出 #1 を選んで読んだ
+    tr.seen("MemoryListUI/MemoryListGridSlot (Clone)#1", "MemoryListGridSlot (Clone)", None)
+    assert not tr.read_before(*read)
+    tr.seen(*read)
+    assert tr.read_before(*read)
+    # ほかの思い出を選んだら、まだ読んでいない
+    tr.seen("MemoryListUI/MemoryListGridSlot (Clone)#2", "MemoryListGridSlot (Clone)", None)
+    assert not tr.read_before(*read)
+    # #1 に戻れば読んだもの
+    tr.seen("MemoryListUI/MemoryListGridSlot (Clone)#1", "MemoryListGridSlot (Clone)", None)
+    assert tr.read_before(*read)
+    # 質問の流れの中でも、同じ選び方なら済ませたとみなす（流れの名前を鍵に入れない）
+    tr.active, tr.index, tr.path = flows[0], 1, ["MemoryListUI/MemoryListGridSlot (Clone)#1"]
+    assert tr.is_done(1)

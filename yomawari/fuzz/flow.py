@@ -106,6 +106,11 @@ class Flow:
         return {c.screen for c in (self.start, *(s.when for s in self.steps)) if c.screen}
 
 
+def _sig(step: Step) -> tuple:
+    """once の手順を、流れによらず同じものと見分ける鍵（画面・scene・押すボタン）。"""
+    return (step.when.screen, step.when.scene, step.press, step.text, step.advance)
+
+
 def front_screens(state: GameState) -> set[str]:
     """いま押せる画面の名前。"""
     top = state.top_modal()
@@ -296,7 +301,11 @@ class FlowTracker:
         self.path: list[str] = []
         self.options: dict[tuple[Ctx, Path], set[str]] = {}  # 選んだものの並び → 次の手順で選べたもの
         self.leaves: set[tuple[Ctx, Path]] = set()  # 最後まで進めた組み合わせ
-        self.done_once: set[tuple[str, int, Path]] = set()  # (流れ, 手順, 選んだものの並び) で済ませた once の手順
+        # (手順の中身, 選んだものの並び) で済ませた once の手順。流れの名前は入れない（同じ手順なら、どの流れで済ませても、
+        # 流れの外で済ませても同じ。run 2026-11-07_1511: 質問の流れで読んだ思い出を、「思い出を読む」の流れや流れの外で
+        # また読んだ）
+        self.done_once: set[tuple[tuple, Path]] = set()
+        self.last_pick: dict[str, str] = {}  # 画面 → 流れの選ぶ手順に当たるボタンで、最後に押して反応したもの（流れの外も）
         self.ctx_seen: set[Ctx] = set()
         self.last_done: Ctx | None = None  # 最後まで進めた（答えた）ときの質問
         self.last_leaf: tuple[Ctx, Path] | None = None  # 最後まで進めた（答えた）組み合わせ
@@ -383,14 +392,14 @@ class FlowTracker:
             if s.when.screen is None or not s.when.match(state, opened_by):
                 continue
             picks = self._picks_before(j)
-            if s.once and (flow.name, j, tuple(self.path[:picks])) in self.done_once:
+            if s.once and (_sig(s), tuple(self.path[:picks])) in self.done_once:
                 continue
             # 同じ画面に戻る手順が前にもあり、そのあいだに選ぶ手順がなければ、まだ済ませていない once の手順を先にする
             # （言葉の一覧から要約に戻ったとき、まだ読んでいない思い出なら「言葉を選ぶ」より「この思い出を読む」）
             for k in range(j):
                 e = flow.steps[k]
                 if (e.once and e.when.screen == s.when.screen and self._picks_before(k) == picks
-                        and (flow.name, k, tuple(self.path[:picks])) not in self.done_once):
+                        and (_sig(e), tuple(self.path[:picks])) not in self.done_once):
                     j, s = k, e
                     break
             self.index, self.path, self.idle_since = j, self.path[:picks], None
@@ -417,7 +426,7 @@ class FlowTracker:
         """手順 i が once で、いまの選び方で一度済ませたか。"""
         flow = self.active
         return (flow is not None and flow.steps[i].once
-                and (flow.name, i, tuple(self.path[:self._picks_before(i)])) in self.done_once)
+                and (_sig(flow.steps[i]), tuple(self.path[:self._picks_before(i)])) in self.done_once)
 
     def done_steps(self) -> list[Step]:
         """いまの選び方で済ませた once の手順（そのボタンは後回しにする）。"""
@@ -459,7 +468,7 @@ class FlowTracker:
         if self.ctx is None or not self.path or flow is None:
             return
         for i, s in enumerate(flow.steps[:self.index]):
-            if s.once and s.targets and (flow.name, i, tuple(self.path[:self._picks_before(i)])) not in self.done_once:
+            if s.once and s.targets and (_sig(flow.steps[i]), tuple(self.path[:self._picks_before(i)])) not in self.done_once:
                 return
         self.leaves.add((self.ctx, tuple(self.path)))
         self.dead.add((self.ctx, tuple(self.path)))
@@ -505,6 +514,46 @@ class FlowTracker:
         p = (*self.path, option)
         return (self.ctx, p) in self.options or (self.ctx, p) in self.leaves
 
+    def seen(self, label: str, name: str, text: str | None) -> None:
+        """ボタンを押して反応があった（流れの中でも外でも）。流れの選ぶ手順に当たるボタンなら、その画面で最後に選んだもの
+        として覚える。どれかの流れの once の手順のボタンなら、そのとき選んでいたもので済ませたと覚える。"""
+        for flow in self.flows:
+            for i, st in enumerate(flow.steps):
+                if not st.targets or st.when.screen is None or not label.startswith(st.when.screen + "/"):
+                    continue
+                if not st.presses(label, name, text):
+                    continue
+                if st.once:
+                    path = self._picked_before(flow, i)
+                    if path is not None:
+                        self.done_once.add((_sig(st), path))
+                elif st.picks:
+                    self.last_pick[st.when.screen] = label
+
+    def read_before(self, label: str, name: str, text: str | None) -> bool:
+        """どれかの流れの once の手順のボタンで、いま選んでいるもの（各画面で最後に選んだもの）で済ませたことがあるか
+        （読んだ思い出の「この思い出を読む」）。流れの外や、once を書いていない流れでも、押すのを後回しにするのに使う。"""
+        for flow in self.flows:
+            for i, st in enumerate(flow.steps):
+                if (st.once and st.targets and st.when.screen is not None and label.startswith(st.when.screen + "/")
+                        and st.presses(label, name, text)):
+                    path = self._picked_before(flow, i)
+                    if path is not None and (_sig(st), path) in self.done_once:
+                        return True
+        return False
+
+    def _picked_before(self, flow: Flow, i: int) -> Path | None:
+        """流れ flow の手順 i より前の選ぶ手順で、各画面で最後に選んだものの並び。分からない手順があれば None。"""
+        out: list[str] = []
+        for st in flow.steps[:i]:
+            if st.once or not st.picks:
+                continue
+            got = self.last_pick.get(st.when.screen) if st.when.screen is not None else None
+            if got is None:
+                return None
+            out.append(got)
+        return tuple(out)
+
     def pressed(self, label: str, name: str, responded: bool, choice_text: str | None = None,
                 text: str | None = None) -> None:
         """押した結果。手順のボタン（選択肢）で反応があれば、選んだものとして覚える。最後の手順なら、最後まで進めたとする。"""
@@ -516,7 +565,7 @@ class FlowTracker:
             for i, s in enumerate(flow.steps[:self.index]):
                 if (s.once and s.targets and (s.when.screen is None or label.startswith(s.when.screen + "/"))
                         and s.presses(label, name, text)):
-                    self.done_once.add((flow.name, i, tuple(self.path[:self._picks_before(i)])))
+                    self.done_once.add((_sig(flow.steps[i]), tuple(self.path[:self._picks_before(i)])))
         if choice_text is not None:
             if step.choose is None or (step.choose and not any(fnmatchcase(choice_text, p) for p in step.choose)):
                 return
@@ -528,7 +577,7 @@ class FlowTracker:
                 return
             picked = label
         if step.once:
-            self.done_once.add((flow.name, self.index, tuple(self.path[:self._picks_before(self.index)])))
+            self.done_once.add((_sig(step), tuple(self.path[:self._picks_before(self.index)])))
         elif step.picks:
             # 同じ手順で選び直したら置き換える（思い出を選んで反応があったが、要約が出ずに一覧のままだったなど）
             self.path = [*self.path[:self._picks_before(self.index)], picked]
