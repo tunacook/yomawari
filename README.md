@@ -189,7 +189,7 @@ yomawari run -p gacha --seed 42             # 乱数シードを固定して再�
 
 | 目的 | 見たいもの | 動き方 | モード | 重点的に見るルール |
 |---|---|---|---|---|
-| `play`（既定） | 通常のプレイ | 人が遊ぶように本編を先へ進め、寄り道は少なめ。進め方の経験を使う。質問の答えなどは、本文の文脈から AI（Ollama）に見当をつけさせて先に試す。壊れやすいタイミング（選択肢の直後・scene の境目など）に、ときどき（3%）エッジケースの操作を差し込む | random | |
+| `play`（既定） | 通常のプレイ | 人が遊ぶように本編を先へ進め、寄り道は少なめ。進め方の経験を使う。質問は、プロファイルに書いた正解で答え、ときどきわざと外れも答える（下の「質問の正解をプロファイルに書く」）。書いていない質問は、本文の文脈から AI（Ollama）に順位を付けさせて試す。壊れやすいタイミング（選択肢の直後・scene の境目など）に、ときどき（3%）エッジケースの操作を差し込む | random | |
 | `stuck` | 進行不能 | 本編を進めつつ、ロード・回想などの寄り道と行き来もする。進めなくなったら、抜け出す操作を試さずにそのまま記録して再起動する | random | S-02, S-03, S-01, H-01 |
 | `buttons` | ボタンの不具合 | 通常のプレイで進めながら、初めて来た画面で、ときどき 60 秒その画面のボタンを網羅的に押す（暗いボタンも押す。進め方の経験と AI の見当は使わない） | random | S-05, V-07, S-01 |
 | `gacha` | 落ちる・固まる操作 | 通常のプレイで進めながら、初めて来た画面・scene で、ときどき 60 秒その場で、壊れやすいタイミング（本文・選択肢・scene・演出・セーブ・ロード・質問に答えた直後）に連打・メニューの開け閉め・巻き戻しなどのイレギュラーな操作を多めに差し込む | random（区間は fuzz） | C-01〜04, H-01, L-01 |
@@ -197,6 +197,45 @@ yomawari run -p gacha --seed 42             # 乱数シードを固定して再�
 | `aging` | 放置したときの不具合 | 操作せずに起動したままにする | aging | H-01, L-01, C-01 |
 
 ルールの ID は `rules.yaml` を参照。`buttons` と `gacha` は、ゲームのプロファイルに書いたゲームの流れ（`[[flow]]`。[DESIGN.md §9「ゲームの流れ」](DESIGN.md)）を使わず、それ以外は流れに沿って進める。目的は `yomawari.toml` の `[purpose.<名前>]` で上書きしたり、新しく足したりできる（書き方は `yomawari.example.toml` のコメント）。`[purpose.<名前>.fuzz]` は `[fuzz]` の設定の上書きで、どの項目があるかも `yomawari.example.toml` に書いてある。目的ごとの動き方の考え方は [DESIGN.md §9「ランの目的」](DESIGN.md) を参照。
+
+### 質問の正解をプロファイルに書く
+質問に答えて進むゲーム（Rachel の「質問に言葉で答える」など）では、質問ごとの正解をゲームのプロファイル（`yomawari.profile.toml`）の `[[flow]]` に `answers` として書ける。書いておくと、組み合わせを総当たりせずに先へ進める。
+
+```toml
+[[flow]]
+name = "質問に言葉で答える"
+start = { screen = "MemoryListUI", by = "game" }
+steps = [
+  { screen = "MemoryListUI", press = "MemoryListGridSlot*", note = "開示済みの思い出を選ぶ" },        # 選ぶ手順 1
+  { screen = "MemorySummaryUI", press = "StartToMemoryScenario", once = true, note = "この思い出を読む" },
+  { scene = "memories/*", advance = true, once = true, note = "思い出を最後まで読む" },
+  { screen = "MemorySummaryUI", press = "ShowFragmentListButton", note = "言葉を選ぶ" },
+  { screen = "MemoryFragmentListUI", press = "MemoryFragmentListSlot*", note = "開示済みの言葉を選ぶ" }, # 選ぶ手順 2
+  { screen = "MemoryFragmentUI", press = "ShowDialogButton", note = "この言葉で答える" },
+  { screen = "FragmentSelectDialogUI", press = "Accept", note = "答えを決める" },
+]
+
+# ここから下は書き方の例（値は Rachel の質問を想定したもので、正解かどうかは確かめていない）
+[[flow.answers]]
+at = "main/scenarioA_004:44.0"   # 質問の本文の行（line_id。events.jsonl の line や report.md の「場所」に出る。ワイルドカード可）
+pick = ["No.050*", "屋上"]       # 選ぶ手順ごとに、選ぶものの画面に見える文字（思い出 → 言葉の順。ワイルドカード可）
+note = "屋上で呑み込んだ言葉を思い出す"
+
+[[flow.answers]]
+at = "main/scenarioA_006:*"      # 外れへの返事で質問の行が少しずれるときは、ワイルドカードでまとめる
+pick = ["No.020*", "玄関"]
+```
+
+| 項目 | 内容 |
+|---|---|
+| `at` | 質問の本文の行（`line_id`）。流れを始めたときの直近の本文の行のどれかが当たれば、その質問とする |
+| `pick` | 選ぶ手順（ワイルドカードで書いたボタン・選択肢を選ぶ手順。`once` の手順は数えない）ごとに、選ぶものの画面に見える文字。空白を除いて比べる。選択肢は本文で書く。ボタンの名前の番号（`#n`）はビルドで変わるので使わない |
+| `note` | 説明（レポートに出す） |
+
+- 正解を使うかはランの目的で決まる。`play` は書いた正解で答えるが、正解どおりの最短ばかりにならないよう、ときどき（30%）先にわざと外れを答えて、バッドエンドや外れの返事も確かめる。`rta` は外れを答えない。`stuck` は書いた正解を使わず、AI に順位を付けさせて答えを探す（[DESIGN.md §9「答えの選び方」](DESIGN.md)）
+- 書いていない質問は、AI に候補の順位を付けさせて試し、見つけた正解をハーネスが覚える（`runs/_experience/<ゲーム>.json`）
+- 選ぶ手順の数より多く `pick` を書くと、読み込むときにエラーになる
+- いまの実装は、書式の読み込みと確認まで。答えに使うのは、DESIGN.md §9「答えの選び方」の実装のあと
 
 ### そのほかのコマンド
 `yomawari --help` で一覧が出る。主なもの:

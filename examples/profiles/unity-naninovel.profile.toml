@@ -22,3 +22,40 @@ weight = 0.5
 [rules.L-01]
 # 既知で無害なエラー。直したら消す
 ignore_patterns = []
+
+# ゲームの流れ（DESIGN.md §9「ゲームの流れ」）。遊び方のサイクルを、どの画面で何をすると次に進むかで書く
+[[flow]]
+name = "質問に言葉で答える"
+start = { screen = "MemoryListUI", by = "game" }            # ゲームが思い出の一覧を開いたら（本編の質問）
+avoid = ["MemoryListUI/SelectButton", "MemorySummaryUI/CloseMemorySummary", "MemoryScenarioPlaying/OpenDialog"]
+steps = [
+  { screen = "MemoryListUI", press = "MemoryListGridSlot*", note = "開示済みの思い出を選ぶ" },
+  { screen = "MemorySummaryUI", press = "StartToMemoryScenario", once = true, note = "この思い出を読む" },
+  { scene = "memories/*", advance = true, once = true, note = "思い出を最後まで読む（言葉が開示される）" },
+  { screen = "MemorySummaryUI", press = "ShowFragmentListButton", note = "言葉を選ぶ" },
+  { screen = "MemoryFragmentListUI", press = "MemoryFragmentListSlot*", note = "開示済みの言葉を選ぶ" },
+  { screen = "MemoryFragmentUI", press = "ShowDialogButton", note = "この言葉で答える" },
+  { screen = "FragmentSelectDialogUI", press = "Accept", note = "答えを決める" },
+]
+
+# 質問ごとの正解（DESIGN.md §9「答えの選び方」）。書かなくてもよい（AI に順位を付けさせて試し、見つけた正解をハーネスが覚える）。
+# 使うかはランの目的で決まる（play: 使う。ときどきわざと外れも答える / rta: 使い、外れは答えない / stuck: 使わない）
+#   at:   質問の本文の行（line_id。events.jsonl の line や report.md の「場所」に出る。ワイルドカード可）
+#   pick: 選ぶ手順（上の steps のうち、ワイルドカードで書いたボタン。once の手順は数えない）ごとに、選ぶものの画面に見える文字
+#         （思い出 → 言葉の順。空白を除いて比べる。ワイルドカード可。ボタン名の番号 #n はビルドで変わるので使わない）
+# 下の値は書き方の例で、正解かどうかは確かめていない
+[[flow.answers]]
+at = "main/scenarioA_004:44.0"
+pick = ["No.050*", "屋上"]
+note = "例"
+
+[[flow]]
+name = "選択肢で答える"
+start = { choices = true }
+steps = [{ choose = true, note = "選択肢を選ぶ" }]
+
+# 選択肢の正解は、選択肢の本文で書く
+[[flow.answers]]
+at = "ending/badend_902:71.0"
+pick = ["レイチェルに話す"]
+note = "例"
