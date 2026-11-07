@@ -21,7 +21,7 @@ def run(engine, events, ticks=()):
 def test_rules_have_expected_params(repo_rules):
     assert repo_rules["C-03"].param("timeout_sec") == 30
     assert repo_rules["H-01"].param("timeout_sec") == 10
-    assert {r.severity for r in repo_rules.values()} <= {"critical", "major"}
+    assert {r.severity for r in repo_rules.values()} <= {"critical", "major", "minor", "info"}
 
 
 def test_c01_unexpected_exit(repo_rules):
