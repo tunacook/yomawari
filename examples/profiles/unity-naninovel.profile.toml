@@ -1,11 +1,12 @@
-# Unity + Naninovel のゲームのプロファイルの例（Rachel を想定）
+# Unity + Naninovel のノベルゲームのプロファイルの例
 # 仕様: DESIGN.md §9「ゲーム固有の仕様」③。考え方は examples/profiles/README.md
+# 画面・ボタン・scene の名前は例。自分のゲームの GameObject の名前と、Naninovel のスクリプトの名前に読み替える
 #
 # ゲームのコードには何も足さない。ボタンの役割や押せない条件は、プロファイルにも書かない。
-#   - Naninovel の標準の部品（終了・タイトルへ・設定のドロップダウンなど）→ パッケージが自動で読み取る（①）
+#   - Naninovel の標準の部品（終了・タイトルへ・設定のドロップダウン・選択肢など）→ パッケージが自動で読み取る（①）
 #   - 自作の終了ボタン・Web サイトのボタン・タイトルへ戻るボタン → ハーネスが文字・名前（見た目は未実装）から推定し、押した結果で確定する（②）
-#   - 劇中でアンロックされるまで押せない回想のスロット → 押しても反応しないボタンとして、ハーネスが後回しにし、S-05 の対象にしない（②）
-#   - 回想一覧の ScrollRect → パッケージが hidden / scroll を出し、ハーネスがドラッグ・方向キーを試す
+#   - 本編を進めるまで押せない CG・回想のスロット → 押しても反応しないボタンとして、ハーネスが後回しにし、S-05 の対象にしない（②）
+#   - 一覧の ScrollRect → パッケージが hidden / scroll を出し、ハーネスがドラッグ・方向キーを試す
 
 [guard.roles]
 # 役割ごとの区分を、既定値（DESIGN.md §9 ガード）から変えるときだけ書く。
@@ -15,47 +16,63 @@
 # 推定も確定もできないうちに押してはいけないもの（課金、データの送信など）だけ、"<menu の name>/<ボタンの name>" で書く。
 # deny = ["TitleUI/ShopButton"]
 
-[screens.MemoryListUI]
-# 回想一覧。ボタンが多く、総当たりに時間がかかるので、ほかの画面より押されにくくする
+[screens.CGGalleryUI]
+# CG・回想の一覧。ボタンが多く、総当たりに時間がかかるので、ほかの画面より押されにくくする
 weight = 0.5
 
 [rules.L-01]
 # 既知で無害なエラー。直したら消す
 ignore_patterns = []
 
-# ゲームの流れ（DESIGN.md §9「ゲームの流れ」）。遊び方のサイクルを、どの画面で何をすると次に進むかで書く
-[[flow]]
-name = "質問に言葉で答える"
-start = { screen = "MemoryListUI", by = "game" }            # ゲームが思い出の一覧を開いたら（本編の質問）
-avoid = ["MemoryListUI/SelectButton", "MemorySummaryUI/CloseMemorySummary", "MemoryScenarioPlaying/OpenDialog"]
-steps = [
-  { screen = "MemoryListUI", press = "MemoryListGridSlot*", note = "開示済みの思い出を選ぶ" },
-  { screen = "MemorySummaryUI", press = "StartToMemoryScenario", once = true, note = "この思い出を読む" },
-  { scene = "memories/*", advance = true, once = true, note = "思い出を最後まで読む（言葉が開示される）" },
-  { screen = "MemorySummaryUI", press = "ShowFragmentListButton", note = "言葉を選ぶ" },
-  { screen = "MemoryFragmentListUI", press = "MemoryFragmentListSlot*", note = "開示済みの言葉を選ぶ" },
-  { screen = "MemoryFragmentUI", press = "ShowDialogButton", note = "この言葉で答える" },
-  { screen = "FragmentSelectDialogUI", press = "Accept", note = "答えを決める" },
-]
-
-# 質問ごとの正解（DESIGN.md §9「答えの選び方」）。書かなくてもよい（AI に順位を付けさせて試し、見つけた正解をハーネスが覚える）。
+# ゲームの流れ（DESIGN.md §9「ゲームの流れ」）。遊び方のサイクルを、どの画面で何をすると次に進むかで書く。
+# 質問ごとの正解（answers）は書かなくてもよい（AI に順位を付けさせて試し、見つけた正解をハーネスが覚える）。
 # 使うかはランの目的で決まる（play: 使う。ときどきわざと外れも答える / rta: 使い、外れは答えない / stuck: 使わない）
-#   at:   質問の本文の行（line_id。events.jsonl の line や report.md の「場所」に出る。ワイルドカード可）
-#   pick: 選ぶ手順（上の steps のうち、ワイルドカードで書いたボタン。once の手順は数えない）ごとに、選ぶものの画面に見える文字
-#         （思い出 → 言葉の順。空白を除いて比べる。ワイルドカード可。ボタン名の番号 #n はビルドで変わるので使わない）
-# 下の値は書き方の例で、正解かどうかは確かめていない
-[[flow.answers]]
-at = "main/scenarioA_004:44.0"
-pick = ["No.050*", "屋上"]
-note = "例"
+#   at:   質問の本文の行（line_id。events.jsonl の line や report.md の「場所」に出る。ワイルドカード可）。
+#         外れへの返事のあとに出し直す質問のように、行がいくつもあるときは配列で書く。正解がいくつもあれば answers を並べる
+#   pick: 選ぶ手順（steps のうち、ワイルドカードで書いたボタン・選択肢。once の手順は数えない）ごとに、選ぶものの画面に見える文字
+#         （空白を除いて比べる。ワイルドカード可。ボタン名の番号 #n はビルドで変わるので使わない）
+#   press: 何も選ばずに閉じるのが正解のときなど、選ぶ手順の代わりに押すボタン（steps の press と同じ書き方）。pick とどちらか一方
+# 下の値は書き方の例
 
+# 本編の選択肢（Naninovel の @choice / @addChoice）。正解は選択肢の本文で書く
 [[flow]]
 name = "選択肢で答える"
 start = { choices = true }
 steps = [{ choose = true, note = "選択肢を選ぶ" }]
 
-# 選択肢の正解は、選択肢の本文で書く
 [[flow.answers]]
-at = "ending/badend_902:71.0"
-pick = ["レイチェルに話す"]
-note = "例"
+at = "main/chapter1:120.0"                 # 選択肢の直前の本文の行
+pick = ["彼女を追いかける"]
+note = "「ここで待つ」はバッドエンド"
+
+[[flow.answers]]
+# バッドエンドから選択肢へ直接戻るゲームでは、戻ったときの直近の行はバッドエンドの最後の行になる。それも並べる
+at = ["main/chapter3:88.0", "ending/badend_03:41.0"]
+pick = ["鍵を渡さない"]
+
+# 推理パートで、ゲームが開いた証拠の一覧から、証拠を選んで突きつける（自作の画面）
+[[flow]]
+name = "証拠を突きつける"
+start = { screen = "EvidenceListUI", by = "game" }   # ゲームが開いた一覧だけ（メニューからハーネスが開いた一覧では始めない）
+avoid = ["EvidenceListUI/CloseButton"]
+steps = [
+  { screen = "EvidenceListUI", press = "EvidenceSlot*", note = "証拠を選ぶ" },     # 選ぶ手順 1
+  { screen = "EvidenceDetailUI", press = "PresentButton", note = "突きつける" },
+]
+
+[[flow.answers]]
+# 外れると「それは関係ないだろう」と言われて、同じ一覧が出直す。返事の最後の行も並べる
+at = ["main/chapter2:310.0", "main/chapter2:331.0"]
+pick = ["血の付いたハンカチ"]
+note = "第 2 章の推理: アリバイを崩す"
+
+# 正解がいくつもある質問は、同じ at で answers を並べる
+[[flow.answers]]
+at = ["main/chapter2:310.0", "main/chapter2:331.0"]
+pick = ["駅の防犯カメラの映像"]
+
+# 何も選ばずに一覧を閉じるのが正解の質問は、pick の代わりに、押すボタンを press に書く（avoid に書いたボタンでも押す）
+[[flow.answers]]
+at = "main/chapter4:52.0"
+press = "EvidenceListUI/CloseButton"
+note = "ここでは何も突きつけない"

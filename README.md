@@ -199,37 +199,51 @@ yomawari run -p gacha --seed 42             # 乱数シードを固定して再�
 ルールの ID は `rules.yaml` を参照。`buttons` と `gacha` は、ゲームのプロファイルに書いたゲームの流れ（`[[flow]]`。[DESIGN.md §9「ゲームの流れ」](DESIGN.md)）を使わず、それ以外は流れに沿って進める。目的は `yomawari.toml` の `[purpose.<名前>]` で上書きしたり、新しく足したりできる（書き方は `yomawari.example.toml` のコメント）。`[purpose.<名前>.fuzz]` は `[fuzz]` の設定の上書きで、どの項目があるかも `yomawari.example.toml` に書いてある。目的ごとの動き方の考え方は [DESIGN.md §9「ランの目的」](DESIGN.md) を参照。
 
 ### 質問の正解をプロファイルに書く
-質問に答えて進むゲーム（Rachel の「質問に言葉で答える」など）では、質問ごとの正解をゲームのプロファイル（`yomawari.profile.toml`）の `[[flow]]` に `answers` として書ける。書いておくと、組み合わせを総当たりせずに先へ進める。
+選択肢や、推理パートで証拠を選ぶ画面のように、答えを選んで進むゲームでは、質問ごとの正解をゲームのプロファイル（`yomawari.profile.toml`）の `[[flow]]` に `answers` として書ける。書いておくと、組み合わせを総当たりせずに先へ進める。下の画面・ボタン・scene の名前は例（[examples/profiles/unity-naninovel.profile.toml](examples/profiles/unity-naninovel.profile.toml)）。
 
 ```toml
+# 本編の選択肢。正解は選択肢の本文で書く
 [[flow]]
-name = "質問に言葉で答える"
-start = { screen = "MemoryListUI", by = "game" }
+name = "選択肢で答える"
+start = { choices = true }
+steps = [{ choose = true, note = "選択肢を選ぶ" }]  # 選ぶ手順 1
+
+[[flow.answers]]
+at = "main/chapter1:120.0"       # 質問の本文の行（line_id。events.jsonl の line や report.md の「場所」に出る。ワイルドカード可）
+pick = ["彼女を追いかける"]       # 選ぶ手順ごとに、選ぶものの画面に見える文字
+note = "「ここで待つ」はバッドエンド"
+
+# 推理パートで、ゲームが開いた証拠の一覧から、証拠を選んで突きつける（自作の画面）
+[[flow]]
+name = "証拠を突きつける"
+start = { screen = "EvidenceListUI", by = "game" }
 steps = [
-  { screen = "MemoryListUI", press = "MemoryListGridSlot*", note = "開示済みの思い出を選ぶ" },        # 選ぶ手順 1
-  { screen = "MemorySummaryUI", press = "StartToMemoryScenario", once = true, note = "この思い出を読む" },
-  { scene = "memories/*", advance = true, once = true, note = "思い出を最後まで読む" },
-  { screen = "MemorySummaryUI", press = "ShowFragmentListButton", note = "言葉を選ぶ" },
-  { screen = "MemoryFragmentListUI", press = "MemoryFragmentListSlot*", note = "開示済みの言葉を選ぶ" }, # 選ぶ手順 2
-  { screen = "MemoryFragmentUI", press = "ShowDialogButton", note = "この言葉で答える" },
-  { screen = "FragmentSelectDialogUI", press = "Accept", note = "答えを決める" },
+  { screen = "EvidenceListUI", press = "EvidenceSlot*", note = "証拠を選ぶ" },  # 選ぶ手順 1
+  { screen = "EvidenceDetailUI", press = "PresentButton", note = "突きつける" },
 ]
 
-# ここから下は書き方の例（値は Rachel の質問を想定したもので、正解かどうかは確かめていない）
 [[flow.answers]]
-at = "main/scenarioA_004:44.0"   # 質問の本文の行（line_id。events.jsonl の line や report.md の「場所」に出る。ワイルドカード可）
-pick = ["No.050*", "屋上"]       # 選ぶ手順ごとに、選ぶものの画面に見える文字（思い出 → 言葉の順。ワイルドカード可）
-note = "屋上で呑み込んだ言葉を思い出す"
+# 外れへの返事のあとに同じ一覧を出し直すなど、質問の行がいくつもあるときは配列で書く
+at = ["main/chapter2:310.0", "main/chapter2:331.0"]
+pick = ["血の付いたハンカチ"]
 
+# 正解がいくつもある質問は、同じ at で answers を並べる
 [[flow.answers]]
-at = "main/scenarioA_006:*"      # 外れへの返事で質問の行が少しずれるときは、ワイルドカードでまとめる
-pick = ["No.020*", "玄関"]
+at = ["main/chapter2:310.0", "main/chapter2:331.0"]
+pick = ["駅の防犯カメラの映像"]
+
+# 何も選ばずに一覧を閉じるのが正解の質問は、pick の代わりに、押すボタンを press に書く
+[[flow.answers]]
+at = "main/chapter4:52.0"
+press = "EvidenceListUI/CloseButton"
+note = "ここでは何も突きつけない"
 ```
 
 | 項目 | 内容 |
 |---|---|
-| `at` | 質問の本文の行（`line_id`）。流れを始めたときの直近の本文の行のどれかが当たれば、その質問とする |
+| `at` | 質問の本文の行（`line_id`。ワイルドカード可）。いくつもあるときは配列で書く。流れを始めたときの直近の本文の行のどれかが当たれば、その質問とする |
 | `pick` | 選ぶ手順（ワイルドカードで書いたボタン・選択肢を選ぶ手順。`once` の手順は数えない）ごとに、選ぶものの画面に見える文字。空白を除いて比べる。選択肢は本文で書く。ボタンの名前の番号（`#n`）はビルドで変わるので使わない |
+| `press` | 何も選ばずに一覧を閉じるのが正解のときなど、選ぶ手順の代わりに押すボタン（`steps` の `press` と同じ書き方）。`pick` とどちらか一方だけ書く。`avoid` に書いたボタンでも、正解として押す |
 | `note` | 説明（レポートに出す） |
 
 - 正解を使うかはランの目的で決まる。`play` は書いた正解で答えるが、正解どおりの最短ばかりにならないよう、ときどき（30%）先にわざと外れを答えて、バッドエンドや外れの返事も確かめる。`rta` は外れを答えない。`stuck` は書いた正解を使わず、AI に順位を付けさせて答えを探す（[DESIGN.md §9「答えの選び方」](DESIGN.md)）
