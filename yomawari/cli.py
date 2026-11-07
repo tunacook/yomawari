@@ -12,6 +12,7 @@ import shlex
 import shutil
 import sys
 import traceback
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ from rich.text import Text
 from . import launcher
 from .config import BuildConfig, Config, ConfigError, find_config_path, normalize_path_input, stdin_is_tty
 from .detect.engine import Rule, RuleError, load_rules
+from .fuzz.experience import SECTIONS, experience_path, forget, section_sizes
 from .fuzz.roles import RoleBook, load_role_hints
 from .platform import Platform, get_platform
 from .profile import apply_rules, load_spec
@@ -51,8 +53,10 @@ app = typer.Typer(
 )
 builds_app = typer.Typer(no_args_is_help=True, help="ビルドの登録と確認")
 schedule_app = typer.Typer(no_args_is_help=True, help="launchd による定時実行の設定")
+experience_app = typer.Typer(no_args_is_help=True, help="ランをまたいで覚えたこと（経験の蓄積）の管理")
 app.add_typer(builds_app, name="builds")
 app.add_typer(schedule_app, name="schedule")
+app.add_typer(experience_app, name="experience")
 
 def setup_logging(verbose: bool) -> None:
     # ルートロガーには触らず yomawari 配下だけ設定する（依存ライブラリのログや pytest の caplog を壊さない）
@@ -142,6 +146,11 @@ def register_interactive(cfg: Config, plat: Platform, rules: dict[str, Rule]) ->
 # --- run ---
 
 
+def _game_name(profile_path: Path | None, b: BuildConfig) -> str:
+    """経験の集計ファイルの <ゲーム>: プロファイルがあればその親ディレクトリ名、なければビルドの名前（DESIGN.md §9）。"""
+    return profile_path.parent.name if profile_path else b.name
+
+
 def _status_text(s: dict[str, Any]) -> Text:
     e = int(s["elapsed"])
     c = s["counts"]
@@ -187,6 +196,11 @@ def run(
         None, "--display-off/--no-display-off",
         help="ゲームが起動したあと、画面（ディスプレイ）を消す（macOS: pmset displaysleepnow）。既定は yomawari.toml の run.display_off",
     ),
+    forget_all: bool = typer.Option(
+        False, "--forget",
+        help="ランを始める前に、そのゲームで覚えたこと（runs/_experience/<ゲーム>.json）をすべて消す（.bak-<日時> に写してから）。"
+             "一部だけ消すときは yomawari experience forget",
+    ),
 ) -> None:
     """ビルドを起動して監視し、report.md を出力する。"""
     if mode is not None and mode not in MODES:
@@ -218,8 +232,16 @@ def run(
     if spec.profile_path:
         console.print(f"プロファイル: {spec.profile_path}")
     # ボタンの役割の推定と確定（DESIGN.md §9「役割の推定と判定」）。ランをまたいで runs/_experience/<ゲーム>.json に覚える
-    game = spec.profile_path.parent.name if spec.profile_path else b.name
-    roles = RoleBook(load_role_hints(cfg.rules_path), cfg.runs_dir / "_experience" / f"{game}.json")
+    game = _game_name(spec.profile_path, b)
+    forget_note = None
+    if forget_all:
+        done = forget(experience_path(cfg.runs_dir, game), None, datetime.now().strftime("%Y%m%d-%H%M%S"))
+        if done.backup is None:
+            forget_note = f"--forget: 覚えたことはなかった（{game}）"
+        else:
+            forget_note = f"--forget: ランの前に、覚えたこと（{game}）をすべて消した。消す前の写し: {done.backup}"
+        console.print(forget_note)
+    roles = RoleBook(load_role_hints(cfg.rules_path), experience_path(cfg.runs_dir, game))
 
     rc = cfg.run
     dark = bool(rc["display_off"] if display_off is None else display_off)
@@ -251,6 +273,8 @@ def run(
         roles=roles,
         judge_cfg=cfg.judge,
     )
+    if forget_note:
+        harness.notes.append(forget_note)  # レポートの「ハーネスの記録」に、学習を消してから回したことを残す
     if live:
         with live:
             result = asyncio.run(harness.run(opts))
@@ -518,6 +542,63 @@ def restore(ctx: typer.Context) -> None:
         console.print("未復元の退避はありません")
     for n in notes:
         console.print(f"  {n}")
+
+
+@experience_app.command("forget")
+def experience_forget(
+    ctx: typer.Context,
+    build: str | None = typer.Option(None, "--build", "-b", help="登録済みビルドの名前（そのゲームの経験を消す）"),
+    game: str | None = typer.Option(None, "--game", help="runs/_experience/<ゲーム>.json の <ゲーム>（--build の代わり）"),
+    roles: bool = typer.Option(False, "--roles", help="ボタンの役割だけ消す"),
+    progress: bool = typer.Option(False, "--progress", help="進行につながった操作・巻き戻した操作だけ消す"),
+    flow_wrong: bool = typer.Option(False, "--flow-wrong", help="ゲームの流れで外れと分かった答えだけ消す"),
+    flow_right: bool = typer.Option(False, "--flow-right", help="ゲームの流れで正解と分かった答えだけ消す"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="確認せずに消す"),
+) -> None:
+    """ランをまたいで覚えたこと（runs/_experience/<ゲーム>.json）を消す。消す前に .bak-<日時> に写す。
+
+    節を指定しなければ、すべて消す。ハーネスの仕様が変わったときや、ボタンの並びが変わるビルドで、覚えたことが
+    合わなくなったときに使う。"""
+    cfg = _config(ctx)
+    if game is None:
+        b = cfg.resolve_build(build, None)
+        if b is None:
+            err.print("[red]ビルドを --build で指定するか、--game でゲームの名前を指定してください"
+                      "（yomawari.toml の default_build でもよい）[/]")
+            raise typer.Exit(EXIT_HARNESS_ERROR)
+        game = _game_name(load_spec(cfg, b).profile_path, b)
+    path = experience_path(cfg.runs_dir, game)
+    if not path.exists():
+        names = sorted(p.stem for p in path.parent.glob("*.json")) if path.parent.exists() else []
+        console.print(f"覚えたことはありません: {path}")
+        if names:
+            console.print(f"  ある経験: {', '.join(names)}（--game で指定する）")
+        return
+    chosen = [k for k, on in (("roles", roles), ("progress", progress), ("flow_wrong", flow_wrong),
+                              ("flow_right", flow_right)) if on]
+    sizes = section_sizes(path)
+    targets = chosen or list(sizes)
+    console.print(f"消すもの（{path}）:")
+    for key in targets:
+        console.print(f"  {SECTIONS.get(key, key)}（{key}）: {sizes.get(key, 0)} 件")
+    if not chosen:
+        console.print("  （ファイルごと消します）")
+    if not yes:
+        if not stdin_is_tty():
+            err.print("[red]確認には対話入力が必要です。確認せずに消すなら --yes を付けてください[/]")
+            raise typer.Exit(EXIT_HARNESS_ERROR)
+        if Prompt.ask("消しますか", choices=["y", "n"], default="n") != "y":
+            console.print("消しませんでした")
+            return
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    try:
+        done = forget(path, chosen or None, stamp)
+    except (OSError, ValueError) as e:
+        err.print(f"[red]消せませんでした: {e}[/]")
+        raise typer.Exit(EXIT_HARNESS_ERROR) from None
+    what = "ファイルごと" if done.deleted else "、".join(f"{SECTIONS.get(k, k)} {n} 件" for k, n in done.removed.items())
+    console.print(f"[green]消しました[/]: {what or '（該当する節はありませんでした）'}")
+    console.print(f"  消す前の写し: {done.backup}")
 
 
 def main() -> None:

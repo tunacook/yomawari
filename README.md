@@ -259,6 +259,7 @@ note = "ここでは何も突きつけない"
 | `yomawari doctor` | 権限・設定・Ollama などの準備ができているか確かめる |
 | `yomawari builds` | 登録済みのビルドを一覧する（`builds add` で登録） |
 | `yomawari restore` | ランが途中で止まったときに、退避したセーブ・設定を戻す |
+| `yomawari experience forget` | ランをまたいで覚えたこと（`runs/_experience/<ゲーム>.json`）を消す。ハーネスの仕様が大きく変わったときなどに使う。`yomawari run --forget` でも、ランの前にすべて消せる |
 
 ## 補足
 - Ollama（画像の判定）は入れなくても動く（環境構築の 7）。
