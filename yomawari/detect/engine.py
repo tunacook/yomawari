@@ -2,6 +2,7 @@
 
 フェーズ1で C-01〜03・H-01・L-01、フェーズ2で C-04・S-01〜03・S-05 を実装した。
 S 系は、ファジングのループ（fuzz/loop.py）が出す op / op_result / exit_expected イベントと、ゲームのイベントから判定する。
+R 系（パフォーマンス）は detect/perf.py の PerfMonitor でまとめて判定する（rules.yaml の perf に共通の設定がいる）。
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from typing import Any
 import yaml
 
 from ..events import SEVERITIES, Event, Issue
+from .perf import PERF_RULES, PerfMonitor
 
 
 class RuleError(ValueError):
@@ -461,10 +463,16 @@ DETECTORS: dict[str, Callable[[Rule], Detector]] = {
 
 
 class Engine:
-    def __init__(self, rules: dict[str, Rule]) -> None:
+    def __init__(self, rules: dict[str, Rule], perf: dict[str, Any] | None = None) -> None:
+        """perf: rules.yaml の perf（パフォーマンスの判定で共通の設定）。なければ R 系は評価しない。"""
         self.rules = rules
-        self.detectors = [DETECTORS[r.id](r) for r in rules.values() if r.id in DETECTORS]
-        self.unimplemented = [r.id for r in rules.values() if r.id not in DETECTORS]
+        self.detectors: list[Any] = [DETECTORS[r.id](r) for r in rules.values() if r.id in DETECTORS]
+        perf_rules = {r.id: r for r in rules.values() if r.id in PERF_RULES}
+        self.perf = PerfMonitor(perf_rules, perf) if perf_rules and perf is not None else None
+        if self.perf is not None:
+            self.detectors.append(self.perf)
+        self.unimplemented = [r.id for r in rules.values() if r.id not in DETECTORS
+                              and not (self.perf is not None and r.id in perf_rules)]
 
     def feed(self, ev: Event) -> list[Issue]:
         out: list[Issue] = []
@@ -477,6 +485,10 @@ class Engine:
         for d in self.detectors:
             out.extend(d.on_tick(now, launch))
         return out
+
+    def finish(self, now: float, wall: str = "") -> list[Issue]:
+        """ランの終わりに判定するもの（R-09・R-10）。"""
+        return self.perf.finish(now, wall) if self.perf is not None else []
 
     def silent_buttons(self) -> dict[str, int]:
         """S-05 が見た、一度も反応しなかったボタンと押した回数。"""

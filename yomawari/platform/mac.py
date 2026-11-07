@@ -43,6 +43,48 @@ def parse_screen_lock(out: str) -> str | None:
     return None
 
 
+# NSProcessInfo.thermalState の値 → 名前（DESIGN.md §10「パフォーマンス」）
+THERMAL_NAMES = ("nominal", "fair", "serious", "critical")
+# kern.memorystatus_vm_pressure_level の値 → 名前
+PRESSURE_NAMES = {1: "normal", 2: "warning", 4: "critical"}
+
+
+def parse_gpu_time(plist: bytes, pid: int) -> int | None:
+    """`ioreg -r -c AGXDeviceUserClient -d 1 -a` の出力から、pid が GPU を使った累計時間（ns）を足し合わせる。
+    pid の項目がなければ None（GPU をまだ使っていない、または Apple の GPU でない）。"""
+    try:
+        entries = plistlib.loads(plist)
+    except (plistlib.InvalidFileException, ValueError):
+        return None
+    total, found = 0, False
+    for e in entries if isinstance(entries, list) else []:
+        m = re.match(r"pid (\d+),", str(e.get("IOUserClientCreator", "")))
+        if not m or int(m.group(1)) != pid:
+            continue
+        found = True
+        total += sum(int(u.get("accumulatedGPUTime", 0)) for u in e.get("AppUsage") or [])
+    return total if found else None
+
+
+def parse_gpu_device(plist: bytes) -> float | None:
+    """`ioreg -r -c IOAccelerator -d 1 -a` の出力から、GPU 全体の使用率（%）。"""
+    try:
+        entries = plistlib.loads(plist)
+    except (plistlib.InvalidFileException, ValueError):
+        return None
+    vals = [e.get("PerformanceStatistics", {}).get("Device Utilization %")
+            for e in entries if isinstance(entries, list) and isinstance(e, dict)]
+    vals = [float(v) for v in vals if v is not None]
+    return max(vals) if vals else None
+
+
+def _ioreg(cls: str) -> bytes:
+    try:
+        return subprocess.run(["ioreg", "-r", "-c", cls, "-d", "1", "-a"], capture_output=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return b""
+
+
 def app_bundle_of(exe: str) -> str | None:
     """実行ファイルのパスから、いちばん外側の .app を返す（VS Code の Helper.app などは外側のアプリにまとめる）。"""
     head, sep, _ = exe.partition(".app/")
@@ -389,6 +431,58 @@ class MacPlatform:
         except (OSError, subprocess.SubprocessError):
             return None
         return parse_screen_lock(r.stdout + r.stderr)
+
+    def machine(self) -> str:
+        """機種名（MacBookPro18,3 など）。前回までのランと比べるときに、同じマシンかを見る。"""
+        try:
+            return subprocess.run(["sysctl", "-n", "hw.model"], capture_output=True, text=True, timeout=5).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+
+    def perf_stats(self, pid: int) -> dict:
+        """パフォーマンスの判定に使う、ゲームの GPU とマシンの状態（DESIGN.md §10「パフォーマンス」）。sudo は要らない。
+
+        - gpu_ns: ゲームが GPU を使った累計時間（ioreg の AGXDeviceUserClient の accumulatedGPUTime）
+        - gpu_device: GPU 全体の使用率（%）
+        - thermal: 熱の状態（nominal / fair / serious / critical）
+        - pressure: メモリの逼迫度（normal / warning / critical）
+        - asleep: 画面が消えている / locked: 画面がロックされている
+        - front: ゲームが前面にある / on_screen: ゲームのウィンドウが画面に出ている（最小化・隠れていない）
+        分からない値は None。
+        """
+        out: dict = {
+            "gpu_ns": parse_gpu_time(_ioreg("AGXDeviceUserClient"), pid),
+            "gpu_device": parse_gpu_device(_ioreg("IOAccelerator")),
+            "thermal": None, "pressure": None, "asleep": None, "locked": self.screen_locked(),
+            "front": None, "on_screen": None,
+        }
+        try:
+            from Foundation import NSProcessInfo
+
+            state = int(NSProcessInfo.processInfo().thermalState())
+            out["thermal"] = THERMAL_NAMES[state] if 0 <= state < len(THERMAL_NAMES) else None
+        except Exception:
+            pass
+        try:
+            level = int(subprocess.run(["sysctl", "-n", "kern.memorystatus_vm_pressure_level"],
+                                       capture_output=True, text=True, timeout=5).stdout.strip())
+            out["pressure"] = PRESSURE_NAMES.get(level)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+        try:
+            import Quartz
+
+            out["asleep"] = bool(Quartz.CGDisplayIsAsleep(Quartz.CGMainDisplayID()))
+        except Exception:
+            pass
+        front = self.frontmost_pid()
+        out["front"] = None if front is None else front == pid
+        try:
+            win = self.window_info(pid)
+            out["on_screen"] = None if win is None else win.on_screen
+        except Exception:
+            pass
+        return out
 
     def activate(self, pid: int) -> None:
         from AppKit import NSApplicationActivateAllWindows, NSRunningApplication

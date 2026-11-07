@@ -7,6 +7,7 @@ fuzz / random モードでは、起動ごとに FuzzSession（fuzz/loop.py）を
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import platform as pyplatform
 import random
@@ -24,6 +25,8 @@ from . import __version__, launcher
 from .bus import EventBus
 from .config import BuildConfig
 from .detect.engine import Engine, Rule, RuleError
+from .detect.perf import load_history, load_perf
+from .judge import ollama
 from .events import Event, Issue, now_wall
 from .fuzz.decider import RandomDecider
 from .fuzz.advisor import ChoiceAdvisor
@@ -86,6 +89,14 @@ def new_run_dir(runs_dir: Path, build_name: str) -> Path:
     return p
 
 
+def _optional(platform: Platform, name: str) -> Callable[..., Any] | None:
+    """OS によってない処理（Windows のパフォーマンスの計測など）は None。"""
+    try:
+        return getattr(platform, name, None)
+    except NotImplementedError:
+        return None
+
+
 class Harness:
     def __init__(
         self,
@@ -118,7 +129,7 @@ class Harness:
         self.judge_cfg = judge_cfg  # [judge]（Ollama）。None なら AI に聞かない
         self.driver_factory = driver_factory
         self.roles = roles or RoleBook()
-        self.engine = Engine(rules)
+        self.engine = Engine(rules, load_perf(rules_path))
         self.state = GameState()
         self.issues: list[Issue] = []
         self.notes: list[str] = []
@@ -321,6 +332,8 @@ class Harness:
                     proc, self._publish, launch, stop, float(s["process_poll_sec"]),
                     lambda: self._stopping or self._expect_exit,
                     self._recent_press,
+                    perf_stats=_optional(self.platform, "perf_stats"),
+                    ai_busy_since=ollama.busy_since,
                 )
             ),
             asyncio.create_task(
@@ -383,6 +396,13 @@ class Harness:
         prev_save = previous_run_save(self.runs_dir, self.build.name, run_dir) if opts.continue_previous else None
         if opts.continue_previous and prev_save is None:
             self.notes.append("--continue: 前のランのセーブが見つからないため、はじめから遊びました")
+        machine = ""
+        if self.engine.perf is not None:
+            # パフォーマンスを、同じビルド名・同じマシンの前回までのランと比べる（R-10）
+            get_machine = _optional(self.platform, "machine")
+            machine = get_machine() if get_machine is not None else ""
+            self.engine.perf.history = load_history(self.runs_dir, self.build.name, machine, run_dir,
+                                                    self.engine.perf.history_runs)
         self._bus = EventBus(run_dir / "events.jsonl")
         self._bus.subscribe(self._on_event)
         self._started = time.monotonic()
@@ -506,6 +526,20 @@ class Harness:
                 self.roles.save()
             except OSError as e:
                 self.notes.append(f"ボタンの役割を保存できませんでした: {self.roles.path} ({e})")
+            perf_lines: list[str] = []
+            if self.engine.perf is not None:
+                self._handle_issues(self.engine.finish(time.monotonic(), now_wall()))
+                perf = self.engine.perf
+                try:
+                    (run_dir / "perf.json").write_text(
+                        json.dumps(perf.summary_json(self.build.name, machine, self.roles.build), ensure_ascii=False,
+                                   indent=1), encoding="utf-8")
+                except OSError as e:
+                    self.notes.append(f"パフォーマンスの集計を保存できませんでした: {e}")
+                note = perf.excluded_note()
+                if note:
+                    self.notes.append(note)
+                perf_lines = perf.report_lines()
             self._status(time.monotonic(), force=True)
             self._bus.close()
             summary = RunSummary(
@@ -532,6 +566,7 @@ class Harness:
                 harness_notes=self.notes,
                 silent_buttons=self.engine.silent_buttons(),
                 stalls=self._stall_lines(run_dir),
+                perf=perf_lines,
             )
             report = write_report(summary, self.issues, run_dir)
         return RunResult(run_dir, report, self.issues, interrupted)

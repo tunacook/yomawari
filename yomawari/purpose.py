@@ -65,7 +65,7 @@ PURPOSE_DEFAULTS: dict[str, dict[str, Any]] = {
     "aging": {
         "description": "放置。操作せずに起動したままにして、ハング・メモリの増加・ログの異常を見る",
         "mode": "aging",
-        "focus": ["H-01", "L-01", "C-01"],
+        "focus": ["H-01", "L-01", "C-01", "R-01", "R-03"],
         "fuzz": {},
     },
 }

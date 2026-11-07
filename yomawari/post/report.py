@@ -31,6 +31,7 @@ class RunSummary:
     purpose_description: str = ""
     focus: list[str] = field(default_factory=list)  # 目的で重点的に見るルール。深刻度ごとに先に並べる
     stalls: list[str] = field(default_factory=list)  # 「進めなかったところ」の節（post/stalls.py）
+    perf: list[str] = field(default_factory=list)  # 「パフォーマンス」の節（detect/perf.py）
 
 
 @dataclass
@@ -121,6 +122,7 @@ def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
             out += ["", "- 判定: [ ] 正しい検出　[ ] 誤検知", ""]
 
     out += summary.stalls
+    out += summary.perf
 
     if summary.silent_buttons:
         out += [
