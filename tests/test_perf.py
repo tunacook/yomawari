@@ -146,8 +146,21 @@ def test_r07_hitch_after_the_same_command_twice(repo_rules, repo_perf):
     s.feed("game", "line", line_id="Main:9.0")
     s.feed("game", "command", name="spawn", target="Rain", line_id="Main:9.0")
     s.step(1, frame=180)
+    s.step(3)  # 深刻度は、そのあと 3 秒の FPS の中央値を見てから決める
     issues = [i for i in s.issues if i.rule_id == "R-07"]
     assert len(issues) == 1 and "@spawn Rain" in issues[0].detail
+    assert issues[0].severity == "minor" and "ほとんど変わらなかった" in issues[0].detail
+
+
+def test_r07_is_major_when_fps_median_drops(repo_rules, repo_perf):
+    s = warm(repo_rules, repo_perf)
+    for n in range(2):
+        s.feed("game", "line", line_id="Main:3.0")
+        s.step(1, frame=300, fps=30)
+        s.step(3, fps=40)  # 重いフレームのあとも FPS が落ちたまま（中央値 40、ふだん 60）
+        s.step(10)
+    issues = [i for i in s.issues if i.rule_id == "R-07"]
+    assert len(issues) == 1 and issues[0].severity == "major" and "ふだん 60.0" in issues[0].detail
 
 
 def test_r07_one_heavy_frame_is_one_issue(repo_rules, repo_perf):

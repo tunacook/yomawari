@@ -186,6 +186,8 @@ class PerfMonitor:
         self.drop_fired = False  # いまの R-05 の区間で出した（R-02 と同じ落ち込みを 2 件にしない）
         self.base_cache: dict[str, tuple[int, float | None]] = {}
         self.hitches: Counter[str] = Counter()  # R-07
+        # R-07 で出す件（深刻度は、重いフレームのあと fps_window_sec 秒の FPS の中央値を見てから決める）
+        self.hitch_pending: list[tuple[str, str, Sample, str]] = []
         self.recent_cmds: deque[tuple[float, str]] = deque()
         self.pending: list[Cmd] = []  # R-08
         # R-08 で出す候補。同じときに実行した複数のコマンドが、同じ悪化（1 回のメモリの増加など）で一緒に候補になるので、
@@ -210,14 +212,14 @@ class PerfMonitor:
         return self.rules[rule_id].param(name)
 
     def _issue(self, rule_id: str, detail: str, key: str, s: Sample | None, t: float, wall: str = "",
-               **evidence: Any) -> list[Issue]:
+               severity: str | None = None, **evidence: Any) -> list[Issue]:
         if rule_id not in self.rules or f"{rule_id}:{key}" in self.fired:
             return []
         self.fired.add(f"{rule_id}:{key}")
         rule = self.rules[rule_id]
         if s is not None:
             evidence.setdefault("state", {"scene": s.scene, "line_id": s.line, "menus": [], "top_modal": None})
-        return [Issue(rule_id=rule_id, severity=rule.severity, title=rule.title, detail=detail,
+        return [Issue(rule_id=rule_id, severity=severity or rule.severity, title=rule.title, detail=detail,
                       key=f"{rule_id}:{key}", launch=s.launch if s else self.launch, t=t, wall=wall,
                       action=rule.on_detect, evidence=evidence)]
 
@@ -349,6 +351,7 @@ class PerfMonitor:
         out += self._spikes(s, ev.wall)
         out += self._cpu_without_gpu(s, ev.wall)
         out += self._hitch(s, ev.wall)
+        out += self._flush_hitches(s.t) if self.has("R-07") else []
         out += self._commands_after(s, ev.wall)
         return out
 
@@ -489,16 +492,43 @@ class PerfMonitor:
         keys += [f"`{c}` のあと" for c in self._cmds_near(s.t, float(self.p("R-07", "attribute_sec")))]
         for key in keys:
             self.hitches[key] += 1
-        hit = [k for k in keys if self.hitches[k] >= int(self.p("R-07", "repeats")) and f"R-07:{k}" not in self.fired]
+        waiting = {p[0] for p in self.hitch_pending}
+        hit = [k for k in keys if self.hitches[k] >= int(self.p("R-07", "repeats")) and f"R-07:{k}" not in self.fired
+               and k not in waiting]
         if not hit:
             return []
         # 1 回の重いフレームは 1 件にする（行と、そのころのコマンドで別々に出さない。run 2026-11-07_1343）。
         # 一緒に数えたほかの場所も出したことにして、次の重いフレームで別の件として出し直さない
         key, rest = hit[0], [k for k in keys if k != hit[0]]
-        out = self._issue("R-07", f"{key}に、{limit:.0f}ms 以上のフレームが {self.hitches[key]} 回出ました"
-                          f"（今回 {ms:.0f}ms、{s.where}"
-                          f"{'。同じフレームの近く: ' + '、'.join(rest) if rest else ''}）", key=key, s=s, t=s.t, wall=wall)
-        self.fired.update(f"R-07:{k}" for k in keys)
+        detail = (f"{key}に、{limit:.0f}ms 以上のフレームが {self.hitches[key]} 回出ました（今回 {ms:.0f}ms、{s.where}"
+                  f"{'。同じフレームの近く: ' + '、'.join(rest) if rest else ''}）")
+        self.fired.update(f"R-07:{k}" for k in rest)
+        self.hitch_pending.append((key, detail, s, wall))
+        return []
+
+    def _flush_hitches(self, now: float, final: bool = False) -> list[Issue]:
+        """R-07 の件を、重いフレームのあと fps_window_sec 秒たってから出す。そのあいだの FPS の中央値が、ふだんより
+        major_fps_drop_ratio 以上落ちていれば Major、そうでなければ rules.yaml の深刻度（1 フレームだけ詰まって、
+        FPS はほとんど変わらない）。"""
+        if not self.hitch_pending:
+            return []
+        win = float(self.p("R-07", "fps_window_sec"))
+        drop = float(self.p("R-07", "major_fps_drop_ratio"))
+        base = self._baseline("fps")
+        out: list[Issue] = []
+        keep = []
+        for key, detail, s, wall in self.hitch_pending:
+            if not final and now < s.t + win:
+                keep.append((key, detail, s, wall))
+                continue
+            fps = _median(x.val("fps") for x in self.samples[-int(win) - 5:]
+                          if x.launch == s.launch and s.t <= x.t <= s.t + win)
+            major = bool(base) and fps is not None and fps <= base * (1 - drop)
+            tail = (f"。前後の FPS の中央値 {_fmt(fps, 1)}（ふだん {_fmt(base, 1)}）"
+                    + ("" if major else "で、ほとんど変わらなかった"))
+            out += self._issue("R-07", detail + tail, key=key, s=s, t=s.t, wall=wall,
+                               severity="major" if major else None)
+        self.hitch_pending = keep
         return out
 
     def _cmds_near(self, t: float, sec: float) -> list[str]:
@@ -708,7 +738,8 @@ class PerfMonitor:
 
     def finish(self, now: float, wall: str = "") -> list[Issue]:
         win = float(self.p("R-08", "window_sec")) if self.has("R-08") else 3.0
-        return self._flush_r08(win, final=True) + self._by_scene(now, wall) + self._vs_history(now, wall)
+        hitches = self._flush_hitches(now, final=True) if self.has("R-07") else []
+        return hitches + self._flush_r08(win, final=True) + self._by_scene(now, wall) + self._vs_history(now, wall)
 
     def _by_scene(self, now: float, wall: str) -> list[Issue]:
         if not self.has("R-09"):
