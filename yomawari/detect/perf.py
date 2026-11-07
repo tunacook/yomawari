@@ -1,4 +1,7 @@
-"""パフォーマンスの判定（DESIGN.md §10「パフォーマンス」、R-01〜R-10）。
+"""パフォーマンスの判定（DESIGN.md §10「パフォーマンス」、R-01〜R-11）。
+
+GPU は、FPS が落ちていなければ使っても構わないので、GPU の上がり方は FPS も落ちたときだけ問題にする（R-05・R-08〜R-10）。
+逆に、GPU をほとんど使わずに CPU ばかり使っているのは、描画以外の処理が重いので問題にする（R-11）。
 
 ゲームの heartbeat（FPS・いちばん長かったフレーム・メモリ）と、ハーネスの proc_stats（ゲームの CPU・GPU・RSS・スレッド数と、
 マシンの状態）を1秒ごとのサンプルにまとめ、そのときの場所（scene・本文の行・直前の演出のコマンド）を付けて判定する。
@@ -20,7 +23,7 @@ from typing import Any
 
 from ..events import Event, Issue
 
-PERF_RULES = ("R-01", "R-02", "R-03", "R-04", "R-05", "R-06", "R-07", "R-08", "R-09", "R-10")
+PERF_RULES = ("R-01", "R-02", "R-03", "R-04", "R-05", "R-06", "R-07", "R-08", "R-09", "R-10", "R-11")
 MB = 1024 * 1024
 
 # 判定から外した理由 → レポートでの名前
@@ -140,7 +143,7 @@ def load_history(runs_dir: Path, build: str, machine: str, current: Path | None,
 
 
 class PerfMonitor:
-    """R-01〜R-10 をまとめて判定する（Engine から Detector と同じように呼ぶ）。"""
+    """R-01〜R-11 をまとめて判定する（Engine から Detector と同じように呼ぶ）。"""
 
     def __init__(self, rules: dict[str, Any], perf: dict[str, Any]) -> None:
         self.rules = rules  # rule_id → Rule（PERF_RULES のうち rules.yaml にあるもの）
@@ -184,6 +187,13 @@ class PerfMonitor:
         self.hitches: Counter[str] = Counter()  # R-07
         self.recent_cmds: deque[tuple[float, str]] = deque()
         self.pending: list[Cmd] = []  # R-08
+        # R-08 で出す候補。同じときに実行した複数のコマンドが、同じ悪化（1 回のメモリの増加など）で一緒に候補になるので、
+        # 重なるコマンドをすべて判定し終えてから、1 件にまとめて出す（run 2026-11-07_1343: 1 回の読み込みで 26 件出た）
+        self.r08_cands: list[tuple[Cmd, str, float, Sample, str]] = []
+        self.judged: deque[Cmd] = deque()  # 判定し終えた直近のコマンド（まとめた件に、同じときのコマンドを含めるため）
+        # 指標 → R-08 で出した悪化のときに実行していたコマンドの行。同じ場所をまた通って同じ悪化が出ても、別の件にしない
+        self.r08_places: dict[str, set[str]] = {}
+        self.cpu_only: list[Sample] = []  # R-11
         self.cmd_bad: Counter[tuple[str, str]] = Counter()
         self.cmd_stats: dict[str, dict[str, list[float]]] = {}
         self.cmd_with: dict[str, set[str]] = {}
@@ -270,6 +280,8 @@ class PerfMonitor:
         self.mem_win = {m: deque() for m in MEMS}
         self.mem_jump = {m: None for m in MEMS}
         self.pending = []
+        self.r08_cands = []
+        self.cpu_only = []
         self.recent_cmds.clear()
 
     def _on_stats(self, ev: Event) -> None:
@@ -333,6 +345,7 @@ class PerfMonitor:
         out: list[Issue] = []
         out += self._low_fps(s, ev.wall)
         out += self._spikes(s, ev.wall)
+        out += self._cpu_without_gpu(s, ev.wall)
         out += self._mem_jumps(s, ev.wall)
         out += self._hitch(s, ev.wall)
         out += self._commands_after(s, ev.wall)
@@ -372,14 +385,16 @@ class PerfMonitor:
 
     # --- R-04・R-05: CPU・GPU が急に上がる ---
 
-    def _baseline(self, metric: str) -> float | None:
+    def _baseline(self, metric: str, need: int | None = None) -> float | None:
+        """そのランのふだんの値（中央値）。サンプルが need 個（既定は perf の min_samples）たまるまでは None。"""
+        need = self.min_samples if need is None else need
         n = len(self.samples)
-        cached = self.base_cache.get(metric)
+        cached = self.base_cache.get(f"{metric}|{need}")
         if cached is not None and n - cached[0] < 30:
             return cached[1]
         vals = [v for x in self.samples if self._ok(x) and (v := x.val(metric)) is not None]
-        base = statistics.median(vals) if len(vals) >= self.min_samples else None
-        self.base_cache[metric] = (n, base)
+        base = statistics.median(vals) if len(vals) >= need else None
+        self.base_cache[f"{metric}|{need}"] = (n, base)
         return base
 
     def _spikes(self, s: Sample, wall: str) -> list[Issue]:
@@ -387,12 +402,22 @@ class PerfMonitor:
         for metric, rule in (("cpu", "R-04"), ("gpu", "R-05")):
             if not self.has(rule):
                 continue
-            v, base = s.val(metric), self._baseline(metric)
+            # ふだんの値は、ランの始めの一部の場面だけで決めない（run 2026-11-07_1343: 始めの暗い場面だけの中央値 20% と
+            # 比べて、ふつうの背景の GPU 50% を急な上昇とした）
+            need = self.rules[rule].params.get("baseline_samples")
+            v, base = s.val(metric), self._baseline(metric, None if need is None else int(need))
             run = self.spike[metric]
             add, ratio = float(self.p(rule, "add")), float(self.p(rule, "ratio"))
             if v is None or base is None or not self._ok(s) or v < base + add or v < base * ratio:
                 run.clear()
                 continue
+            drop = self.rules[rule].params.get("fps_drop_ratio")
+            if drop is not None:
+                # FPS が落ちていなければ、使っても構わない（GPU）
+                fps, fps_base = s.val("fps"), self._baseline("fps", None if need is None else int(need))
+                if fps is None or not fps_base or fps > fps_base * (1 - float(drop)):
+                    run.clear()
+                    continue
             run.append(s)
             sec = s.t - run[0].t + 1
             if sec < float(self.p(rule, "sec")):
@@ -405,6 +430,29 @@ class PerfMonitor:
                                f"{'、直前の演出 ' + ', '.join(f'`{c}`' for c in cmds) if cmds else ''}）",
                                key=f"{first.scene}|{first.line}", s=first, t=s.t, wall=wall)
         return out
+
+    # --- R-11: GPU をほとんど使わずに CPU ばかり使う ---
+
+    def _cpu_without_gpu(self, s: Sample, wall: str) -> list[Issue]:
+        if not self.has("R-11"):
+            return []
+        cpu, gpu = s.val("cpu"), s.val("gpu")
+        if (cpu is None or gpu is None or not self._ok(s) or cpu < float(self.p("R-11", "cpu_min"))
+                or gpu > float(self.p("R-11", "gpu_max"))):
+            self.cpu_only = []
+            return []
+        self.cpu_only.append(s)
+        first = self.cpu_only[0]
+        sec = s.t - first.t + 1
+        if sec < float(self.p("R-11", "sec")):
+            return []
+        cpus = [x.cpu or 0 for x in self.cpu_only]
+        gpus = [x.gpu or 0 for x in self.cpu_only]
+        cmds = self._cmds_near(first.t, float(self.p("R-11", "sec")))
+        return self._issue("R-11", f"ゲームが GPU をほとんど使わずに（最大 {max(gpus):.0f}%）、CPU を使ったまま {sec:.0f} 秒続きました"
+                           f"（中央値 {statistics.median(cpus):.0f}%、最大 {max(cpus):.0f}%、{first.where}"
+                           f"{'、直前の演出 ' + ', '.join(f'`{c}`' for c in cmds) if cmds else ''}）",
+                           key=f"{first.scene}|{first.line}", s=first, t=s.t, wall=wall)
 
     # --- R-06: メモリが急に増えて戻らない ---
 
@@ -455,14 +503,20 @@ class PerfMonitor:
         limit = float(self.p("R-07", "frame_ms"))
         if ms is None or ms < limit or not self._ok(s):
             return []
-        out: list[Issue] = []
         keys = [f"行 `{s.line}`"] if s.line else []
         keys += [f"`{c}` のあと" for c in self._cmds_near(s.t, float(self.p("R-07", "attribute_sec")))]
         for key in keys:
             self.hitches[key] += 1
-            if self.hitches[key] >= int(self.p("R-07", "repeats")):
-                out += self._issue("R-07", f"{key}に、{limit:.0f}ms 以上のフレームが {self.hitches[key]} 回出ました"
-                                   f"（今回 {ms:.0f}ms、{s.where}）", key=key, s=s, t=s.t, wall=wall)
+        hit = [k for k in keys if self.hitches[k] >= int(self.p("R-07", "repeats")) and f"R-07:{k}" not in self.fired]
+        if not hit:
+            return []
+        # 1 回の重いフレームは 1 件にする（行と、そのころのコマンドで別々に出さない。run 2026-11-07_1343）。
+        # 一緒に数えたほかの場所も出したことにして、次の重いフレームで別の件として出し直さない
+        key, rest = hit[0], [k for k in keys if k != hit[0]]
+        out = self._issue("R-07", f"{key}に、{limit:.0f}ms 以上のフレームが {self.hitches[key]} 回出ました"
+                          f"（今回 {ms:.0f}ms、{s.where}"
+                          f"{'。同じフレームの近く: ' + '、'.join(rest) if rest else ''}）", key=key, s=s, t=s.t, wall=wall)
+        self.fired.update(f"R-07:{k}" for k in keys)
         return out
 
     def _cmds_near(self, t: float, sec: float) -> list[str]:
@@ -484,15 +538,72 @@ class PerfMonitor:
             if s.t < c.t + win:
                 keep.append(c)
                 continue
-            out += self._judge_cmd(c, win, s, wall)
+            self._judge_cmd(c, win, s, wall)
+            self.judged.append(c)
+        while self.judged and s.t - self.judged[0].t > 60:
+            self.judged.popleft()
         self.pending = keep
+        return out + self._flush_r08(win)
+
+    def _flush_r08(self, win: float, final: bool = False) -> list[Issue]:
+        """R-08 の候補を、同じ悪化でまとめて出す。まだ判定していないコマンドと重なる候補は、次まで待つ。
+
+        同じ指標で、実行した時刻が window_sec 以内につながる候補を 1 件にする。いちばん大きく悪化したものを主にし、
+        ほかは「同じときに悪くなったコマンド」として書く。一緒に出したコマンドは、出したことにする。"""
+        if not self.r08_cands:
+            return []
+        latest = max(c.t for c, *_ in self.r08_cands)
+        if not final and any(p.t <= latest + win for p in self.pending):
+            return []
+        cands, self.r08_cands = sorted(self.r08_cands, key=lambda x: x[0].t), []
+        out: list[Issue] = []
+        for k in dict.fromkeys(x[1] for x in cands):
+            group: list[tuple[Cmd, str, float, Sample, str]] = []
+            for x in [x for x in cands if x[1] == k] + [None]:  # type: ignore[list-item]
+                if x is not None and (not group or x[0].t - group[-1][0].t <= win):
+                    group.append(x)
+                    continue
+                out += self._r08_issue(group, win)
+                group = [x] if x is not None else []
         return out
 
-    def _judge_cmd(self, c: Cmd, win: float, now: Sample, wall: str) -> list[Issue]:
+    def _r08_issue(self, group: list[tuple[Cmd, str, float, Sample, str]], win: float) -> list[Issue]:
+        if not group:
+            return []
+        k = group[0][1]
+        places = self.r08_places.setdefault(k, set())
+        if any(x[0].line in places for x in group if x[0].line):
+            return []  # 前に出した悪化と同じ場所（同じ読み込みを、また通った）
+        group = [x for x in group if f"R-08:{x[0].key}|{k}" not in self.fired]
+        if not group:
+            return []
+        c, k, v, now, wall = max(group, key=lambda x: x[2])
+        n = self.cmd_bad[(c.key, k)]
+        vals = self.cmd_stats[c.key][k]
+        what = {"fps": f"FPS が平均 {statistics.mean(vals) * 100:.0f}% 落ちた",
+                "cpu": f"ゲームの CPU 使用率が平均 +{statistics.mean(vals):.0f} ポイント上がった",
+                "gpu": f"ゲームの GPU 使用率が平均 +{statistics.mean(vals):.0f} ポイント上がり、FPS も落ちた",
+                "mem": f"メモリが +{v:.0f}MB 増えた（これまでの最大 +{max(vals):.0f}MB）"}[k]
+        same = list(dict.fromkeys(x[0].key for x in group if x[0].key != c.key))
+        others = sorted(self.cmd_with.get(c.key, set()) - set(same))
+        tail = f"。同じときに悪くなったコマンド: {', '.join(f'`{o}`' for o in same)}" if same else ""
+        tail += f"。同じころに実行したコマンド: {', '.join(f'`{o}`' for o in others[:5])}" if others else ""
+        out = self._issue("R-08", f"`{c.key}` の実行後 {win:.0f} 秒で、実行前より{what}（{n} 回、行 `{c.line}`）{tail}",
+                          key=f"{c.key}|{k}", s=now, t=now.t, wall=wall)
+        # 同じ悪化のときに実行していたコマンド（まだ 1 回目で候補でなかったものも）の行は、この件の場所にする。
+        # ほかの場所で同じコマンドが悪化させたら、それは別の件として出す
+        lo, hi = min(x[0].t for x in group) - win, max(x[0].t for x in group) + win
+        members = [m for m in self.judged if m.launch == c.launch and lo <= m.t <= hi] + [x[0] for x in group]
+        self.fired.update(f"R-08:{x[0].key}|{k}" for x in group)
+        places.update(m.line for m in members if m.line)
+        return out
+
+    def _judge_cmd(self, c: Cmd, win: float, now: Sample, wall: str) -> None:
+        """実行前後の差を記録し、R-08 の条件に当たれば候補にする（出すのは _flush_r08）。"""
         after = [x for x in self.samples[-int(win) - 3:] if x.launch == c.launch and c.t < x.t <= c.t + win]
         need = int(self.p("R-08", "min_samples")) if self.has("R-08") else 2
         if len(c.before) < need or len(after) < need:
-            return []
+            return
         effects: dict[str, float] = {}
         fb, fa = _median(x.val("fps") for x in c.before), _median(x.val("fps") for x in after)
         if fb and fa is not None:
@@ -510,34 +621,24 @@ class PerfMonitor:
         if mem_up:
             effects["mem"] = max(mem_up)
         if not effects:
-            return []
+            return
         st = self.cmd_stats.setdefault(c.key, {})
         for k, v in effects.items():
             st.setdefault(k, []).append(v)
         self.cmd_with.setdefault(c.key, set()).update(k for t, k in self.recent_cmds
                                                       if abs(t - c.t) <= win and k != c.key)
         if not self.has("R-08"):
-            return []
+            return
         limits = {"fps": float(self.p("R-08", "fps_drop_ratio")), "cpu": float(self.p("R-08", "cpu_add")),
                   "gpu": float(self.p("R-08", "gpu_add")), "mem": float(self.p("R-08", "mem_mb"))}
-        out: list[Issue] = []
         for k, v in effects.items():
             if v < limits[k]:
                 continue
+            if k == "gpu" and effects.get("fps", 0.0) < float(self.p("R-08", "gpu_fps_drop_ratio")):
+                continue  # FPS が落ちていなければ、GPU は使っても構わない
             self.cmd_bad[(c.key, k)] += 1
-            n = self.cmd_bad[(c.key, k)]
-            if n < int(self.p("R-08", "repeats")):
-                continue
-            vals = st[k]
-            what = {"fps": f"FPS が平均 {statistics.mean(vals) * 100:.0f}% 落ちた",
-                    "cpu": f"ゲームの CPU 使用率が平均 +{statistics.mean(vals):.0f} ポイント上がった",
-                    "gpu": f"ゲームの GPU 使用率が平均 +{statistics.mean(vals):.0f} ポイント上がった",
-                    "mem": f"メモリが最大 +{max(vals):.0f}MB 増えた"}[k]
-            others = sorted(self.cmd_with.get(c.key, set()))
-            with_ = f"。同じころに実行したコマンド: {', '.join(f'`{o}`' for o in others[:5])}" if others else ""
-            out += self._issue("R-08", f"`{c.key}` の実行後 {win:.0f} 秒で、実行前より{what}（{n} 回、行 `{c.line}`）{with_}",
-                               key=f"{c.key}|{k}", s=now, t=now.t, wall=wall)
-        return out
+            if self.cmd_bad[(c.key, k)] >= int(self.p("R-08", "repeats")):
+                self.r08_cands.append((c, k, v, now, wall))
 
     # --- R-01: メモリが増え続ける / R-03: スレッド数が増え続ける（定期的に見る） ---
 
@@ -607,7 +708,8 @@ class PerfMonitor:
         return out
 
     def finish(self, now: float, wall: str = "") -> list[Issue]:
-        return self._by_scene(now, wall) + self._vs_history(now, wall)
+        win = float(self.p("R-08", "window_sec")) if self.has("R-08") else 3.0
+        return self._flush_r08(win, final=True) + self._by_scene(now, wall) + self._vs_history(now, wall)
 
     def _by_scene(self, now: float, wall: str) -> list[Issue]:
         if not self.has("R-09"):
@@ -622,7 +724,12 @@ class PerfMonitor:
             bad = []
             if run["fps"] and row["fps"] is not None and row["fps"] <= run["fps"] * (1 - float(self.p("R-09", "fps_drop_ratio"))):
                 bad.append(f"FPS の中央値 {row['fps']:.1f}（ラン全体 {run['fps']:.1f}）")
+            # GPU は、FPS も落ちているときだけ（落ちていなければ使っても構わない）
+            fps_low = bool(run["fps"]) and row["fps"] is not None and \
+                row["fps"] <= run["fps"] * (1 - float(self.p("R-09", "gpu_fps_drop_ratio")))
             for m in ("cpu", "gpu"):
+                if m == "gpu" and not fps_low:
+                    continue
                 if run[m] is not None and row[m] is not None and row[m] >= run[m] + float(self.p("R-09", f"{m}_add")):
                     bad.append(f"{METRIC_JA[m]} 使用率の中央値 {row[m]:.0f}%（ラン全体 {run[m]:.0f}%）")
             if bad:
@@ -636,6 +743,7 @@ class PerfMonitor:
         ratio = float(self.p("R-10", "ratio"))
         adds = {"cpu": float(self.p("R-10", "cpu_add")), "gpu": float(self.p("R-10", "gpu_add"))}
         mem_mb = float(self.p("R-10", "mem_mb"))
+        gpu_drop = float(self.p("R-10", "gpu_fps_drop_ratio"))
         need = int(self.p("R-10", "min_samples"))
         runs = ", ".join(h["run"] for h in self.history)
         out: list[Issue] = []
@@ -648,7 +756,10 @@ class PerfMonitor:
             pf = _median(p.get("fps") for p in past)
             if pf and row["fps"] is not None and row["fps"] <= pf * (1 - ratio):
                 bad.append(f"FPS の中央値 {pf:.1f} → {row['fps']:.1f}")
+            fps_low = bool(pf) and row["fps"] is not None and row["fps"] <= pf * (1 - gpu_drop)
             for m in ("cpu", "gpu"):
+                if m == "gpu" and not fps_low:
+                    continue  # GPU は、FPS も落ちているときだけ
                 pv = _median(p.get(m) for p in past)
                 if pv is not None and row[m] is not None and row[m] >= pv * (1 + ratio) and row[m] - pv >= adds[m]:
                     bad.append(f"{METRIC_JA[m]} 使用率の中央値 {pv:.0f}% → {row[m]:.0f}%")
@@ -669,7 +780,10 @@ class PerfMonitor:
             pf = _median(p.get("fps") for p in past)
             if pf is not None and row.get("fps") is not None and row["fps"] - pf >= ratio:
                 bad.append(f"FPS の落ち方 {pf * 100:.0f}% → {row['fps'] * 100:.0f}%")
+            fps_low = pf is not None and row.get("fps") is not None and row["fps"] - pf >= gpu_drop
             for m in ("cpu", "gpu"):
+                if m == "gpu" and not fps_low:
+                    continue
                 pv = _median(p.get(m) for p in past)
                 if pv is not None and row.get(m) is not None and row[m] - pv >= adds[m]:
                     bad.append(f"{METRIC_JA[m]} の上がり方 +{pv:.0f} → +{row[m]:.0f} ポイント")

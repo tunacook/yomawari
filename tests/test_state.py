@@ -104,3 +104,12 @@ def test_launch_resets_state():
     s.feed(game("menu", name="TitleUI", modal=False, buttons=[]))
     s.feed(Event("harness", "launch", {"pid": 1}, launch=2))
     assert s.scene is None and s.menus == {} and s.launch == 2
+
+
+def test_chosen_choice_survives_scene_change():
+    # 選んだ選択肢でそのまま scene が変わっても、どれが選ばれたかは残す（ハーネスが押したものが選ばれたかを確かめる）
+    st = GameState()
+    st.feed(Event("game", "choices", {"items": [{"id": "x", "text": "話す", "rect": [0, 0, 1, 0.5]}]}, 0.0, 0))
+    st.feed(Event("game", "choices_done", {"id": "x", "index": 0}, 0.1, 0))
+    st.feed(Event("game", "scene", {"name": "ending/bad"}, 0.2, 0))
+    assert st.chosen == "x" and not st.handled_choices

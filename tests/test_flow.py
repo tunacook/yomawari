@@ -419,6 +419,35 @@ steps = [{ choose = true }]
     assert any("2 通り）をすべて試しても先に進めなかった" in n for n in run.flow.summary())
 
 
+def test_all_wrong_answers_are_rotated_not_repeated():
+    # run 2026-11-07_1343: 2 つとも外れと覚えた選択肢で、先頭の「話す」を 16 回選んでバッドエンドを繰り返した。
+    # 試せる組み合わせがないときは、このランで選んだ回数の少ないものから選び直す
+    s, st, run, _ = _session()
+    run.flow = FlowTracker(parse_flows(tomllib.loads("""
+[[flow]]
+name = "選択肢で答える"
+start = { choices = true }
+steps = [{ choose = true }]
+""")["flow"]))
+    q = ("選択肢で答える", "main/s1:5")
+    run.flow.remember({(q, ("はい",)), (q, ("いいえ",))})
+    items = [{"id": "a", "text": "はい", "rect": [0.4, 0.4, 0.6, 0.5]}, {"id": "b", "text": "いいえ", "rect": [0.4, 0.5, 0.6, 0.6]}]
+    boost = FUZZ_DEFAULTS["weights"]["click"] * FUZZ_DEFAULTS["flow_factor"]
+    picks = []
+    for n in range(4):
+        _feed(st, "line", line_id="main/s1:5", text="行く？")
+        # 選択肢の id は出るたびに変わる
+        items = [{**it, "id": f"{it['id']}{n}"} for it in items]
+        _feed(st, "choices", items=items)
+        w = _weights(s, st)
+        text = next(t for t in ("はい", "いいえ") if w[f"click choices/{t}"] == pytest.approx(boost))
+        picks.append(text)
+        run.flow.pressed(f"choices/{text}", "a", True, text)
+        _feed(st, "choices_done", id=items[0 if text == "はい" else 1]["id"])
+    assert sorted(picks) == ["いいえ", "いいえ", "はい", "はい"]
+    assert picks[0] != picks[1] and picks[2] != picks[3]
+
+
 def test_screen_step_wins_over_lingering_scene_step():
     # run 0946: 思い出を読み終えて要約に戻っても、答えるまで scene が memories/… のまま。「思い出を読む」手順（scene だけ）に
     # とどまらず、要約・言葉の一覧・確認ダイアログの手順に進み、答えたら最後まで進めたとする（試した組み合わせも覚える）

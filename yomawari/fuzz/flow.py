@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 from typing import Any
@@ -306,6 +307,7 @@ class FlowTracker:
         self.dead: set[tuple[Ctx, Path]] = set()  # 行き止まり（言葉がまだない思い出）。開示の状態で変わる
         self.lines_after = 0  # 最後まで進めてから届いた本文の行の数
         self.exhausted_noted: set[Ctx] = set()
+        self.picked: Counter[tuple[Ctx, Path]] = Counter()  # このランで、その組み合わせを選んだ回数
 
     @property
     def step(self) -> Step | None:
@@ -487,6 +489,14 @@ class FlowTracker:
             f"（手順 {self.index + 1}。まだ開示されていないものが答えか、進めない不具合の可能性がある）"
         )
 
+    def least_picked(self, options: set[str]) -> set[str]:
+        """いまの選び方に足したとき、このランで選んだ回数がいちばん少ないもの。"""
+        if self.ctx is None or not options:
+            return set(options)
+        counts = {o: self.picked[(self.ctx, (*self.path, o))] for o in options}
+        low = min(counts.values())
+        return {o for o, n in counts.items() if n == low}
+
     def tried(self, option: str) -> bool:
         """いまの選び方に option を足した枝を、前に試しはじめたことがあるか（同じ思い出の、ほかの言葉を試すため）。"""
         step = self.step
@@ -522,6 +532,8 @@ class FlowTracker:
         elif step.picks:
             # 同じ手順で選び直したら置き換える（思い出を選んで反応があったが、要約が出ずに一覧のままだったなど）
             self.path = [*self.path[:self._picks_before(self.index)], picked]
+            if self.ctx is not None:
+                self.picked[(self.ctx, tuple(self.path))] += 1
         if self.index == len(flow.steps) - 1:
             if self.ctx is not None:
                 self.leaves.add((self.ctx, tuple(self.path)))
