@@ -665,6 +665,53 @@ def test_fully_covered_modal_is_not_top():
     assert st.top_modal().name == "BlackoutUI"
 
 
+def test_newer_screen_over_partly_covered_modal_is_front():
+    # 思い出から戻るロードのあと、ゲームが一覧をモーダル・その上の要約をモーダルでないと伝えた（モーダルの印の付け忘れ）。
+    # 一覧のボタンの一部が覆われていて、あとから出た要約のボタンは覆われていないので、要約を手前とする
+    # （run 2026-11-07_1809: 要約が上に出ているのに、一覧を動かす操作を 30 秒以上続けた）
+    st = GameState()
+    feed = lambda kind, **d: st.feed(Event("game", kind, d, 0))
+    feed("menu", name="AlbumUI", modal=True, buttons=[
+        {"name": "AlbumSlot", "rect": [0.1, 0.1, 0.3, 0.3]},
+        {"name": "AlbumSlot", "rect": [0.4, 0.4, 0.6, 0.6], "covered": True},
+        {"name": "AlbumSlot", "rect": [0.1, 1.2, 0.3, 1.4], "hidden": True},
+    ])
+    feed("menu", name="EpisodeUI", modal=False, buttons=[])
+    assert st.top_modal().name == "AlbumUI"  # 要約のボタンがまだ出ていない
+    feed("menu", name="EpisodeUI", modal=False, buttons=[
+        {"name": "ReadEpisodeButton", "rect": [0.42, 0.76, 0.61, 0.84]},
+        {"name": "CloseEpisodeButton", "rect": [0.18, 0.77, 0.24, 0.82]},
+    ])
+    assert st.top_modal().name == "EpisodeUI"
+    assert [t.label for t in st.targets()] == ["EpisodeUI/ReadEpisodeButton", "EpisodeUI/CloseEpisodeButton"]
+    # 一覧が出し直されても（動かした・ボタンが変わった）、出た順番は変わらないので要約が手前のまま
+    feed("menu", name="AlbumUI", modal=True, buttons=[
+        {"name": "AlbumSlot", "rect": [0.1, 0.1, 0.3, 0.3], "covered": True},
+        {"name": "AlbumSlot", "rect": [0.4, 0.4, 0.6, 0.6], "covered": True},
+        {"name": "AlbumSlot", "rect": [0.7, 0.1, 0.9, 0.3]},
+    ])
+    assert st.top_modal().name == "EpisodeUI"
+    # 要約を閉じれば一覧が手前
+    feed("menu_close", name="EpisodeUI")
+    assert st.top_modal().name == "AlbumUI"
+    # 一覧のボタンがどれも覆われていなければ、あとから出たモーダルでない画面（文字の枠など）があってもモーダルが手前
+    st = GameState()
+    feed = lambda kind, **d: st.feed(Event("game", kind, d, 0))
+    feed("menu", name="AlbumUI", modal=True, buttons=[{"name": "AlbumSlot", "rect": [0.1, 0.1, 0.3, 0.3]}])
+    feed("menu", name="HudUI", modal=False, buttons=[{"name": "Skip", "rect": [0.8, 0.9, 0.9, 0.95]}])
+    assert st.top_modal().name == "AlbumUI"
+    # あとから出た画面のボタンも覆われているなら、それも上に重なっていない
+    feed("menu", name="AlbumUI", modal=True, buttons=[
+        {"name": "AlbumSlot", "rect": [0.1, 0.1, 0.3, 0.3], "covered": True},
+        {"name": "AlbumSlot", "rect": [0.4, 0.4, 0.6, 0.6]},
+    ])
+    feed("menu", name="HudUI", modal=False, buttons=[
+        {"name": "Skip", "rect": [0.8, 0.9, 0.9, 0.95]},
+        {"name": "Auto", "rect": [0.7, 0.9, 0.8, 0.95], "covered": True},
+    ])
+    assert st.top_modal().name == "AlbumUI"
+
+
 def test_verify_does_not_use_move_ops():
     # 前に反応があっても、方向キー・Enter・ドラッグは応答確認に使わない（フォーカスで結果が変わる）
     cfg = {**CFG, "trigger_prob": 1.0, "irregular_prob": 0.3}
