@@ -298,7 +298,8 @@ class FuzzSession:
         # 探す・戻る操作の label → それが向かう ("<unseen|known>:<menu>/<name>:<向き>", menu)
         self._search: dict[str, list[tuple[str, str]]] = {}
         self._blind: dict[str, list[str]] = {}  # 向きを決めずに探す操作の label → その menu
-        self._flow_rows: dict[str, set[tuple[str, str]]] = {}  # 手順の画面の外を探す操作の label → 動かす並び (menu, name)
+        self._flow_rows: dict[str, set[tuple[str, str]]] = {}
+        self._odds: tuple[str, dict[str, Any]] | None = None  # Decider が最後に選んだ操作の label と確率  # 手順の画面の外を探す操作の label → 動かす並び (menu, name)
         self._title_returns = state.title_returns
         self._resolution_changes = state.resolution_changes
         self._play_start = 0  # このプレイを始めたときに届いていた本文・scene・選択肢の数
@@ -565,6 +566,7 @@ class FuzzSession:
         op = self.run.decider.choose(key, cands)
         if op is None:
             return  # 暗転中などで押せない。応答確認は次に押せるときまで持ち越す
+        self._odds = (op.label, getattr(self.run.decider, "last_odds", {}))
         self._verify_next = False
         if op.kind == "expect_exit":
             await self._expect_exit(op)
@@ -706,7 +708,7 @@ class FuzzSession:
                 # （run 2026-11-06_1418: 「この言葉で答える」を 45 回押したあとは、手順の外の操作のほうが多くなった）。
                 # 同じ組み合わせを繰り返さないことは、試行錯誤（exhausted・tried）で見る
                 op = dataclasses.replace(op, novelty=False)
-            out.append(dataclasses.replace(op, weight=op.weight * f) if f != 1.0 else op)
+            out.append(op.scaled("flow", f))
         if away:
             labels = {op.label for op in away}
             out = [op for op in out if op.label not in labels] + away
@@ -736,7 +738,7 @@ class FuzzSession:
         ops = []
         for op in search_candidates(found, {f"{lead.menu}/{lead.name}": w for lead in found}):
             targets = [lead for lead in found if (op.kind, op.arg) in REVEAL[lead.direction]]
-            op = dataclasses.replace(op, weight=op.weight * low ** run.search_dead[(menu.name, op.label)])
+            op = dataclasses.replace(op, by="flow_search").scaled("search_dead", low ** run.search_dead[(menu.name, op.label)])
             self._search[op.label] = [(self._lead_key(lead), lead.menu) for lead in targets]
             self._flow_rows[op.label] = {(lead.menu, lead.name) for lead in targets}
             ops.append(op)
@@ -834,7 +836,7 @@ class FuzzSession:
                 return True
             return hud and op.target is not None and op.target.kind == "button"
 
-        return [dataclasses.replace(op, weight=op.weight * f) if detour(op) else op for op in cands]
+        return [op.scaled("intent", f) if detour(op) else op for op in cands]
 
     # --- 続きから遊ぶ（fuzz/resume.py） ---
 
@@ -870,7 +872,7 @@ class FuzzSession:
             labels = {t.label for t in saved}
             if low <= 0:
                 return [op for op in cands if op.target is None or op.target.label not in labels]
-            return [dataclasses.replace(op, weight=op.weight * low)
+            return [op.scaled("saved_slot", low)
                     if op.target is not None and op.target.label in labels else op for op in cands]
         boost, low = float(self.cfg["resume_factor"]), float(self.cfg["resume_new_game_factor"])
         newest = newest_slots({t.label: t.text for t in saved}) or {t.label for t in saved}
@@ -890,7 +892,7 @@ class FuzzSession:
                     f = boost
                 elif run.guard.book.role_of(t) == "new_game":
                     f = low
-            out.append(dataclasses.replace(op, weight=op.weight * f) if f != 1.0 else op)
+            out.append(op.scaled("resume", f))
         return out
 
     def _older_than_own_save(self, newest: set[str], texts: dict[str, str | None]) -> bool:
@@ -944,7 +946,7 @@ class FuzzSession:
         menus = {t.menu for t in targets if hints.save(t)}
         empty = inactive([t for t in targets if t.menu in menus], run.inactive_words, run.masked_chars)
         boost = float(self.cfg["save_first_factor"])
-        return [dataclasses.replace(op, weight=op.weight * boost)
+        return [op.scaled("save_first", boost)
                 if op.target is not None and op.target.kind == "button"
                 and (hints.save(op.target) or op.target.label in empty) else op for op in cands]
 
@@ -1054,11 +1056,11 @@ class FuzzSession:
         # 押せるもの（ガードに従う）と、Esc・右クリック・本文送りを、同じ重みで順に試す
         allow_exit = False
         cands = normal_candidates(self.state, self.run.guard, self.cfg["weights"], allow_exit, None, None)
-        cands += [Op("key", arg="esc"), Op("right_click"), Op("advance")]
+        cands += [Op("key", arg="esc", by="recover"), Op("right_click", by="recover"), Op("advance", by="recover")]
         seen: dict[str, Op] = {}
         for op in cands:
             if op.kind in ("click", "key", "right_click", "advance", "drag", "wheel_down", "wheel_up"):
-                seen.setdefault(op.label, dataclasses.replace(op, weight=1.0, novelty=True, group=None))
+                seen.setdefault(op.label, dataclasses.replace(op, weight=1.0, novelty=True, group=None, by="recover", why=()))
         key = "recover:" + state_key(self.state)
         op = self.run.decider.choose(key, list(seen.values()))
         if op is None:
@@ -1155,7 +1157,7 @@ class FuzzSession:
                 targets = [lead for lead in these if (op.kind, op.arg) in REVEAL[lead.direction]]
                 menu = targets[0].menu if targets else ""
                 # この画面で動かしても反応しなかった手段（一覧が受け付けない方向キーなど）は後回しにする
-                op = dataclasses.replace(op, weight=op.weight * low ** run.search_dead[(menu, op.label)])
+                op = op.scaled("search_dead", low ** run.search_dead[(menu, op.label)])
                 self._search[op.label] = [(self._lead_key(lead), lead.menu) for lead in targets]
                 ops.append(op)
         return ops
@@ -1702,7 +1704,11 @@ class FuzzSession:
                     self.run.survived.add(self._pressed)
                 self._pressed = op.target.label
                 self.run.last_press = (op.target.label, time.monotonic())
-        self.publish(Event("harness", "op", {**op.to_json(), "trigger": trigger, "pos": pos}, self.launch))
+        data: dict[str, Any] = {**op.to_json(), "trigger": trigger, "pos": pos}
+        if self._odds is not None and self._odds[0] == op.label and trigger is None:
+            data["odds"] = self._odds[1]  # 選ばれた確率と、確率の高かった候補（どの候補と競り合っていたか）
+        self._odds = None
+        self.publish(Event("harness", "op", data, self.launch))
         return True
 
     def _input(self, op: Op) -> tuple[float, float] | None:

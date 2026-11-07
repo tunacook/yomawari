@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,6 +42,16 @@ class Op:
     novelty: bool = False  # True なら Decider が試行回数で重みを下げる
     group: str | None = None  # Decider がまとめて選ぶ単位（button / move / leave）。None なら操作ごと
     point: tuple[float, float] | None = None  # ホイール・ドラッグの位置（描画領域の正規化座標）
+    # どの仕組みが出した操作か（normal: 画面ごとの通常の操作 / search・return・blind・flow_search: 画面の外を探す /
+    # escape・recover: 抜け出す）。events.jsonl の op に残し、行ったり来たりしたときに出どころを突き止める
+    by: str = "normal"
+    why: tuple[tuple[str, float], ...] = ()  # 重みを変えた層と倍率（screen・looks・intent・resume・save_first・flow）
+
+    def scaled(self, layer: str, f: float) -> Op:
+        """重みに f を掛け、掛けた層を why に残したもの。f が 1 ならそのまま。"""
+        if f == 1.0:
+            return self
+        return dataclasses.replace(self, weight=self.weight * f, why=(*self.why, (layer, f)))
 
     @property
     def label(self) -> str:
@@ -52,7 +63,11 @@ class Op:
         return " ".join(parts)
 
     def to_json(self) -> dict[str, Any]:
-        return {"kind": self.kind, "label": self.label, "irregular": self.irregular}
+        out: dict[str, Any] = {"kind": self.kind, "label": self.label, "irregular": self.irregular,
+                               "by": "irregular" if self.irregular else self.by}
+        if self.why:
+            out["why"] = [[layer, round(f, 4)] for layer, f in self.why]
+        return out
 
 
 def state_key(state: GameState) -> str:
@@ -84,15 +99,16 @@ def normal_candidates(
     ops: list[Op] = []
     click = float(weights["click"])
     for t in targets:
-        w = click * (screen_weights or {}).get(t.menu, 1.0)
-        w *= (factors or {}).get(t.label, 1.0)
+        sw, lf = (screen_weights or {}).get(t.menu, 1.0), (factors or {}).get(t.label, 1.0)
+        why = tuple(x for x in (("screen", sw), ("looks", lf)) if x[1] != 1.0)
+        w = click * sw * lf
         kind = guard.kind_of(t)
         if kind is None:
-            ops.append(Op("click", t, weight=w, novelty=True, group="button"))
+            ops.append(Op("click", t, weight=w, novelty=True, group="button", why=why))
         elif kind == "expect_exit" and allow_exit:
-            ops.append(Op("expect_exit", t, weight=w, novelty=True, group="button"))
+            ops.append(Op("expect_exit", t, weight=w, novelty=True, group="button", why=why))
         elif kind == "external" and guard.external_available(t.label):
-            ops.append(Op("external", t, weight=w, novelty=True, group="button"))
+            ops.append(Op("external", t, weight=w, novelty=True, group="button", why=why))
     top = state.top_modal()
     if top is not None and top.buttons:
         # 見えているボタンがない・すべて押せないときも、動かす・抜ける操作は試す
@@ -132,7 +148,7 @@ def modal_candidates(
 
 def escape_candidates() -> list[Op]:
     """ボタンのないモーダルが長く残ったときに試す通常の操作（バックログなどを閉じる）。"""
-    return [Op("key", arg="esc"), Op("right_click"), Op("advance")]
+    return [Op("key", arg="esc", by="escape"), Op("right_click", by="escape"), Op("advance", by="escape")]
 
 
 def irregular_candidates(state: GameState, guard: Guard, rapid_count: int, rollback: bool = False) -> list[Op]:

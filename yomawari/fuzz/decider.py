@@ -14,7 +14,7 @@ from __future__ import annotations
 import random
 from collections import Counter
 from collections.abc import Callable
-from typing import Protocol
+from typing import Any, Protocol
 
 from .ops import Op
 
@@ -35,6 +35,8 @@ class RandomDecider:
         # 経験から重みに掛けるもの（state_key, 操作）→ 倍率。random モードで、進行につながった操作を優先し、
         # 巻き戻した操作を後回しにする（fuzz/experience.py）。None なら使わない
         self.learned: Callable[[str, Op], float] | None = None
+        # 最後に選んだときの、選んだ操作の確率と、確率の高かった候補（events.jsonl の op に残す。fuzz/loop.py）
+        self.last_odds: dict[str, Any] = {}
 
     def factor(self, key: str, op: Op) -> float:
         """試行回数と反応のなさで下がる、重みの倍率。"""
@@ -62,10 +64,24 @@ class RandomDecider:
         gw = [max(c.weight for c in groups[g]) * max(self.factor(key, c) for c in groups[g]) for g in names]
         members = groups[self._pick(names, gw)]
         op = self._pick(members, [self.weight(key, c) for c in members])
+        self.last_odds = self._odds(key, groups, names, gw, op)
         self.tries[(key, op.label)] += 1
         if op.novelty:
             self._last[key] = op.label
         return op
+
+    def _odds(self, key: str, groups: dict[str, list[Op]], names: list[str], gw: list[float], op: Op) -> dict[str, Any]:
+        """選んだ操作の確率と、確率の高い候補 3 つ（グループを選ぶ確率 × グループの中で選ぶ確率）。"""
+        total = sum(gw)
+        p: dict[str, float] = {}
+        for g, w in zip(names, gw):
+            ws = [self.weight(key, c) for c in groups[g]]
+            inner = sum(ws)
+            for c, cw in zip(groups[g], ws):
+                share = (w / total if total > 0 else 1 / len(names)) * (cw / inner if inner > 0 else 1 / len(ws))
+                p[c.label] = p.get(c.label, 0.0) + share
+        top = sorted(p.items(), key=lambda kv: -kv[1])[:3]
+        return {"p": round(p.get(op.label, 0.0), 4), "n": len(p), "top": [[label, round(v, 4)] for label, v in top]}
 
     def _pick(self, items: list, weights: list[float]):
         if sum(weights) <= 0:
