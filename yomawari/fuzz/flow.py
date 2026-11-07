@@ -96,6 +96,7 @@ class Flow:
     steps: tuple[Step, ...]
     avoid: tuple[str, ...] = ()  # 流れの途中で押すと流れから外れるボタン
     avoid_text: tuple[str, ...] = ()  # 同じく、画面に見える文字で書いたもの
+    answers: tuple[Answer, ...] = ()  # 質問ごとの正解（DESIGN.md §9「答えの選び方」）
 
     def avoids(self, label: str, name: str, text: str | None) -> bool:
         return matches(label, name, self.avoid) or text_matches(text, self.avoid_text)
@@ -156,6 +157,44 @@ def _names(raw: Any, where: str) -> tuple[str, ...]:
     return tuple(raw)
 
 
+ANSWER_KEYS = ("at", "pick", "note")
+
+
+@dataclass(frozen=True)
+class Answer:
+    """プロファイルに書いた、質問ごとの正解（DESIGN.md §9「答えの選び方」）。
+
+    at: 質問の本文の行（line_id。ワイルドカード可）。pick: 選ぶ手順ごとに、選ぶものの画面に見える文字（ワイルドカード可）。
+    """
+
+    at: str
+    pick: tuple[str, ...]
+    note: str = ""
+
+
+def _answers(raw: Any, where: str) -> tuple[Answer, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigError(f"{where} は {{ at = ..., pick = [...] }} の配列にしてください")
+    out = []
+    for i, a in enumerate(raw):
+        aw = f"{where}[{i}]"
+        if not isinstance(a, dict):
+            raise ConfigError(f"{aw} は表にしてください")
+        unknown = sorted(set(a) - set(ANSWER_KEYS))
+        if unknown:
+            raise ConfigError(f"{aw}: 知らない項目です: {', '.join(unknown)}（{' / '.join(ANSWER_KEYS)}）")
+        at = a.get("at")
+        if not isinstance(at, str) or not at:
+            raise ConfigError(f"{aw}.at に質問の本文の行（line_id。例: \"main/scenarioA_004:44.0\"）を書いてください")
+        pick = a.get("pick")
+        if not isinstance(pick, list) or not pick or not all(isinstance(x, str) and x for x in pick):
+            raise ConfigError(f"{aw}.pick に、選ぶ手順ごとの選ぶものの文字を配列で書いてください（例: [\"No.050*\", \"屋上\"]）")
+        out.append(Answer(at, tuple(pick), str(a.get("note", ""))))
+    return tuple(out)
+
+
 STEP_KEYS = ("screen", "scene", "by", "choices", "press", "text", "advance", "choose", "note", "once")
 
 
@@ -170,9 +209,9 @@ def parse_flows(raw: Any) -> list[Flow]:
         where = f"flow[{n}]"
         if not isinstance(f, dict):
             raise ConfigError(f"{where} は表にしてください")
-        unknown = sorted(set(f) - {"name", "start", "steps", "avoid", "avoid_text"})
+        unknown = sorted(set(f) - {"name", "start", "steps", "avoid", "avoid_text", "answers"})
         if unknown:
-            raise ConfigError(f"{where}: 知らない項目です: {', '.join(unknown)}（name / start / steps / avoid / avoid_text）")
+            raise ConfigError(f"{where}: 知らない項目です: {', '.join(unknown)}（name / start / steps / avoid / avoid_text / answers）")
         name = str(f.get("name") or f"flow{n}")
         steps = []
         for i, s in enumerate(f.get("steps") or []):
@@ -199,8 +238,14 @@ def parse_flows(raw: Any) -> list[Flow]:
                               _names(s.get("text"), f"{sw}.text")))
         if not steps:
             raise ConfigError(f"{where}（{name}）に steps がありません")
+        answers = _answers(f.get("answers"), f"{where}.answers")
+        picking = sum(1 for st in steps if st.picks and not st.once)
+        for i, ans in enumerate(answers):
+            if len(ans.pick) > picking:
+                raise ConfigError(f"{where}.answers[{i}].pick が {len(ans.pick)} 個ありますが、選ぶ手順は {picking} 個です")
         flows.append(Flow(name, _cond(f.get("start"), f"{where}.start"), tuple(steps),
-                          _names(f.get("avoid"), f"{where}.avoid"), _names(f.get("avoid_text"), f"{where}.avoid_text")))
+                          _names(f.get("avoid"), f"{where}.avoid"), _names(f.get("avoid_text"), f"{where}.avoid_text"),
+                          answers))
     return flows
 
 

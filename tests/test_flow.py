@@ -88,6 +88,28 @@ def test_parse_profile_and_errors():
         parse_flows([{"name": "x", "start": {"screen": "A"}}])
 
 
+def test_parse_answers():
+    # 質問ごとの正解（DESIGN.md §9「答えの選び方」）。選ぶ手順（思い出・言葉）ごとに、画面に見える文字で書く
+    raw = tomllib.loads(PROFILE)["flow"]
+    raw[0]["answers"] = [{"at": "main/scenarioA_004:44.0", "pick": ["No.050*", "屋上"], "note": "屋上の思い出"}]
+    flows = parse_flows(raw)
+    (ans,) = flows[0].answers
+    assert ans.at == "main/scenarioA_004:44.0" and ans.pick == ("No.050*", "屋上") and ans.note == "屋上の思い出"
+    assert flows[1].answers == ()
+
+    def bad(answers):
+        f = {"name": "x", "start": {"choices": True}, "steps": [{"choose": True}], "answers": answers}
+        parse_flows([f])
+    with pytest.raises(ConfigError, match="知らない項目"):
+        bad([{"at": "a:1", "pick": ["x"], "line": "a:1"}])
+    with pytest.raises(ConfigError, match="at に質問"):
+        bad([{"pick": ["x"]}])
+    with pytest.raises(ConfigError, match="pick に"):
+        bad([{"at": "a:1", "pick": []}])
+    with pytest.raises(ConfigError, match="選ぶ手順は 1 個"):
+        bad([{"at": "a:1", "pick": ["x", "y"]}])
+
+
 def test_follows_question_flow_and_avoids_leaving():
     s, st, run, events = _session()
     k, low = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"]
