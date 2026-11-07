@@ -81,6 +81,8 @@ class Menu:
     order: int  # 表示された順番（大きいほど新しい）
     # 開いている間に本文（line）が進んだ。本文を読んでいる途中に重なって出ている画面（回想中の「本編へ戻る」など）と確かめた
     read_over: bool = False
+    # スクロール領域ごとの、表示される範囲（DESIGN.md §3 の scroll の rect）。一覧の目標へ向かう向きを決めるのに使う
+    scroll: tuple[Rect, ...] = ()
 
     @property
     def visible_buttons(self) -> list[Target]:
@@ -204,7 +206,8 @@ class GameState:
             self._played_since_title = False
         if prev is None:
             self._order += 1
-        menu = Menu(name, bool(d.get("modal")), buttons, prev.order if prev else self._order)
+        scroll = tuple(r for s in d.get("scroll") or [] if isinstance(s, dict) and (r := _rect(s.get("rect"))) is not None)
+        menu = Menu(name, bool(d.get("modal")), buttons, prev.order if prev else self._order, scroll=scroll)
         # 出し直し（ボタンが動いた・確認ダイアログの間だけ隠れた）では、本文が進んだことを忘れない。閉じたら忘れる
         menu.read_over = prev is not None and prev.read_over
         self.menus[name] = menu

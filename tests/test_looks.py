@@ -158,7 +158,10 @@ def test_compare_within_one_shot_and_newly_bright_goes_first():
     windows.shot = _shot([(slots[0].rect, 230), (slots[3].rect, 230)] + [(x.rect, 46) for x in slots[1:3]])
     asyncio.run(s._look())
     assert run.newly_bright == {"MemoryListUI/Slot#3"}
-    assert s._factors()["MemoryListUI/Slot#3"] == CFG["new_bright_factor"]
+    # 一覧の目標にして先に押す（DESIGN.md §9「一覧の台帳と目標」）
+    goal = [op for op in s._list_ops([]) if op.goal is not None]
+    assert [op.label for op in goal] == ["click MemoryListUI/Slot#3"] and goal[0].by == "list"
+    assert goal[0].weight == CFG["weights"]["click"] * CFG["list_factor"]
     assert sum("明るくなった" in n for n in run.notes) == 1
     # 押したら外し、また暗くなって明るくなっても、ランで2回目は先に押さない
     run.newly_bright.discard("MemoryListUI/Slot#3")

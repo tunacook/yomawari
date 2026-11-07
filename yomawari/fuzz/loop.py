@@ -49,8 +49,8 @@ from .ops import (
 from .flow import FlowTracker
 from .resume import SaveHints, newest_slots, older_than, stamp_key
 from .rollback import EDGE_OPS, EDGE_TIMINGS, PATTERNS, RollbackWatch, Step, describe, edge_timing, step_of
-from .search import (
-    REVEAL, Lead, blind_candidates, known_leads, leads, one_way, search_candidates, searchable_menus, stuck_rows, toward,
+from .listing import (
+    MASKED, NO, OK, UNKNOWN, Goal, Ledger, Row, blind_candidates, direction, distance, moves, stuck_rows,
 )
 
 # プレイの目的（random モード）→ レポートでの呼び方
@@ -107,8 +107,8 @@ class FuzzRun:
     newly_bright: set[str] = field(default_factory=set)  # 前は暗かったのに明るくなり、まだ押していないボタン
     screen_weights: dict[str, float] = field(default_factory=dict)  # プロファイルの [screens.<menu>] weight
     flow: FlowTracker = field(default_factory=lambda: FlowTracker([]))  # ゲームの流れ（プロファイルの [[flow]]）
-    # 画面の外を探す（fuzz/search.py）。ランのあいだ覚えておく
-    seen: set[str] = field(default_factory=set)  # 一度でも見えたボタンの label
+    # 一覧の台帳と目標（fuzz/listing.py）。ランのあいだ覚えておく
+    ledger: Ledger = field(default_factory=Ledger)
     silent: set[str] = field(default_factory=set)  # 最後に押したとき反応しなかったボタンの label
     answered: set[str] = field(default_factory=set)  # 押して反応があったことのあるボタンの label
     miss_streak: Counter[str] = field(default_factory=Counter)  # ボタンの label → 続けて反応しなかった回数（このラン）
@@ -116,7 +116,6 @@ class FuzzRun:
     look_groups: dict[str, set[str]] = field(default_factory=dict)
     look_split: set[str] = field(default_factory=set)
     shot_failed: bool = False  # 画面を撮れなかった（「ハーネスの記録」に1回書く）
-    search_miss: Counter[str] = field(default_factory=Counter)  # "<menu>/<name>:<向き>" → 動かしても続けて反応しなかった回数
     # menu → それを開いたボタンの label（ハーネスがボタンを押して開いた寄り道の画面）。ここにない menu はゲームが開いたもの
     opened_by: dict[str, str] = field(default_factory=dict)
     # 並び（looks の並びのキー）→ 押しても反応しなかったボタンの明るさ。同じような明るさのボタンも押せないとみなす
@@ -126,15 +125,11 @@ class FuzzRun:
     look_base: dict[str, tuple[Rect, tuple[float, float]]] = field(default_factory=dict)
     behind_miss: int = 0  # 後ろに下がったとみなした画面があるあいだに、手前のものを押して続けて反応がなかった回数
     behind_refuted: set[str] = field(default_factory=set)  # 押した結果で、後ろに下がっていないと分かった menu（閉じるまで）
-    behind_noted: set[str] = field(default_factory=set)  # 「後ろに下がった」と記録に書いた menu  # 「同じ見た目も押せないとみなした」と記録に書いた並び
-    search_dead: Counter[tuple[str, str]] = field(default_factory=Counter)  # (menu, 探す操作) → 続けて反応しなかった回数
-    # 手順の画面の外を探すとき、並び (menu, name) → (決めた向き, 前に決めたとき見えていたボタンの label,
-    # その向きへ動かしても見えるボタンが変わらなかった回数)。向きは1つに絞って続ける（fuzz/search.py の one_way）
-    flow_way: dict[tuple[str, str], tuple[str, tuple[str, ...], int]] = field(default_factory=dict)
-    flow_moved: set[tuple[str, str]] = field(default_factory=set)  # 決めた向きへ動かしたあと、見えるボタンをまだ比べていない並び
-    flow_stuck: set[tuple[str, str, str]] = field(default_factory=set)  # 動かしても見えるボタンが変わらなくなった (menu, name, 向き)
+    behind_noted: set[str] = field(default_factory=set)  # 「後ろに下がった」と記録に書いた menu
     blind_tries: Counter[str] = field(default_factory=Counter)  # menu → 向きを決めずに探した回数（開き直すと 0 に戻す）
-    search_noted: set[str] = field(default_factory=set)  # 「ハーネスの記録」に書いた探し方（menu ごと）
+    search_noted: set[str] = field(default_factory=set)  # 「ハーネスの記録」に書いた一覧の扱い（menu ごと）
+    # 流れの手順で選ぶ候補の、同じ順位どうしの並べ方（ランの間は変えない。ランごとに変えて、いつも同じものから試さない）
+    tie: dict[str, float] = field(default_factory=dict)
     # 進め方の経験（fuzz/experience.py）
     experience: Experience = field(default_factory=Experience)
     presses: deque[Press] = field(default_factory=lambda: deque(maxlen=20))  # 最近押した操作
@@ -293,13 +288,13 @@ class FuzzSession:
         # 暗いもののうち、押せないときの一般的な見せ方（半透明・灰色）か伏せ字で押せないと見たもの（V-07 の対象）。
         # 明るさの差だけでは入れない（絵柄・サムネイルが暗いだけのことがあり、暗い＝押せないかはデザイン次第のため）
         self._disabled: set[str] = set()
-        self._varied: set[str] = set()  # 明るさに差のあった並び（looks の並びのキー）
         self._values: dict[str, Values] = {}  # 最後に撮った画像での、並びごとのボタンの明るさ
-        # 探す・戻る操作の label → それが向かう ("<unseen|known>:<menu>/<name>:<向き>", menu)
-        self._search: dict[str, list[tuple[str, str]]] = {}
         self._blind: dict[str, list[str]] = {}  # 向きを決めずに探す操作の label → その menu
-        self._flow_rows: dict[str, set[tuple[str, str]]] = {}
-        self._odds: tuple[str, dict[str, Any]] | None = None  # Decider が最後に選んだ操作の label と確率  # 手順の画面の外を探す操作の label → 動かす並び (menu, name)
+        self._list_row: dict[str, str] = {}  # 一覧の目標へ向かう操作の label → その一覧（Row.key）
+        self._rows: dict[str, Row] = {}  # いまの一覧（Row.key → Row）
+        # 目標へ向かって動かした操作の結果を、次に画面が落ち着いたときに確かめる: (一覧, 目標, 操作の label, 動かす前の距離)
+        self._moving: tuple[str, str, str, float] | None = None
+        self._odds: tuple[str, dict[str, Any]] | None = None  # Decider が最後に選んだ操作の label と確率
         self._title_returns = state.title_returns
         self._resolution_changes = state.resolution_changes
         self._play_start = 0  # このプレイを始めたときに届いていた本文・scene・選択肢の数
@@ -308,7 +303,7 @@ class FuzzSession:
         self._choose_intent("起動した")
         self._start_resume()
         if launch > 0:
-            run.flow.forget_reveals("起動し直した")
+            self._forget_progress("起動し直した")
 
     # --- イベント（バスから同期で呼ばれる） ---
 
@@ -394,6 +389,7 @@ class FuzzSession:
                 self.run.guard.book.confirm(key, "to_title", f"タイトル画面（{self.state.title_menu}）が再び出た")
             self._credit("rewind")
             self.run.flow.title_returned()
+            self._forget_ledger("タイトルに戻った")
             self._end_play()
             self._choose_intent("タイトルに戻った")
         if self.state.resolution_changes != self._resolution_changes:
@@ -422,7 +418,7 @@ class FuzzSession:
                 self._end_resume("本文が始まった（ロードせずに始めた）")
         if ev.kind == "load" and d.get("phase") == "start" and self.run.flow.active is None:
             # 流れの外でセーブをロードした（続きから遊ぶ・ロードの行き来）。流れの中のロード（思い出から本編に戻る）は除く
-            self.run.flow.forget_reveals(f"セーブ（{d.get('slot')}）をロードした")
+            self._forget_progress(f"セーブ（{d.get('slot')}）をロードした")
         if (ev.kind == "save" and d.get("phase") == "start" and self.run.flow.active is None
                 and self.run.resume_until is None):
             self.run.saved_t = time.monotonic()
@@ -539,15 +535,12 @@ class FuzzSession:
             self._factors(),
         )
         if cands:
-            search = self._search_candidates()
-            if self._search:
-                # 向きの決まった探し方・戻り方があるので、向きを決めずに動かす操作は使わない（探す向きと逆に動かして打ち消す）
-                cands = [op for op in cands if op.group != "move" or op.label == "key enter"]
-            cands += search
+            cands += self._list_ops(cands)
         cands = self._apply_intent(cands)
         cands = self._apply_resume(cands, now)
         cands = self._apply_save_first(cands)
         cands = self._apply_flow(cands, now)
+        cands = self._one_mover(cands)
         top = self.state.top_modal()
         if top is not None and not top.buttons and not self.state.busy:
             self._modal_since = self._modal_since or now
@@ -560,7 +553,7 @@ class FuzzSession:
         if self._verify_next:
             # 画面を動かす操作（方向キー・Enter・ドラッグ・ホイール。一覧を探す操作も）は、フォーカスやスクロール位置で
             # 結果が変わるので使わない
-            known = [op for op in cands if op.group not in ("move", "search", "return") and (key, op.label) in self.run.responsive]
+            known = [op for op in cands if op.group not in ("move", "list", "search") and (key, op.label) in self.run.responsive]
             if known:
                 cands, verify = known, True
         op = self.run.decider.choose(key, cands)
@@ -626,68 +619,42 @@ class FuzzSession:
         flow = tracker.active
         if flow is None:
             return cands
+        self._sync_lists()
         if before[0] is None:
             # 流れを始めた（同じ質問に戻ってきたときも）: 質問の前の本文を覚え、途中で読んだ本文を数え直す
             run.question = list(run.lines)[-int(cfg["ai_context_lines"]):]
             run.read_lines = []
         boost, low = float(cfg["flow_factor"]), float(cfg["flow_avoid_factor"])
-        # 押しても反応しないと分かっているもの（押して反応がなかった、文字で空・伏せ字と分かる）は選ばない。
-        # 見た目だけで押せなさそうと見たもの（暗い、反応しなかったものと同じ見た目）は、ほかを試し終えてから選ぶ
+        # 選べるもの（候補）: 選択肢は見えているもの、ボタンは手順の画面の一覧の台帳（画面の外の項目も含む。目標として
+        # そこへ向かうため）。押しても反応しないと分かっているもの（押せない・伏せ字、押して反応がなかった、文字で空と
+        # 分かる）は選ばない。見た目だけで押せなさそうと見たもの（暗い、反応しなかったものと同じ見た目）は、順番を後ろにする
         # （人も、明るいものが外れなら暗いものも試す。絵柄が暗いだけで選べるものがある。run 2026-11-05_1346）
         quiet = self._quiet() | run.silent
         sure = (run.silent - self._trusted()) | inactive(self.state.targets(), run.inactive_words, run.masked_chars)
         done = tracker.done_steps()
-
-        def option(t: Any, skip: set[str]) -> str | None:
-            """いまの手順で選べるもの（ボタンの label・選択肢の本文）。当てはまらなければ None。"""
-            if step is None or t is None:
-                return None
-            if t.kind == "choice" and step.choose is not None:
-                ok = not step.choose or any(fnmatchcase(t.text or "", p) for p in step.choose)
-                return (t.text or t.label) if ok else None
-            if (t.kind == "button" and t.label not in skip and step.when.screen == t.menu
-                    and (step.presses(t.label, t.name, t.text) if step.targets
-                         else not (step.advance or step.choose is not None))):
-                return t.label
-            return None
-
-        options = {op.label: o for op in cands if (o := option(op.target, quiet)) is not None}
-        later = {op.label: o for op in cands if (o := option(op.target, sure)) is not None and op.label not in options}
-        tracker.offer(sorted(set(options.values()) | set(later.values())))
-        if (step is not None and step.targets and not options and not later
+        row, options, texts = self._step_options(step, cands, sure)
+        tracker.offer(sorted(options))
+        if (step is not None and step.targets and not options
                 and (top := self.state.top_modal()) is not None and top.name == step.when.screen):
             # 手順の画面が出ているのに、選べるものが1つもない（言葉がまだ1つも開示されていない思い出など）。
             # この選び方は行き止まりとして、ほかの選び方を試す
             tracker.dead_end()
-        # 試行錯誤: すべて試し終えた枝（外れだった組み合わせ）は後回し。いまの枝で試しかけのものがあれば、そちらを先に
-        fresh = {o for o in options.values() if not tracker.exhausted(o)}
-        if not fresh and later and (options or not self._step_bright_anywhere(step, quiet)):
-            # 押せそうに見えるものを試し終えた（または、画面の外も含めて押せそうに見えるものがない）。見た目だけで
-            # 押せなさそうと見たものも試す。押せそうに見えるものが画面の外にあるだけなら、先にそれを探す（ロック中の
-            # 思い出を押して回らない。run 2026-11-05_1811）
-            options |= later
-            fresh = {o for o in later.values() if not tracker.exhausted(o)}
-        away: list[Op] = []
+        # 試行錯誤: すべて試し終えた枝（外れだった組み合わせ）は後回し
+        fresh = {o for o in options if not tracker.exhausted(o)}
         if options and not fresh:
-            # 見えている選び方は試し終えた。画面の外に、まだ試していない選び方があれば、人が一覧をめくるようにそちらを探す
-            # （一覧が最後のほうで開き、見えている 2 つの思い出だけを 1 時間試し続けた。run 2026-11-05_2230）
-            away = self._flow_search(step, sure, boost)
-            if not away:
-                tracker.note_exhausted()
-                fresh = set(options.values())  # 試せる組み合わせをすべて試した。ほかの道もないので、どれも同じに戻す
-        going = {o for o in fresh if tracker.tried(o)}
+            tracker.note_exhausted()
+            fresh = set(options)  # 試せる組み合わせをすべて試した。ほかの道もないので、どれも同じに戻す
         # いま選んでいるもの（思い出）の枝を試し終えた（言葉をすべて試した、言葉の一覧が空の行き止まり）のに、
         # その先の決まったボタン（言葉を選ぶ）の手順か、選べるものが1つもない手順の画面にいる。人が一覧に戻って選び直すように、
         # 手順の操作は優先せず、流れから外れるボタン（要約を閉じる・一覧に戻る）を優先して前の手順へ戻る
         # （run 2026-11-06_1646: 言葉のない思い出で、「言葉を選ぶ」と空の言葉の一覧を閉じるのを繰り返した）
-        spent = step is not None and tracker.spent() and (not step.picks or not (options or later))
-        favored = self._advice(going or fresh, cands, options)
-        ai = float(cfg["ai_choice_factor"])
+        spent = step is not None and tracker.spent() and (not step.picks or not options)
+        goal = None if spent else self._flow_goal(row, fresh, quiet, texts)
         out = []
         for op in cands:
             t = op.target
             f = 1.0
-            o = options.get(op.label)
+            o = self._option_of(step, t)
             if t is not None and flow.avoids(t.label, t.name, t.text):
                 f = boost if spent else low
             elif spent:
@@ -697,105 +664,118 @@ class FuzzSession:
                 f = low  # 同じ選び方で一度済ませた手順のボタン（読んだ思い出をもう一度読む）
             elif step is not None and op.kind == "advance" and step.advance:
                 f = boost
+            elif o is not None and step is not None and step.picks:
+                # 選ぶ手順: 目標（決めた順番の先頭）だけを優先する。ほかの候補はふだんの重み、試し終えたものは後回し
+                f = boost if o == goal else (low if o in options and o not in fresh else 1.0)
             elif o is not None:
-                if o not in fresh:
-                    f = low
-                elif not going or o in going:
-                    f = boost * (ai if o in favored else 1.0)
+                f = boost  # 決まったボタンの手順（この思い出を読む・言葉を選ぶ・答えを決める）
             if f >= boost and not spent:
                 # 流れの手順の操作は、同じ質問に答え直すたびに同じボタン（言葉を選ぶ・この言葉で答える・答えを決める）を押す。
                 # 押した回数で重みを下げる（novelty）と、答え直すほど流れの優先が薄れ、ドラッグ・Esc などの寄り道が増える
                 # （run 2026-11-06_1418: 「この言葉で答える」を 45 回押したあとは、手順の外の操作のほうが多くなった）。
                 # 同じ組み合わせを繰り返さないことは、試行錯誤（exhausted・tried）で見る
-                op = dataclasses.replace(op, novelty=False)
+                op = dataclasses.replace(op, novelty=False, by="flow", goal=o if o == goal else None)
             out.append(op.scaled("flow", f))
-        if away:
-            labels = {op.label for op in away}
-            out = [op for op in out if op.label not in labels] + away
+        if row is not None:
+            # 手順の画面の一覧は、流れが目標を決める（ほかの目標へ向かう操作は使わない）。候補の文字がそろうまでは、
+            # 台帳を埋める（まだ見えていない項目を見にいく）
+            out = [op for op in out if not (op.group == "list" and self._list_row.get(op.label) == row.key)]
+            unshown = run.ledger.unshown(row)
+            cur = run.ledger.goals.get(row.key)
+            filling = goal is None and bool(unshown) and not spent
+            self._note_fill(row, filling)
+            if goal is not None:
+                out += self._toward(row, goal, "flow")
+            elif filling:
+                # 見にいっている途中の項目を続ける（近さで入れ替えると、逆の向きへ動かして行き来する）
+                keep = cur.label if cur is not None and cur.purpose == "fill" and cur.label in unshown else None
+                out += self._toward(row, keep or run.ledger.nearest(row, unshown), "flow", "fill")
         return out
 
-    def _flow_search(self, step: Any, sure: set[str], boost: float) -> list[Op]:
-        """手順の画面の外にある、手順のボタンでまだ試していない選び方へ動かす操作（試し終えたもの、押せないと分かっている
-        もの（伏せ字・押して反応がなかった）は探さない）。動かしても見えてこない向きは search_give_up 回であきらめる。"""
-        run, tracker = self.run, self.run.flow
-        menu = self.state.menus.get(step.when.screen) if step is not None and step.when.screen else None
-        if menu is None or not step.targets:
-            return []
-        skip = sure | inactive(menu.buttons, run.inactive_words, run.masked_chars)
-        give_up = int(self.cfg["search_give_up"])
+    def _option_of(self, step: Any, t: Target | None) -> str | None:
+        """いまの手順で選べるもの（ボタンの label・選択肢の本文）か。当てはまらなければ None。"""
+        if step is None or t is None:
+            return None
+        if t.kind == "choice" and step.choose is not None:
+            ok = not step.choose or any(fnmatchcase(t.text or "", p) for p in step.choose)
+            return (t.text or t.label) if ok else None
+        if (t.kind == "button" and step.when.screen == t.menu
+                and (step.presses(t.label, t.name, t.text) if step.targets
+                     else not (step.advance or step.choose is not None))):
+            return t.label
+        return None
 
-        def want(b: Target) -> bool:
-            return (not b.locked and b.label not in skip and step.presses(b.label, b.name, b.text)
-                    and not tracker.exhausted(b.label))
-        found = [lead for lead in toward(self.state, menu.name, want)
-                 if run.search_miss[self._lead_key(lead)] < give_up
-                 and (lead.menu, lead.name, lead.direction) not in run.flow_stuck]
-        found = self._one_way(found, give_up)
-        if not found:
-            return []
-        w = float(self.cfg["weights"]["click"]) * run.screen_weights.get(menu.name, 1.0) * boost
-        low = float(self.cfg["no_response_factor"])
-        ops = []
-        for op in search_candidates(found, {f"{lead.menu}/{lead.name}": w for lead in found}):
-            targets = [lead for lead in found if (op.kind, op.arg) in REVEAL[lead.direction]]
-            op = dataclasses.replace(op, by="flow_search").scaled("search_dead", low ** run.search_dead[(menu.name, op.label)])
-            self._search[op.label] = [(self._lead_key(lead), lead.menu) for lead in targets]
-            self._flow_rows[op.label] = {(lead.menu, lead.name) for lead in targets}
-            ops.append(op)
-        self._note_search(menu.name, f"`{menu.name}` で、見えている選び方をすべて試したので、画面の外のまだ試していない"
-                                     "項目を探した", final=False, tag="flow")
-        return ops
+    def _step_options(self, step: Any, cands: list[Op], sure: set[str]) -> tuple[Row | None, set[str], dict[str, str]]:
+        """手順で選べるもの（候補）。(手順の画面の一覧, 候補, 候補の文字)。
 
-    def _one_way(self, found: list[Lead], give_up: int) -> list[Lead]:
-        """手順の画面の外を探す向きを、並びごとに1つに絞って続ける（fuzz/search.py の one_way）。
-
-        決めた向きへ動かしても、見えるボタンが続けて give_up 回変わらなければ（端に着いて中身が跳ね返るだけなど。動いては
-        いるので反応はある）、その向きは画面を閉じるまで探さず、ほかの向きにする。"""
+        選択肢は見えているもの。ボタンを選ぶ手順は、手順の画面の一覧の台帳から（画面の外の項目も含む）。台帳で押せない・
+        伏せ字、届かなかったもの、押せないと分かっているもの（sure）、ゲームが押せないと伝えたもの（locked）は除く。"""
         run = self.run
-        while found:
-            picked = one_way(found, {f"{m}/{n}": way[0] for (m, n), way in run.flow_way.items()})
-            stuck = []
-            for lead in picked:
-                row = (lead.menu, lead.name)
-                way = run.flow_way.get(row)
-                n = 0
-                if way is not None and way[0] == lead.direction:
-                    n = way[2]
-                    if row in run.flow_moved:
-                        n = n + 1 if way[1] == lead.visible else 0
-                run.flow_moved.discard(row)
-                if n >= give_up:
-                    stuck.append(lead)
-                    run.flow_stuck.add((*row, lead.direction))
-                    run.flow_way.pop(row, None)
-                else:
-                    run.flow_way[row] = (lead.direction, lead.visible, n)
-            if not stuck:
-                return picked
-            found = [lead for lead in found if lead not in stuck]
-        return []
+        texts: dict[str, str] = {}
+        if step is None:
+            return None, set(), texts
+        if step.choose is not None or not step.picks:
+            # 選択肢、または決まったボタンを押す手順: 見えているもの
+            for op in cands:
+                o = self._option_of(step, op.target)
+                if o is not None and op.target is not None and o not in sure:
+                    texts[o] = o
+            return None, set(texts), texts
+        row = next((r for r in self._rows.values() if r.menu == step.when.screen and (not step.targets or any(
+            step.presses(label, run.ledger.items[label].name, run.ledger.items[label].text) for label in r.labels))), None)
+        menu = self.state.menus.get(step.when.screen)
+        buttons = {b.label: b for b in menu.buttons} if menu is not None else {}
+        out: set[str] = set()
+        labels = list(row.labels) if row is not None else [b.label for b in menu.visible_buttons] if menu else []
+        for label in labels:
+            b = buttons.get(label)
+            item = run.ledger.items.get(label)
+            if b is None or b.locked or label in sure or label in run.ledger.unreachable:
+                continue
+            if row is None and not b.visible:
+                continue
+            if item is not None and item.status in (NO, MASKED):
+                continue
+            if step.targets and not step.presses(label, b.name, b.text):
+                continue
+            out.add(label)
+            if b.text:
+                texts[label] = b.text
+        return row, out, texts
 
-    def _step_bright_anywhere(self, step: Any, quiet: set[str]) -> bool:
-        """手順の画面に、手順のボタンで押せそうに見えるもの（見た目で押せなさそうとしていないもの）があるか。
-        画面の外（hidden）のボタンは明るさを測っていないので、押せそうに見えるものとして数える。"""
-        menu = self.state.menus.get(step.when.screen) if step is not None and step.when.screen else None
-        if menu is None or not step.targets:
-            return False
-        return any(not b.locked and not b.covered and b.label not in quiet and step.presses(b.label, b.name, b.text)
-                   for b in menu.buttons)
+    def _flow_goal(self, row: Row | None, fresh: set[str], quiet: set[str], texts: dict[str, str]) -> str | None:
+        """選ぶ手順の目標: まだ試していない候補を、次の順に並べた先頭。
+        1. いまの枝で試しかけのもの（同じ思い出の、ほかの言葉を試す） 2. 本文の文脈にいちばん合うと AI が答えたもの
+        3. 見た目で押せそうなもの（暗くない・押せなかったものと同じ見た目でない） 4. 表示範囲から近いもの
+        5. ランごとに決めた順（いつも同じものから試さない）。
+        一覧の台帳を埋めている間（まだ見えていない項目がある）は、目標を決めない（候補の文字をそろえてから決める）。"""
+        run, tracker = self.run, self.run.flow
+        if not fresh:
+            return None
+        if row is not None and run.ledger.unshown(row):
+            return None
+        going = {o for o in fresh if tracker.tried(o)}
+        favored = self._advice(going or fresh, texts)
+        for o in fresh:
+            run.tie.setdefault(o, run.rng.random())
 
-    def _advice(self, pick: set[str], cands: list[Op], options: dict[str, str]) -> set[str]:
+        def rank(o: str) -> tuple:
+            near = distance(run.ledger.items[o].rect, row.view) if row is not None and o in run.ledger.items else 0.0
+            return (o not in going if going else False, o not in favored, o in quiet, near, run.tie[o])
+        best = min(fresh, key=rank)
+        # いまの目標が、順番の先頭と同じ順位（近さより前の項目）のままなら、目標を変えない。動かすたびに近さが変わって
+        # 目標が入れ替わると、逆の向きへ動かして行き来するため
+        cur = run.ledger.goals.get(row.key) if row is not None else None
+        if cur is not None and cur.by == "flow" and cur.label in fresh and rank(cur.label)[:3] == rank(best)[:3]:
+            return cur.label
+        return best
+
+    def _advice(self, pick: set[str], texts: dict[str, str]) -> set[str]:
         """先に試す候補のうち、本文の文脈にいちばん合うと AI が答えたもの。答えがまだ・聞かない目的なら空。"""
         run, tracker = self.run, self.run.flow
         if run.advisor is None or not self.cfg["ai_choice"] or len(pick) < 2 or tracker.ctx is None:
             return set()
-        texts: dict[str, str] = {}
-        for op in cands:
-            o, t = options.get(op.label), op.target
-            if o in pick and t is not None:
-                text = t.text if t.kind == "button" else o  # 選択肢の候補は本文そのもの
-                if text:
-                    texts[o] = text
+        texts = {o: t for o, t in texts.items() if o in pick}
         if len(texts) < 2:
             return set()  # 文字の分からない候補（アイコンだけなど）は比べられない
         key = (tracker.ctx, tracker.index, tuple(tracker.path))
@@ -1075,98 +1055,201 @@ class FuzzSession:
         return max(float(self.cfg["exit_min_interval_sec"]),
                    self.run.run_sec * float(self.cfg.get("exit_interval_ratio", 0.0)))
 
-    def _search_candidates(self) -> list[Op]:
-        """まだ見ていないボタンが画面の外にある向きへ動かす操作（fuzz/search.py）。"""
+    # --- 一覧の台帳と目標（fuzz/listing.py） ---
+
+    def _sync_lists(self) -> None:
+        """台帳をいまの画面に合わせる。閉じた画面の台帳を events.jsonl に残し、閉じた寄り道を忘れる。"""
         run = self.run
-        for m in searchable_menus(self.state):
-            run.seen |= {b.label for b in m.visible_buttons}
         for name in [n for n in run.opened_by if n not in self.state.menus]:
             del run.opened_by[name]  # 閉じた
             run.opened_press.pop(name, None)
-        for row in [r for r in run.flow_way if r[0] not in self.state.menus]:
-            del run.flow_way[row]  # 閉じた画面を探す向きは、開き直したら決め直す
-        run.flow_moved = {r for r in run.flow_moved if r[0] in self.state.menus}
-        run.flow_stuck = {k for k in run.flow_stuck if k[0] in self.state.menus}
-        self._search, self._blind, self._flow_rows = {}, {}, {}
-        found = self._choose_leads()
-        stuck = self._quiet() | run.silent
-        if not found:
-            # どの向きに項目があるか分からない（画面の外の矩形が来ない、ページ送りの一覧など）、または一通り見終わった。
-            # 見えている並びがどれも押せそうにないときに、すべての向きへ動かして押せるものを探すのは、ゲームが開いた画面
-            # （本文の途中で選ばせる画面など。押せるものを見つけないと先に進めない）だけ。ハーネスがボタンで開いた寄り道の
-            # 画面（右クリックメニューから開いた回想一覧など）は、押せるものがないのが正常なこともあるので探さない
-            ops = []
-            for menu, _name, point in stuck_rows(self.state, stuck):
-                if menu in run.opened_by:
-                    self._note_search(menu, f"`{menu}` は `{run.opened_by[menu]}` で開いた寄り道の画面なので、見ていない項目を"
-                                            "一通り見たら、押せるものを探すのをやめた（押せるものがないのが正常なこともあるため）")
-                    continue
-                if run.blind_tries[menu] >= int(self.cfg["blind_search_limit"]):
-                    self._note_search(menu, f"`{menu}` はゲームが開いた画面で、見えている項目がどれも押せず、すべての向きへ"
-                                            f"{run.blind_tries[menu]} 回動かしても押せるものが見つからなかった（進めない可能性がある）")
-                    continue
-                self._note_search(menu, f"`{menu}` はゲームが開いた画面で、見えている項目がどれも押せないので、すべての向きへ"
-                                        "動かして押せるものを探した", final=False)
-                w = (float(self.cfg["weights"]["click"]) * run.screen_weights.get(menu, 1.0)
-                     * float(self.cfg["search_factor"]) * float(self.cfg["explore_factor"]))
-                for op in blind_candidates(point, w):
-                    ops.append(op)
-                    self._blind.setdefault(op.label, []).append(menu)
-            return ops
-        return self._lead_ops(found, stuck)
+        for menu in run.ledger.closed(set(self.state.menus)):
+            records = run.ledger.records(menu)
+            if records:
+                self.publish(Event("harness", "listing", {"menu": menu, "items": records}, self.launch))
+        self._rows = {r.key: r for r in run.ledger.sync(self.state, run.masked_chars)}
+        self._check_moving()
 
-    def _choose_leads(self) -> list[Lead]:
-        """画面の外へ動かす向き。まだ認識していない項目を探す（unseen）のと、すでに認識している開示済みの項目へ戻る
-        （known）のは別の行動として、menu ごとにどちらか一方だけを選ぶ（両方を混ぜると、逆の向きへ動かして打ち消し合う）。
-        見当をつけている項目が画面の外にあれば、まっすぐそちらへ向かう。見当がないときだけ、見ていない項目を探す。"""
+    def _check_moving(self) -> None:
+        """目標へ向かって動かしたあと、目標が表示範囲に近づいたかを見る。近づかなかった手段は後回しにし、どの手段でも
+        続けて list_move_give_up 回近づかなければ、目標に届かないとして、その画面を閉じるまで目標から外す。"""
+        if self._moving is None:
+            return
         run = self.run
-        give_up = int(self.cfg["search_give_up"])
-        unseen = [lead for lead in leads(self.state, run.seen) if run.search_miss[self._lead_key(lead)] < give_up]
-        known = [lead for lead in known_leads(self.state, self._known()) if run.search_miss[self._lead_key(lead)] < give_up]
-        menus = {lead.menu for lead in known}
-        return known + [lead for lead in unseen if lead.menu not in menus]
+        key, label, how, before = self._moving
+        self._moving = None
+        row, goal, item = self._rows.get(key), run.ledger.goals.get(key), run.ledger.items.get(label)
+        if row is None or goal is None or goal.label != label or item is None:
+            return
+        now = distance(item.rect, row.view)
+        goal.dist = now
+        if now < before - 1e-3 or self._visible(label):
+            goal.misses = 0
+            run.ledger.dead.pop((row.menu, how), None)
+            return
+        goal.misses += 1
+        run.ledger.dead[(row.menu, how)] += 1
+        if goal.misses >= int(self.cfg["list_move_give_up"]):
+            run.ledger.unreachable.add(label)
+            del run.ledger.goals[key]
+            run.ledger.filling.discard(key)
+            self._note_search(row.menu, f"`{row.key}` の一覧で、目標の `{label}` へ {goal.misses} 回動かしても近づかなかった"
+                                        "ので、届かないとして、ほかの項目を目標にした", final=False, tag="unreachable")
 
-    @staticmethod
-    def _lead_key(lead: Lead) -> str:
-        return f"{lead.kind}:{lead.menu}/{lead.name}:{lead.direction}"
+    def _visible(self, label: str) -> bool:
+        menu = self.state.menus.get(label.split("/", 1)[0])
+        return menu is not None and any(b.label == label and b.visible for b in menu.buttons)
 
-    def _lead_ops(self, found: list[Lead], stuck: set[str]) -> list[Op]:
+    def _list_pressed(self, label: str, responded: bool) -> None:
+        """押した結果を台帳に書き、押した項目が目標なら、次の目標を決め直す。"""
         run = self.run
-        click = float(self.cfg["weights"]["click"])
-        low = float(self.cfg["no_response_factor"])
+        # 押して反応したことのあるもの（前のランで先へ進んだものも）は、続けて answered_miss_limit 回反応しなければ押せない。
+        # 一度も反応したことのないものは、1回で押せないとする（_quiet と同じ）
+        known = label in run.answered or label in run.experience.progressed_targets()
+        limit = int(self.cfg["answered_miss_limit"]) if known else 1
+        run.ledger.pressed(label, responded, run.miss_streak[label], limit)
+        for key, goal in list(run.ledger.goals.items()):
+            if goal.label == label:
+                del run.ledger.goals[key]
+
+    def _list_ops(self, cands: list[Op]) -> list[Op]:
+        """流れの外で、一覧ごとに目標を決め、そこへ向かう操作（DESIGN.md §9「一覧の台帳と目標」）。
+
+        目標の決め方（上から順に、当てはまったもの）:
+        1. 前は暗かったのに明るくなった（新しくアンロックされた）項目があれば、それを押しにいく
+        2. 画面を開いてからまだ見えていない項目があれば、台帳を埋める（いちばん近いものを見えるところまで動かす。押さない）
+        3. ハーネスがボタンで開いた寄り道の画面なら、目標を持たない（押せるものがないのが正常なこともあるため）
+        4. ゲームが開いた画面で、見えている項目に押せそうなもの（押せた、または見た目で押せそうな未確認）がなければ、
+           画面の外の押せたもの → 見た目で押せそうな未確認 → 未確認、の順にいちばん近いものを押しにいく
+        矩形が来ず、ページ送りのボタンも見つからない一覧（画面の外の項目がない）で、ゲームが開いた画面の見えている項目が
+        どれも押せないときだけ、向きを決めずにすべての向きへ動かして探す（blind_search_limit 回まで）。"""
+        run = self.run
+        self._sync_lists()
+        self._blind, self._list_row = {}, {}
+        quiet = self._quiet() | run.silent
         ops: list[Op] = []
-        for kind, group in (("unseen", "search"), ("known", "return")):
-            these = [lead for lead in found if lead.kind == kind]
-            weights: dict[str, float] = {}
-            for lead in these:
-                row = f"{lead.menu}/{lead.name}"
-                w = click * run.screen_weights.get(lead.menu, 1.0)
-                if kind == "known":
-                    # 前に見て明るかった項目へ戻る。見えているものに明るいものがないときだけ候補になる
-                    w *= float(self.cfg["return_factor"])
-                    self._note_search(lead.menu, f"`{lead.menu}` で、前に見て明るかった項目（開示済みと分かっている"
-                                                 "もの）が画面の外にあったので、そこへ戻った", final=False, tag="known")
-                else:
-                    w *= float(self.cfg["search_factor"])
-                    if all(label in stuck for label in lead.visible) or row not in self._varied:
-                        # 見えているものに押せそうなものがない、または見た目に差がなく、どれを押せばよいか分からない。
-                        # 人が一覧を一通り眺めてから選ぶように、押して確かめる（反応がないと待たされる）より先に見て回る
-                        w *= float(self.cfg["explore_factor"])
-                weights[row] = max(weights.get(row, 0.0), w)
-            for op in search_candidates(these, weights, group):
-                targets = [lead for lead in these if (op.kind, op.arg) in REVEAL[lead.direction]]
-                menu = targets[0].menu if targets else ""
-                # この画面で動かしても反応しなかった手段（一覧が受け付けない方向キーなど）は後回しにする
-                op = op.scaled("search_dead", low ** run.search_dead[(menu, op.label)])
-                self._search[op.label] = [(self._lead_key(lead), lead.menu) for lead in targets]
+        for key, row in self._rows.items():
+            goal = self._pick_goal(row, quiet)
+            if goal is None:
+                run.ledger.goals.pop(key, None)
+                continue
+            ops += self._toward(row, goal, "list", run.ledger.goals[key].purpose)
+        offscreen = {r.menu for r in self._rows.values() if any(not self._visible(label) for label in r.labels)}
+        for menu, _name, point in stuck_rows(self.state, quiet):
+            if menu in offscreen or menu in run.opened_by:
+                continue
+            if run.blind_tries[menu] >= int(self.cfg["blind_search_limit"]):
+                self._note_search(menu, f"`{menu}` はゲームが開いた画面で、見えている項目がどれも押せず、すべての向きへ"
+                                        f"{run.blind_tries[menu]} 回動かしても押せるものが見つからなかった（進めない可能性がある）")
+                continue
+            self._note_search(menu, f"`{menu}` はゲームが開いた画面で、見えている項目がどれも押せず、画面の外の項目も"
+                                    "分からないので、すべての向きへ動かして押せるものを探した", final=False)
+            w = float(self.cfg["weights"]["click"]) * run.screen_weights.get(menu, 1.0)
+            for op in blind_candidates(point, w):
                 ops.append(op)
+                self._blind.setdefault(op.label, []).append(menu)
         return ops
 
-    def _known(self) -> set[str]:
-        """すでに認識している開示済みの項目（見当をつけている項目）: このランで測ったとき並びの中で明るかった（ほかに暗い
-        ものがあった）もの、または押して先に進んだことのあるもの（前のランの経験を含む）。押して反応がなかったものは除く。"""
-        bright = {label for label, dim in self.run.dim_history.items() if dim is False}
-        return (bright | self.run.experience.progressed_targets()) - self.run.silent
+    def _pick_goal(self, row: Row, quiet: set[str]) -> str | None:
+        """流れの外での、一覧の目標（_list_ops の 1〜4）。決めたら ledger.goals に置く（同じ目標なら近づき具合を引き継ぐ）。"""
+        run, ledger = self.run, self.run.ledger
+        usable = [label for label in row.labels if label not in ledger.unreachable
+                  and ledger.items[label].status not in (NO, "masked")]
+        bright = [label for label in usable if label in run.newly_bright]
+        unshown = ledger.unshown(row)
+        cur = ledger.goals.get(row.key)
+        keep = cur.label if cur is not None and cur.by == "list" else None
+        if keep in usable and cur is not None and cur.purpose == "pick" and keep not in run.silent:
+            return keep  # 押しにいっている途中の目標は、押すまで続ける（見えて押せるようになったら押す）
+        # いまの目標が同じ組にあれば続ける（近さで入れ替えると、逆の向きへ動かして行き来する）
+        label, purpose = (keep if keep in bright else ledger.nearest(row, bright)), "pick"
+        if label is None and keep in unshown:
+            label, purpose = keep, "fill"  # 見にいっている途中の項目を続ける
+        if label is None and unshown:
+            label, purpose = ledger.nearest(row, unshown), "fill"
+        self._note_fill(row, label is not None and purpose == "fill")
+        if label is None and row.menu in run.opened_by:
+            self._note_search(row.menu, f"`{row.menu}` は `{run.opened_by[row.menu]}` で開いた寄り道の画面なので、台帳を"
+                                        "埋めたら目標を持たない（押せるものがないのが正常なこともあるため）", tag="detour")
+        if label is None and row.menu not in run.opened_by:
+            visible = [lb for lb in usable if self._visible(lb)]
+            if not any(ledger.items[lb].status == OK or lb not in quiet for lb in visible):
+                hidden = [lb for lb in usable if not self._visible(lb)]
+                for group in ([lb for lb in hidden if ledger.items[lb].status == OK],
+                              [lb for lb in hidden if lb not in quiet],
+                              [lb for lb in usable if ledger.items[lb].status == UNKNOWN and lb not in run.silent]):
+                    # いまの目標が同じ組にあれば続ける（近さで入れ替えると、逆の向きへ動かして行き来する）
+                    label = keep if keep in group else ledger.nearest(row, group)
+                    if label is not None:
+                        break
+                if label is None:
+                    self._note_search(row.menu, f"`{row.menu}` はゲームが開いた画面だが、`{row.key}` の一覧に押せるものが"
+                                                "見つからなかった（進めない可能性がある）", tag="nothing")
+        if label is None:
+            return None
+        goal = ledger.goals.get(row.key)
+        if goal is None or goal.label != label:
+            ledger.goals[row.key] = Goal(label, purpose, "list", distance(ledger.items[label].rect, row.view))
+        return label
+
+    def _note_fill(self, row: Row, filling: bool) -> None:
+        """台帳を埋め始めた・埋め終えたことを「ハーネスの記録」に書く（画面ごとに1回ずつ）。"""
+        ledger = self.run.ledger
+        if filling and row.key not in ledger.filling:
+            ledger.filling.add(row.key)
+            self._note_search(row.menu, f"`{row.key}` の一覧で、見えていない項目を見にいき、台帳を埋め始めた",
+                              final=False, tag="fill")
+        elif not filling and row.key in ledger.filling and not ledger.unshown(row):
+            ledger.filling.discard(row.key)
+            self._note_search(row.menu, f"`{row.key}` の一覧の台帳を埋め終えた（{len(row.labels)} 項目）", tag="fill")
+
+    def _toward(self, row: Row, label: str, by: str, purpose: str | None = None) -> list[Op]:
+        """目標へ向かう操作。見えていて押せるなら押し（押すのが目的のとき）、見えていなければ向きを計算してそちらへ動かす。
+        流れの目標（by が flow）を押す操作は、_apply_flow が手順のボタンとして重みを付けるので、ここでは出さない。"""
+        run, ledger = self.run, self.run.ledger
+        goal = ledger.goals.get(row.key)
+        if purpose is None:
+            purpose = goal.purpose if goal is not None and goal.label == label else "pick"
+        if goal is None or goal.label != label or goal.by != by or goal.purpose != purpose:
+            goal = ledger.goals[row.key] = Goal(label, purpose, by, distance(ledger.items[label].rect, row.view))
+        factor = float(self.cfg["list_factor"])
+        w = float(self.cfg["weights"]["click"]) * run.screen_weights.get(row.menu, 1.0)
+        if self._visible(label):
+            if goal.purpose == "fill" or by == "flow":
+                return []  # 見えた（文字は画面が落ち着いたときに読む）。流れの目標は _apply_flow が押す
+            menu = self.state.menus[row.menu]
+            t = next(b for b in menu.buttons if b.label == label)
+            op = Op("click", t, weight=w, group="list", by="list", goal=label).scaled("list", factor)
+            self._list_row[op.label] = row.key
+            return [op]
+        d = direction(ledger.items[label].rect, row.view)
+        if d is None:
+            return []
+        low = float(self.cfg["no_response_factor"])
+        out = []
+        for op in moves(row, d, w, label, by):
+            op = op.scaled("list", factor).scaled("list_dead", low ** ledger.dead[(row.menu, op.label)])
+            self._list_row[op.label] = row.key
+            out.append(op)
+        return out
+
+    def _one_mover(self, cands: list[Op]) -> list[Op]:
+        """目標を持っている一覧があれば、その画面を動かすほかの操作（モーダルでいつも試すドラッグ・ホイール・方向キー）を
+        候補に入れない（目標と逆の向きへ動かして打ち消し合わないように）。Enter は動かす操作ではないので残す。
+        目標を押す操作がある一覧の、ほかの項目を押す操作（ふだんの重み）はそのまま残す。"""
+        if not any(op.goal is not None and op.target is None for op in cands):
+            return cands
+        return [op for op in cands if op.group != "move" or op.label == "key enter"]
+
+    def _forget_progress(self, why: str) -> None:
+        """ゲームの進み具合が入れ替わった（起動し直した、流れの外でセーブをロードした）。"""
+        self.run.flow.forget_reveals(why)
+        self._forget_ledger(why)
+
+    def _forget_ledger(self, why: str) -> None:
+        n = self.run.ledger.forget_progress()
+        if n:
+            self.publish(Event("harness", "listing_reset", {"why": why, "items": n}, self.launch))
 
     def _note_search(self, menu: str, text: str, final: bool = True, tag: str = "") -> None:
         """探し方を「ハーネスの記録」に書く。menu・行動（tag）ごとに、始めたときと終えたときの1回ずつ。"""
@@ -1304,8 +1387,6 @@ class FuzzSession:
         low = float(self.cfg["dim_factor"])
         for label in self._quiet():
             out[label] = low
-        for label in self.run.newly_bright:
-            out[label] = float(self.cfg["new_bright_factor"])
         return out
 
     async def _look(self) -> None:
@@ -1315,7 +1396,7 @@ class FuzzSession:
         比べない（半透明の UI は後ろの絵で明るさが変わり、別のときに撮ったものとは比べられないため）。
         前は暗かったのに、ほかに暗いものが残っている並びで明るくなったボタン（新しくアンロックされたもの）は、ランで1回だけ先に押す。
         """
-        self._dim, self._disabled, self._varied, self._values = set(), set(), set(), {}
+        self._dim, self._disabled, self._values = set(), set(), {}
         # 後ろに下がったと判定した画面のボタンも測る（手前に戻ってきたかを見るため）
         targets = self.state.targets() + [
             b for name in sorted(self.state.behind) if name in self.state.menus
@@ -1363,8 +1444,6 @@ class FuzzSession:
             self._dim |= dk
             self._disabled |= dk & (set(fade) | {label for label in dk if masked(texts.get(label), run.masked_chars)})
             self._values[gkey] = values
-            if dk:
-                self._varied.add(gkey)
             # 並びがすべて同じ明るさなら、暗い・明るいは分からないので、前の記録を残す
             for label in values if dk else ():
                 now = label in dk
@@ -1374,7 +1453,7 @@ class FuzzSession:
                 if run.dim_history.get(label) and not now and label not in run.bright_noted and not empty:
                     run.bright_noted.add(label)
                     run.newly_bright.add(label)
-                    run.notes.append(f"`{label}` は前に見たときは暗かったのに明るくなったので、先に押す（起動 #{self.launch}）")
+                    run.notes.append(f"`{label}` は前に見たときは暗かったのに明るくなったので、一覧の目標にして先に押す（起動 #{self.launch}）")
                 run.dim_history[label] = now
             if dk and gkey not in run.dim_seen:
                 run.dim_seen.add(gkey)
@@ -1456,6 +1535,7 @@ class FuzzSession:
     async def _normal(self, op: Op, key: str, verify: bool) -> None:
         before = self.state.signature()
         screens_before = self.state.screens()
+        menus_before = set(self.state.menus)
         saves_before = self.state.saves
         # 反応しないと見込んでいるボタンは、何も起きないことを確かめるだけなので、待つ時間を短くする
         quiet = op.target is not None and op.target.label in self._quiet()
@@ -1469,7 +1549,7 @@ class FuzzSession:
         timeout = self.run.response_timeout
         if quiet:
             timeout = min(timeout, float(self.cfg["quiet_wait_sec"]))
-        if op.group in ("move", "search", "return") and not verify:
+        if op.group in ("move", "list", "search") and op.target is None and not verify:
             # 一覧を動かす操作は、効けば見た目がすぐ変わる（応答確認のときは S-01 の時間まで待つ）
             timeout = min(timeout, float(self.cfg["move_wait_sec"]))
         while time.monotonic() - started < timeout:
@@ -1508,6 +1588,7 @@ class FuzzSession:
                 self.run.miss_streak.pop(op.target.label, None)
             else:
                 self.run.miss_streak[op.target.label] += 1
+            self._list_pressed(op.target.label, responded)
             if responded:
                 self.run.answered.add(op.target.label)
             if not responded:
@@ -1515,27 +1596,24 @@ class FuzzSession:
                     if op.target.label in values:
                         self.run.locked_look[gkey] = values[op.target.label]
         if responded and op.target is not None:
-            # ボタンで開いた画面は寄り道（fuzz/search.py の探し方を変える）
+            # ボタンで開いた画面は寄り道（一覧の目標の決め方を変える）。押す前から開いていた画面（ボタンのない・モーダルで
+            # ない状態で後ろに残っていて、ボタン付きで出し直されたもの）は、押したボタンで開いたとしない
+            # （run 2026-11-07_0849: 思い出を読むあいだボタンなしで残っていた、ゲームが開いた思い出の一覧を、要約を閉じたら
+            # 「要約を閉じるボタンで開いた寄り道」とみなした）
             for name in self.state.screens()[1] - screens_before[1]:
-                if name in self.state.menus:
+                if name in self.state.menus and name not in menus_before:
                     self.run.opened_by[name] = op.target.label
                     self.run.opened_press[name] = press
                     self.run.blind_tries.pop(name, None)
-        if op.group in ("search", "return"):
+        if op.group == "search":
             for menu in self._blind.get(op.label, []):
                 self.run.blind_tries[menu] += 1
-            if responded:
-                self.run.flow_moved |= self._flow_rows.get(op.label, set())
-            for k, _menu in self._search.get(op.label, []):
-                if responded:
-                    self.run.search_miss.pop(k, None)
-                else:
-                    self.run.search_miss[k] += 1
-            for menu in {m for _k, m in self._search.get(op.label, [])}:
-                if responded:
-                    self.run.search_dead.pop((menu, op.label), None)
-                else:
-                    self.run.search_dead[(menu, op.label)] += 1
+        if op.goal is not None and op.target is None and op.label in self._list_row:
+            # 目標へ向かって動かした。近づいたかは、次に画面が落ち着いたときに見る（_check_moving）
+            key = self._list_row[op.label]
+            row, item = self._rows.get(key), self.run.ledger.items.get(op.goal)
+            if row is not None and item is not None:
+                self._moving = (key, op.goal, op.label, distance(item.rect, row.view))
         hb_age = time.monotonic() - self.state.last_game_t if self.state.last_game_t is not None else None
         self.publish(
             Event(
