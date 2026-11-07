@@ -9,6 +9,7 @@ Unity製ノベルゲームのビルド（.app / .exe）を、人がゲームを�
 - 閾値・除外・猶予期間は `rules.yaml` / `yomawari.toml` に置き、コードに直書きしない
 - OS差分は `yomawari/platform/` と `yomawari/input/` に閉じ込め、上位層はOSを意識しない
 - 座標は常にクライアント領域に対する0〜1の正規化座標で扱う
+- public リポジトリなので、対象のゲームの内部情報（scene 名・行 ID・独自 UI の識別子・正解・セリフなど）を、コード・テスト・文書・commit メッセージ・PR に書かない。詳細は `AGENTS.md`
 - ゲーム側は `unity/com.tunacook.yomawari/`（UPM パッケージ）。`[YOMAWARI]` 行の形式を変えるときは、パッケージ・ハーネス・`DESIGN.md` §3 を同じ PR で変える。パッケージの `.meta` は Unity プロジェクトから `file:` パスで参照して Editor に生成させ、コミットする
 
 ## 環境
