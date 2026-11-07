@@ -7,11 +7,11 @@
 | ev | 出すタイミング |
 |---|---|
 | `boot` | 起動直後（`version`, `build_type`, `build_guid`, `unity`） |
-| `heartbeat` | 1 秒ごと（`fps`, `gc_mem`） |
+| `heartbeat` | 1 秒ごと（`fps`, `frame_max`, `gc_mem`, `mem_total`, `mem_gfx`。`mem_*` は `ProfilerRecorder` で読めるときだけ） |
 | `log_error` | Error / Exception / Assert のログ（`type`, `message`, `stack`） |
 | `resolution` | 起動直後と、解像度か画面モードが変わったとき（`w`, `h`, `mode`） |
 
-Naninovel 1.21 以上が入っていると、`Yomawari.Naninovel` が `scene` / `line` / `line_done` / `choices` / `choices_done` / `menu` / `menu_close` / `transition` / `save` / `load` も出す。ゲームへの組み込み手順はリポジトリの `docs/game-integration.md`。
+Naninovel 1.21 以上が入っていると、`Yomawari.Naninovel` が `scene` / `line` / `line_done` / `choices` / `choices_done` / `menu` / `menu_close` / `transition` / `save` / `load` / `command`（本文以外のコマンドの実行）も出す。ゲームへの組み込み手順はリポジトリの `docs/game-integration.md`。
 
 ## ボタンについて出すこと
 

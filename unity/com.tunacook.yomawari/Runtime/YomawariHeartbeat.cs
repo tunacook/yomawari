@@ -1,3 +1,4 @@
+using Unity.Profiling;
 using UnityEngine;
 
 namespace Yomawari
@@ -5,6 +6,8 @@ namespace Yomawari
     /**
      * <summary>
      * 1 秒ごとに heartbeat を出す。メインスレッドが止まる（ハング）と途絶えるので、ハーネスはそれで検出する。
+     * パフォーマンスの判定のため、その 1 秒でいちばん長かったフレームの時間（frame_max、ms）と、Unity 標準の
+     * ProfilerRecorder で読めるメモリ（mem_total: Total Used Memory、mem_gfx: Gfx Used Memory。読めなければ出さない）も付ける。
      * 解像度か画面モードが変わったときは resolution も出す。
      * YomawariLog が -yomawari のときだけ生成する
      * </summary>
@@ -14,25 +17,46 @@ namespace Yomawari
         const float Interval = 1f;
 
         float elapsed;
+        float frameMax;
         int frames;
+        ProfilerRecorder totalMem;
+        ProfilerRecorder gfxMem;
         int lastWidth = -1;
         int lastHeight = -1;
         FullScreenMode lastMode;
+
+        void OnEnable()
+        {
+            totalMem = ProfilerRecorder.StartNew(ProfilerCategory.Memory, "Total Used Memory");
+            gfxMem = ProfilerRecorder.StartNew(ProfilerCategory.Memory, "Gfx Used Memory");
+        }
+
+        void OnDisable()
+        {
+            totalMem.Dispose();
+            gfxMem.Dispose();
+        }
 
         void Update()
         {
             EmitResolutionIfChanged();
 
             // timeScale の影響を受けないよう unscaledDeltaTime で数える
-            elapsed += Time.unscaledDeltaTime;
+            var dt = Time.unscaledDeltaTime;
+            elapsed += dt;
+            if (dt > frameMax) frameMax = dt;
             frames++;
             if (elapsed < Interval) return;
 
             var fps = frames / elapsed;
-            YomawariLog.Emit("heartbeat",
-                "\"fps\":" + YomawariFormat.Num(fps) +
-                ",\"gc_mem\":" + System.GC.GetTotalMemory(false));
+            var fields = "\"fps\":" + YomawariFormat.Num(fps) +
+                         ",\"frame_max\":" + YomawariFormat.Num(frameMax * 1000f) +
+                         ",\"gc_mem\":" + System.GC.GetTotalMemory(false);
+            if (totalMem.Valid) fields += ",\"mem_total\":" + totalMem.LastValue;
+            if (gfxMem.Valid) fields += ",\"mem_gfx\":" + gfxMem.LastValue;
+            YomawariLog.Emit("heartbeat", fields);
             elapsed = 0f;
+            frameMax = 0f;
             frames = 0;
         }
 

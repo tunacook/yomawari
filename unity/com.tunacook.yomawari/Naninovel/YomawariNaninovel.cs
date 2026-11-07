@@ -1,5 +1,7 @@
 using System.Collections.Generic;
+using System.Reflection;
 using Naninovel;
+using Naninovel.Commands;
 using UnityEngine;
 using UnityEngine.Scripting;
 
@@ -10,7 +12,7 @@ namespace Yomawari
 {
     /**
      * <summary>
-     * Naninovel のサービスのイベントから進行を出す: scene / line / line_done / choices_done / save / load。
+     * Naninovel のサービスのイベントから進行を出す: scene / line / line_done / choices_done / save / load / command。
      * 画面に出ている UI（menu / menu_close / choices / transition）は YomawariUiWatcher が見る。
      * Naninovel のエンジンが作り直されても（タイトルへ戻る等）、初期化のたびに購読し直す
      * </summary>
@@ -19,6 +21,8 @@ namespace Yomawari
     {
         static string lastScript;
         static string lastLineId;
+        // コマンドの型 → (名前（@ のあとに書く別名）, 名前のない引数（対象）のフィールド)
+        static readonly Dictionary<System.Type, (string name, FieldInfo target)> commandInfo = new();
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad), Preserve]
         static void Init()
@@ -57,14 +61,51 @@ namespace Yomawari
             state.OnGameLoadFinished += a => EmitSaveLoad("load", a, "end");
         }
 
-        // メイントラックのスクリプトが変わったら scene を出す
+        // メイントラックのスクリプトが変わったら scene を出す。本文以外のコマンドは command で出す
         static void OnExecute(IScriptPlayer player, IScriptTrack track)
         {
             if (track != player.MainTrack) return;
             var path = track.PlaybackSpot.ScriptPath;
-            if (string.IsNullOrEmpty(path) || path == lastScript) return;
-            lastScript = path;
-            YomawariLog.Emit("scene", "\"name\":" + YomawariFormat.Str(path));
+            if (!string.IsNullOrEmpty(path) && path != lastScript)
+            {
+                lastScript = path;
+                YomawariLog.Emit("scene", "\"name\":" + YomawariFormat.Str(path));
+            }
+            EmitCommand(track);
+        }
+
+        // 演出（キャラ・背景・エフェクト・音など）のコマンドを出す。ハーネスは、実行の前後で FPS・CPU・GPU・メモリが
+        // 悪くなっていないかを見る（DESIGN.md §10「パフォーマンス」）。本文（print）は line で出しているので出さない
+        static void EmitCommand(IScriptTrack track)
+        {
+            var command = track.PlayedCommand;
+            if (command == null || command is PrintText) return;
+            var (name, field) = InfoOf(command.GetType());
+            string target = null;
+            if (field?.GetValue(command) is ICommandParameter p && p.HasValue && !p.DynamicValue)
+                target = p.ToString();
+            var spot = track.PlaybackSpot;
+            YomawariLog.Emit("command",
+                "\"name\":" + YomawariFormat.Str(name) +
+                ",\"target\":" + YomawariFormat.Str(target) +
+                ",\"line_id\":" + YomawariFormat.Str(spot.Valid ? spot.ScriptPath + ":" + spot.LineNumber + "." + spot.InlineIndex : null));
+        }
+
+        static (string, FieldInfo) InfoOf(System.Type type)
+        {
+            if (commandInfo.TryGetValue(type, out var info)) return info;
+            var alias = type.GetCustomAttribute<Command.AliasAttribute>()?.Alias;
+            var name = string.IsNullOrEmpty(alias) ? char.ToLowerInvariant(type.Name[0]) + type.Name.Substring(1) : alias;
+            FieldInfo target = null;
+            foreach (var f in CommandParameter.ExtractFields(type))
+            {
+                if (f.GetCustomAttribute<Command.AliasAttribute>()?.Alias != Command.NamelessParameterAlias) continue;
+                target = f;
+                break;
+            }
+            info = (name, target);
+            commandInfo[type] = info;
+            return info;
         }
 
         static void OnPrintStarted(IScriptPlayer player, PrintMessageArgs args)

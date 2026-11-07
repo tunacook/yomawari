@@ -125,6 +125,147 @@ rules:
     params:
       heartbeat_alive_sec: 3
 
+  # --- パフォーマンス（DESIGN.md §10「パフォーマンス」）。共通の設定は下の perf。閾値は実機で回しながら調整する ---
+
+  - id: R-01
+    severity: major
+    title: メモリが増え続ける
+    description: >-
+      起動して安定したあと、メモリ（metrics に書いた種類）の回帰直線の傾きが閾値を超えた。起動ごとに1回
+    params:
+      metrics: [rss, total]
+      # この秒数以上のサンプルがたまってから判定する
+      min_span_sec: 600
+      mb_per_hour: 200
+
+  - id: R-02
+    severity: major
+    title: FPS が低いまま続く
+    description: 遷移中・起動や scene の直後以外で、FPS が min_fps 未満の状態が sec 秒以上続いた
+    params:
+      min_fps: 20
+      sec: 10
+
+  - id: R-03
+    severity: major
+    title: スレッド数が増え続ける
+    description: window_sec 秒のあいだ、スレッド数が min_increase 以上増え、途中で max_drop より多く減らなかった
+    params:
+      window_sec: 600
+      min_increase: 20
+      max_drop: 2
+
+  - id: R-04
+    severity: major
+    title: CPU 使用率が急に上がる
+    description: >-
+      ゲームの CPU 使用率（1 コアを 100%）が、そのランの中央値より add ポイント以上、かつ ratio 倍以上の状態で sec 秒以上続いた。
+      遷移中・起動や scene の直後は除く
+    params:
+      add: 50
+      ratio: 2.0
+      sec: 3
+
+  - id: R-05
+    severity: major
+    title: GPU 使用率が急に上がる
+    description: ゲームの GPU 使用率が、R-04 と同じ条件で上がった
+    params:
+      add: 30
+      ratio: 2.0
+      sec: 3
+
+  - id: R-06
+    severity: major
+    title: メモリが急に増えて戻らない
+    description: >-
+      メモリ（RSS・Total Used Memory・Gfx Used Memory のどれか）が window_sec 秒で jump_mb 以上増え、hold_sec 秒たっても、
+      増えた分の keep_ratio 以上が残っている
+    params:
+      jump_mb: 300
+      window_sec: 10
+      hold_sec: 60
+      keep_ratio: 0.5
+
+  - id: R-07
+    severity: major
+    title: 同じところで重いフレームが出る
+    description: >-
+      frame_ms 以上かかったフレームが、同じ本文の行か、同じ演出のコマンドの attribute_sec 秒以内に repeats 回以上出た。
+      遷移中・起動や scene・ロードの直後は除く
+    params:
+      frame_ms: 100
+      attribute_sec: 2
+      repeats: 2
+
+  - id: R-08
+    severity: major
+    title: 演出のコマンドで重くなる
+    description: >-
+      同じコマンドと対象（@spawn Rain、@char Kaori など）の実行後 window_sec 秒の値が、実行前 window_sec 秒より悪い
+      （FPS が fps_drop_ratio 以上落ちる、CPU・GPU 使用率が cpu_add・gpu_add ポイント以上上がる、メモリが mem_mb 以上増える）
+      ことが、repeats 回以上あった。前後とも min_samples 個以上のサンプルがあるときだけ数える
+    params:
+      window_sec: 3
+      min_samples: 2
+      fps_drop_ratio: 0.3
+      cpu_add: 50
+      gpu_add: 30
+      mem_mb: 100
+      repeats: 2
+
+  - id: R-09
+    severity: major
+    title: ほかの場所より重い scene がある
+    description: >-
+      ランの終わりに、scene ごとの中央値をラン全体の中央値と比べる。FPS が fps_drop_ratio 以上低い、または CPU・GPU 使用率が
+      cpu_add・gpu_add ポイント以上高い。サンプルが min_samples 個以上の scene だけ
+    params:
+      min_samples: 30
+      fps_drop_ratio: 0.25
+      cpu_add: 50
+      gpu_add: 30
+
+  - id: R-10
+    severity: major
+    title: 前回までのランより悪くなった
+    description: >-
+      ランの終わりに、scene ごとの値と、演出のコマンドごとの実行前後の差を、同じビルド名・同じマシンの前回までのラン
+      （perf の history_runs 回）と比べる。FPS が ratio 以上落ちた、CPU・GPU 使用率が ratio 以上かつ cpu_add・gpu_add ポイント以上
+      上がった、メモリの最大が ratio 以上かつ mem_mb 以上増えた
+    params:
+      ratio: 0.2
+      cpu_add: 10
+      gpu_add: 10
+      mem_mb: 100
+      min_samples: 30
+
+# パフォーマンスの判定（R-01〜R-10）で共通の設定
+perf:
+  # 起動（boot）してからこの秒数は計らない（読み込み・シェーダーのコンパイル）
+  warmup_sec: 30
+  # scene が変わった・遷移が終わった・ロードが終わったあと、この秒数はふだんの値と比べない
+  settle_sec: 3
+  # 中央値（ふだんの値）を基準にするのに要るサンプル数
+  min_samples: 30
+  # R-10 で比べる、前回までのランの数
+  history_runs: 5
+  # ゲーム以外が原因と見なして判定から外すとき。ゲームの CPU・GPU はプロセス単位なので other_* では外さない
+  exclude:
+    # マシン全体の CPU（全コアに対する %）のうち、ゲーム以外が使っている分
+    other_cpu_percent: 50
+    # GPU 全体の使用率のうち、ゲーム以外が使っている分
+    other_gpu_percent: 40
+    # 熱の状態（nominal / fair / serious / critical）がこれ以上
+    thermal: serious
+    # メモリの逼迫度（normal / warning / critical）がこれ以上
+    pressure: warning
+    # 60 秒でスワップがこれ以上増えた
+    swap_growth_mb: 100
+    # 計測の間隔がこの秒数以上空いたら（スリープ）、そのあと after_gap_sec 秒外す
+    gap_sec: 5
+    after_gap_sec: 30
+
 # ボタンの役割を、押す前にボタンの文字（menu の text）と名前（GameObject 名）から推定するキーワード（DESIGN.md §9「役割の推定と判定」）。
 # ゲームごとではなく yomawari 全体で共通に持つ（ゲームのプロファイルには書かない）。
 # - text: 英数字の語は単語として（大文字小文字を区別しない）、日本語などは部分一致で照らし合わせる

@@ -74,6 +74,14 @@ class FakePlatform(MacPlatform):
         # 本物の画面を文字認識すると、そのときデスクトップに出ている文字で結果が変わるので、何も読まない
         return []
 
+    def machine(self) -> str:
+        return "TestMac"
+
+    def perf_stats(self, pid: int) -> dict:
+        # 本物のマシンの状態（前面のアプリ・熱など）で結果が変わらないように、いつも平常にする
+        return {"gpu_ns": None, "gpu_device": None, "thermal": "nominal", "pressure": "normal", "asleep": False,
+                "locked": False, "front": True, "on_screen": True}
+
 
 def scaled_rules(factor: float) -> dict[str, Rule]:
     """リポジトリの rules.yaml の時間系パラメータ（*_sec）だけを factor 倍する。
@@ -104,6 +112,15 @@ def sample_log() -> Path:
 @pytest.fixture
 def repo_rules() -> dict[str, Rule]:
     return load_rules(RULES_PATH)
+
+
+@pytest.fixture
+def repo_perf() -> dict:
+    from yomawari.detect.perf import load_perf
+
+    perf = load_perf(RULES_PATH)
+    assert perf is not None
+    return perf
 
 
 __all__ = ["make_app", "FakePlatform", "scaled_rules", "shutil"]
