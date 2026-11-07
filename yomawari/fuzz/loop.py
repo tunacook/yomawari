@@ -36,7 +36,7 @@ from ..state import GameState, Rect, Target
 from .decider import Decider
 from .experience import Experience, Press
 from .guard import Guard
-from .looks import Values, alike, brightest, dark, disabled_looks, groups, inactive, masked, measure, text_inactive
+from .looks import Values, alike, brighter, brightest, dark, disabled_looks, groups, inactive, letters, masked, measure, text_inactive
 from .advisor import ChoiceAdvisor
 from .reading import assign, unread
 from .ops import (
@@ -110,6 +110,11 @@ class FuzzRun:
     # 一覧の台帳と目標（fuzz/listing.py）。ランのあいだ覚えておく
     ledger: Ledger = field(default_factory=Ledger)
     silent: set[str] = field(default_factory=set)  # 最後に押したとき反応しなかったボタンの label
+    # 反応しなかったボタン → 反応しなかったあとに見た、いちばん明るい見た目（平均・明るい部分）と、読めた文字の数。
+    # 開示された（はっきり明るくなった・文字が読めるようになった）かを見て、反応しないボタンから外す（_revive）
+    silent_look: dict[str, tuple[float, float]] = field(default_factory=dict)
+    silent_letters: dict[str, int] = field(default_factory=dict)
+    revived_noted: set[str] = field(default_factory=set)
     answered: set[str] = field(default_factory=set)  # 押して反応があったことのあるボタンの label
     miss_streak: Counter[str] = field(default_factory=Counter)  # ボタンの label → 続けて反応しなかった回数（このラン）
     # 見た目の推定（明るさ・半透明・文字）。並び → 測ったボタン、見分けられた（押せなさそうなものがあった）並び
@@ -1355,6 +1360,66 @@ class FuzzSession:
                     run.look_base[label] = (rects[label], v)
         self.state.behind = behind
 
+    def _note_silent(self, t: Target, responded: bool) -> None:
+        """押した結果で、反応しなかったときの見た目と文字を覚える（反応したら忘れる）。"""
+        run = self.run
+        if responded:
+            run.silent_look.pop(t.label, None)
+            run.silent_letters.pop(t.label, None)
+            return
+        look = next((values[t.label] for values in self._values.values() if t.label in values), None)
+        if look is not None:
+            old = run.silent_look.get(t.label)
+            run.silent_look[t.label] = look if old is None else (max(old[0], look[0]), max(old[1], look[1]))
+        item = run.ledger.items.get(t.label)
+        text = t.text or (item.text if item is not None else None)
+        run.silent_letters[t.label] = max(run.silent_letters.get(t.label, 0), letters(text, run.masked_chars))
+
+    def _revive_by_look(self, values: Values) -> None:
+        """反応しなかったボタンが、反応しなかったあとに見たいちばん明るい見た目より、はっきり明るくなったら開示されたとみなす。
+        そうでなければ、いちばん明るい見た目を更新する（後ろの絵の揺れで少しずつ明るく見えても、何度も戻さないように）。"""
+        run = self.run
+        ratio, gap = float(self.cfg["dim_ratio"]), float(self.cfg["dim_min_gap"])
+        for label, v in values.items():
+            if label not in run.silent:
+                continue
+            old = run.silent_look.get(label)
+            if old is not None and brighter(v, old, ratio, gap):
+                self._revive(label, f"明るくなった（{old[1]:.2f} → {v[1]:.2f}）")
+            else:
+                run.silent_look[label] = v if old is None else (max(old[0], v[0]), max(old[1], v[1]))
+
+    def _revive_by_text(self) -> None:
+        """反応しなかったボタンの、画面から読める文字が増えた（「？？？」が題名になった）ら開示されたとみなす。"""
+        run = self.run
+        need = int(self.cfg["revive_letters"])
+        for t in self.state.targets():
+            if t.kind != "button" or t.label not in run.silent or not t.text:
+                continue
+            n = letters(t.text, run.masked_chars)
+            before = run.silent_letters.get(t.label, 0)
+            # 伏せ字の文字が残っていれば、まだ開示されていない（後ろの本文を一緒に読んだだけ）
+            if n - before >= need and not any(c in run.masked_chars for c in t.text):
+                self._revive(t.label, f"文字が読めるようになった（「{t.text}」）")
+
+    def _revive(self, label: str, why: str) -> None:
+        """押しても反応しなかったボタンが、そのあと開示された。反応しないボタンから外し、押せるかを未確認に戻して、
+        流れの候補・一覧の目標に入れ直す（run 2026-11-07_1511: 開示前に押して反応しなかった思い出「No.009」が、
+        質問の時点では開示されていたのに候補から外れたままで、「試せる組み合わせをすべて試した」で止まった）。"""
+        run = self.run
+        run.silent.discard(label)
+        run.silent_look.pop(label, None)
+        run.silent_letters.pop(label, None)
+        run.miss_streak.pop(label, None)
+        item = run.ledger.items.get(label)
+        if item is not None and item.status == NO:
+            item.status = UNKNOWN
+        run.ledger.unreachable.discard(label)
+        if label not in run.revived_noted:
+            run.revived_noted.add(label)
+            run.notes.append(f"`{label}` は押しても反応しなかったが、そのあと{why}ので、開示されたとみなして"
+                             f"押せるものに戻した（起動 #{self.launch}）")
+
     def _locked_alike(self) -> set[str]:
         """押しても反応しなかったボタンと同じような明るさのボタン。人が1つ押してみて「この見た目は開示されていない」と
         覚え、同じ見た目のものは押さずに、ほかを探しにいくように。
@@ -1423,6 +1488,7 @@ class FuzzSession:
         measured = measure(targets, shot) if looks else {}
         if reading:
             await self._read_text(shot, measured)
+            self._revive_by_text()
         if not looks:
             return
         record: dict[str, Any] = {}
@@ -1446,6 +1512,7 @@ class FuzzSession:
             self._dim |= dk
             self._disabled |= dk & (set(fade) | {label for label in dk if masked(texts.get(label), run.masked_chars)})
             self._values[gkey] = values
+            self._revive_by_look(values)
             # 並びがすべて同じ明るさなら、暗い・明るいは分からないので、前の記録を残す
             for label in values if dk else ():
                 now = label in dk
@@ -1586,6 +1653,7 @@ class FuzzSession:
             self._verify_behind(op.target, responded)
         if op.target is not None and op.target.kind == "button":
             (self.run.silent.discard if responded else self.run.silent.add)(op.target.label)
+            self._note_silent(op.target, responded)
             if responded and self.run.resume_until is not None and self.run.save_hints.next_page(op.target):
                 self.run.resume_pages += 1
             if responded:

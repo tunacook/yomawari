@@ -628,3 +628,50 @@ def test_empty_slot_is_not_newly_bright():
     windows.shot = _shot([(slots[0].rect, 230), (slots[3].rect, 230)] + [(x.rect, 46) for x in slots[1:3]])
     asyncio.run(s._look())
     assert run.newly_bright == set() and not any("明るくなった" in n for n in run.notes)
+
+
+def test_silent_slot_comes_back_when_revealed_by_look():
+    # 開示前に押して反応しなかった思い出が、あとで開示されて明るくなったら、反応しないボタンから外して候補に戻す
+    # （run 2026-11-07_1511: No.009 が候補から外れたままで、質問に答えられなかった）
+    from yomawari.fuzz.listing import NO, UNKNOWN
+
+    slots = [_slot(i) for i in range(3)]
+    s, st, run, *_ = _list_session(slots, _shot([(x.rect, 120) for x in slots]))
+    label = "MemoryListUI/Slot#1"
+    s._values = {"MemoryListUI/Slot": {label: (0.13, 0.19)}}
+    target = next(t for t in st.targets() if t.label == label)
+    run.silent.add(label)
+    s._note_silent(target, False)
+    run.ledger.sync(st, run.masked_chars)
+    run.ledger.items[label].status = NO
+    # 後ろの絵の揺れで少し明るく見えただけでは戻さない（いちばん明るい見た目を更新する）
+    s._revive_by_look({label: (0.14, 0.30)})
+    assert label in run.silent and run.silent_look[label] == (0.14, 0.30)
+    # はっきり明るくなった（開示された）
+    s._revive_by_look({label: (0.41, 0.72)})
+    assert label not in run.silent
+    assert run.ledger.items[label].status == UNKNOWN
+    assert any("開示されたとみなして" in n for n in run.notes)
+
+
+def test_silent_slot_comes_back_when_title_becomes_readable():
+    slots = [_slot(i) for i in range(3)]
+    s, st, run, *_ = _list_session(slots, _shot([(x.rect, 120) for x in slots]))
+    run.masked_chars = "？?"
+    label = "MemoryListUI/Slot#2"
+    st.set_read_text({label: "No.009 ？？？"})
+    run.silent.add(label)
+    s._note_silent(next(t for t in st.targets() if t.label == label), False)
+    st.set_read_text({label: "No.009 2？2"})  # 読み取りの揺れ（読める文字は増えていない）
+    s._revive_by_text()
+    assert label in run.silent
+    st.set_read_text({label: "？？？ アカウント名を選ぼ"})  # 後ろの本文を一緒に読んだ（伏せ字のまま）
+    s._revive_by_text()
+    assert label in run.silent
+    st.set_read_text({label: "No.009 こわくない場所"})
+    s._revive_by_text()
+    assert label not in run.silent
+    # 反応したら、反応しなかったときの記録を忘れる
+    run.silent.add(label)
+    s._note_silent(next(t for t in st.targets() if t.label == label), True)
+    assert label not in run.silent_letters
