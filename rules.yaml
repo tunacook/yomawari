@@ -131,12 +131,15 @@ rules:
     severity: major
     title: メモリが増え続ける
     description: >-
-      起動して安定したあと、メモリ（metrics に書いた種類）の回帰直線の傾きが閾値を超えた。起動ごとに1回
+      メモリ（metrics に書いた種類）の下限（bucket_sec 秒ごとの最小）が、min_span_sec 秒以上、前の下限から max_drop_mb より
+      下がらずに、min_rise_mb 以上増え続けた（使い終わったメモリが解放されないまま増え続ける）。読み込みで増えても、あとで
+      解放されて下限が戻るなら出さない（短いあいだの増減は見ない）。起動ごとに1回
     params:
       metrics: [rss, total]
-      # この秒数以上のサンプルがたまってから判定する
-      min_span_sec: 600
-      mb_per_hour: 200
+      bucket_sec: 300
+      min_span_sec: 3600
+      min_rise_mb: 200
+      max_drop_mb: 50
 
   - id: R-02
     severity: major
@@ -168,29 +171,16 @@ rules:
 
   - id: R-05
     severity: major
-    title: GPU 使用率が急に上がり、FPS も落ちる
+    title: FPS がふだんより落ちたまま続く
     description: >-
-      ゲームの GPU 使用率が R-04 と同じ条件で上がり、そのあいだ FPS もふだんより fps_drop_ratio 以上落ちていた
-      （FPS が落ちていなければ、GPU は使っても構わない）。ふだんの値は、サンプルが baseline_samples 個たまってから決める
-      （ランの始めの一部の場面だけで決めない）
+      FPS が、そのランのふだんの値（中央値）より drop_ratio 以上落ちたまま sec 秒以上続いた。遷移中・起動や scene の直後は除く。
+      GPU・CPU をどれだけ使っていても、FPS が落ちていなければ出さない（落ちたときの GPU・CPU は内容に書く）。ふだんの値は、
+      サンプルが baseline_samples 個たまってから決める（ランの始めの一部の場面だけで決めない）。同じ落ち込みで R-02 にも
+      当たるときは、R-05 の 1 件にする
     params:
-      add: 30
-      ratio: 2.0
-      sec: 3
-      fps_drop_ratio: 0.1
+      drop_ratio: 0.2
+      sec: 5
       baseline_samples: 300
-
-  - id: R-06
-    severity: major
-    title: メモリが急に増えて戻らない
-    description: >-
-      メモリ（RSS・Total Used Memory・Gfx Used Memory のどれか）が window_sec 秒で jump_mb 以上増え、hold_sec 秒たっても、
-      増えた分の keep_ratio 以上が残っている
-    params:
-      jump_mb: 300
-      window_sec: 10
-      hold_sec: 60
-      keep_ratio: 0.5
 
   - id: R-07
     severity: major
@@ -209,7 +199,7 @@ rules:
     description: >-
       同じコマンドと対象（@spawn Rain、@char Kaori など）の実行後 window_sec 秒の値が、実行前 window_sec 秒より悪い
       （FPS が fps_drop_ratio 以上落ちる、CPU 使用率が cpu_add ポイント以上上がる、GPU 使用率が gpu_add ポイント以上上がり
-      FPS も gpu_fps_drop_ratio 以上落ちる、メモリが mem_mb 以上増える）ことが、repeats 回以上あった。
+      FPS も gpu_fps_drop_ratio 以上落ちる）ことが、repeats 回以上あった。メモリの増減は見ない（R-01 で見る）。
       前後とも min_samples 個以上のサンプルがあるときだけ数える。同じときに実行した複数のコマンドが同じ悪化に当たったら、
       いちばん大きく悪化したものの 1 件にまとめる
     params:
@@ -219,7 +209,6 @@ rules:
       cpu_add: 50
       gpu_add: 30
       gpu_fps_drop_ratio: 0.1
-      mem_mb: 100
       repeats: 2
 
   - id: R-09
@@ -242,13 +231,12 @@ rules:
     description: >-
       ランの終わりに、scene ごとの値と、演出のコマンドごとの実行前後の差を、同じビルド名・同じマシンの前回までのラン
       （perf の history_runs 回）と比べる。FPS が ratio 以上落ちた、CPU・GPU 使用率が ratio 以上かつ cpu_add・gpu_add ポイント以上
-      上がった（GPU は FPS も gpu_fps_drop_ratio 以上落ちたときだけ）、メモリの最大が ratio 以上かつ mem_mb 以上増えた
+      上がった（GPU は FPS も gpu_fps_drop_ratio 以上落ちたときだけ）。メモリは見ない（R-01 で見る）
     params:
       ratio: 0.2
       cpu_add: 10
       gpu_add: 10
       gpu_fps_drop_ratio: 0.1
-      mem_mb: 100
       min_samples: 30
 
   - id: R-11
@@ -262,7 +250,7 @@ rules:
       gpu_max: 15
       sec: 10
 
-# パフォーマンスの判定（R-01〜R-11）で共通の設定
+# パフォーマンスの判定（R-01〜R-11。R-06 は欠番）で共通の設定
 perf:
   # 起動（boot）してからこの秒数は計らない（読み込み・シェーダーのコンパイル）
   warmup_sec: 30

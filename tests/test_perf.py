@@ -88,21 +88,30 @@ def test_game_cpu_spike_is_judged_even_with_other_load(repo_rules, repo_perf):
     assert s.ids().count("R-04") == 1
     # AI に聞いているあいだは外す
     s2 = warm(repo_rules, repo_perf, n=300)
-    s2.step(5, gpu=80, fps=40, ai=True)
+    s2.step(10, fps=40, ai=True)
     assert "R-05" not in s2.ids()
-    s2.step(3, gpu=80, fps=40)
-    assert s2.ids().count("R-05") == 1
 
 
-def test_r05_gpu_is_fine_while_fps_holds_and_needs_five_minutes_of_baseline(repo_rules, repo_perf):
-    # FPS が落ちていなければ、GPU を使っても出さない
+def test_r05_fps_drop_from_usual_and_gpu_is_only_a_clue(repo_rules, repo_perf):
+    # ふだん 60 から 2 割以上落ちたまま 5 秒。そのときの GPU は内容に書く
     s = warm(repo_rules, repo_perf, n=300)
-    s.step(10, gpu=80)
+    s.step(4, gpu=80, fps=45)
     assert "R-05" not in s.ids()
-    # ふだんの値は 300 サンプルたまってから決める（始めの場面だけで決めない）
-    s2 = warm(repo_rules, repo_perf, n=100)
-    s2.step(10, gpu=80, fps=40)
+    s.step(1, gpu=80, fps=45)
+    issues = [i for i in s.issues if i.rule_id == "R-05"]
+    assert len(issues) == 1 and "GPU 80%" in issues[0].detail and "Main:1.0" in issues[0].detail
+    # 落ち方が小さければ出さない（GPU をどれだけ使っていても）
+    s2 = warm(repo_rules, repo_perf, n=300)
+    s2.step(20, gpu=90, fps=52)
     assert "R-05" not in s2.ids()
+    # ふだんの値は 300 サンプルたまってから決める（始めの場面だけで決めない）
+    s3 = warm(repo_rules, repo_perf, n=100)
+    s3.step(10, fps=40)
+    assert "R-05" not in s3.ids()
+    # FPS が 20 未満まで落ちても、同じ落ち込みは R-05 の 1 件（R-02 は出さない）
+    s4 = warm(repo_rules, repo_perf, n=300)
+    s4.step(15, fps=10)
+    assert s4.ids().count("R-05") == 1 and "R-02" not in s4.ids()
 
 
 def test_r11_cpu_heavy_without_gpu(repo_rules, repo_perf):
@@ -118,15 +127,14 @@ def test_r11_cpu_heavy_without_gpu(repo_rules, repo_perf):
     assert "R-11" not in s2.ids()
 
 
-def test_r06_memory_jump_that_stays(repo_rules, repo_perf):
+def test_memory_jump_that_is_released_later_is_not_reported(repo_rules, repo_perf):
+    # 短いあいだの増減（読み込みで増えて、あとで解放される）は見ない（R-06 は消した。R-08 もメモリを見ない）
     s = warm(repo_rules, repo_perf)
-    s.step(5, rss=900)  # 300MB 以上増えた
-    s.step(60, rss=800)  # 60 秒たっても、増えた分の半分以上が残る
-    assert s.ids().count("R-06") == 1
-    s2 = warm(repo_rules, repo_perf)
-    s2.step(5, rss=900)
-    s2.step(60, rss=550)  # ほとんど戻った
-    assert "R-06" not in s2.ids()
+    for n in range(3):
+        s.feed("game", "command", name="back", target="hall", line_id=f"Main:{n}.0")
+        s.step(5, rss=1300)
+        s.step(60, rss=1200)
+    assert not [i for i in s.ids() if i in ("R-06", "R-08", "R-01")]
 
 
 def test_r07_hitch_after_the_same_command_twice(repo_rules, repo_perf):
@@ -172,7 +180,7 @@ def test_r08_command_that_drops_fps_twice(repo_rules, repo_perf):
     assert lines.index("@spawn Rain") < lines.index("@char Kaori")
 
 
-def test_r08_one_memory_jump_is_one_issue_for_commands_run_together(repo_rules, repo_perf):
+def test_r08_one_slowdown_is_one_issue_for_commands_run_together(repo_rules, repo_perf):
     s = warm(repo_rules, repo_perf)
     for n in range(3):  # 同じ場所を 3 回通る（3 回目で 2 回目になるコマンドがあっても、同じ場所なので出さない）
         s.feed("game", "command", name="hidePrinter", line_id="Main:3.0")
@@ -181,7 +189,7 @@ def test_r08_one_memory_jump_is_one_issue_for_commands_run_together(repo_rules, 
         s.feed("game", "command", name="wait", target="0", line_id="Main:3.2")
         if n == 1:
             s.feed("game", "command", name="stopBgm", line_id="Main:3.3")
-        s.step(4, rss=1300)
+        s.step(4, cpu=120)
         s.step(60)
     issues = [i for i in s.issues if i.rule_id == "R-08"]
     assert len(issues) == 1 and "同じときに悪くなったコマンド" in issues[0].detail
@@ -197,9 +205,32 @@ def test_r08_one_memory_jump_is_one_issue_for_commands_run_together(repo_rules, 
 def test_r01_memory_growth_and_r03_threads(repo_rules, repo_perf):
     s = Sim(repo_rules, repo_perf).step(30)
     for n in range(700):
-        s.step(1, rss=500 + n * 0.1, threads=40 + n // 30)  # 1 時間あたり 360MB、スレッドは 10 分で 20 増える
-    assert s.ids().count("R-01") == 1
+        s.step(1, threads=40 + n // 30)  # スレッドは 10 分で 20 増える
     assert s.ids().count("R-03") == 1
+    # 下限が下がらずに増え続ける（読み込みで上下しながら、下限が 5 分で 40MB ずつ上がる）
+    s = Sim(repo_rules, repo_perf).step(30)
+    for n in range(3300):
+        s.step(1, rss=500 + n * 40 / 300 + (300 if n % 60 < 10 else 0))
+    assert "R-01" not in s.ids()  # 55 分では、まだ 60 分に満たない
+    for n in range(3300, 3900):
+        s.step(1, rss=500 + n * 40 / 300 + (300 if n % 60 < 10 else 0))
+    issues = [i for i in s.issues if i.rule_id == "R-01"]
+    assert len(issues) == 1 and "下がらずに増え続けて" in issues[0].detail
+
+
+def test_r01_memory_that_is_released_is_not_reported(repo_rules, repo_perf):
+    # run 2026-11-07_1511 の RSS のように、上がっても途中で下限が戻る（解放される）なら出さない
+    s = Sim(repo_rules, repo_perf).step(30)
+    floors = [1200, 1230, 1350, 1660, 1360, 1290, 1460, 1500, 1560]
+    for f in floors:
+        for n in range(300):
+            s.step(1, rss=f + (300 if n % 60 < 10 else 0))
+    assert "R-01" not in s.ids()
+    # 戻ったあとから、また 60 分以上増え続ければ出す
+    for k in range(10):
+        for n in range(300):
+            s.step(1, rss=1600 + 40 * k + (300 if n % 60 < 10 else 0))
+    assert s.ids().count("R-01") == 1
 
 
 def test_r09_scene_heavier_than_the_rest_and_r10_history(repo_rules, repo_perf, tmp_path):
