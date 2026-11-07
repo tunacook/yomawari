@@ -100,6 +100,10 @@ def test_parse_answers():
     raw[0]["answers"] = [{"at": ["main/scenarioA_006:27.0", "main/scenarioA_006:47.0"], "pick": ["No.050*", "玄関"]}]
     (ans,) = parse_flows(raw)[0].answers
     assert ans.at == ("main/scenarioA_006:27.0", "main/scenarioA_006:47.0")
+    # 何も選ばずに一覧を閉じるのが正解の質問は、pick の代わりに押すボタンを press に書く
+    raw[0]["answers"] = [{"at": "main/scenarioD_004:303.0", "press": "MemoryListUI/SelectButton"}]
+    (ans,) = parse_flows(raw)[0].answers
+    assert ans.press == "MemoryListUI/SelectButton" and ans.pick == ()
 
     def bad(answers):
         f = {"name": "x", "start": {"choices": True}, "steps": [{"choose": True}], "answers": answers}
@@ -114,6 +118,12 @@ def test_parse_answers():
         bad([{"at": ["a:1", ""], "pick": ["x"]}])
     with pytest.raises(ConfigError, match="pick に"):
         bad([{"at": "a:1", "pick": []}])
+    with pytest.raises(ConfigError, match="どちらか一方"):
+        bad([{"at": "a:1"}])
+    with pytest.raises(ConfigError, match="どちらか一方"):
+        bad([{"at": "a:1", "pick": ["x"], "press": "L/Close"}])
+    with pytest.raises(ConfigError, match="press に"):
+        bad([{"at": "a:1", "press": ""}])
     with pytest.raises(ConfigError, match="選ぶ手順は 1 個"):
         bad([{"at": "a:1", "pick": ["x", "y"]}])
 

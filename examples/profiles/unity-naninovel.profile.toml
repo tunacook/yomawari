@@ -31,6 +31,7 @@ ignore_patterns = []
 #         外れへの返事のあとに出し直す質問のように、行がいくつもあるときは配列で書く。正解がいくつもあれば answers を並べる
 #   pick: 選ぶ手順（steps のうち、ワイルドカードで書いたボタン・選択肢。once の手順は数えない）ごとに、選ぶものの画面に見える文字
 #         （空白を除いて比べる。ワイルドカード可。ボタン名の番号 #n はビルドで変わるので使わない）
+#   press: 何も選ばずに閉じるのが正解のときなど、選ぶ手順の代わりに押すボタン（steps の press と同じ書き方）。pick とどちらか一方
 # 下の値は書き方の例
 
 # 本編の選択肢（Naninovel の @choice / @addChoice）。正解は選択肢の本文で書く
@@ -69,3 +70,9 @@ note = "第 2 章の推理: アリバイを崩す"
 [[flow.answers]]
 at = ["main/chapter2:310.0", "main/chapter2:331.0"]
 pick = ["駅の防犯カメラの映像"]
+
+# 何も選ばずに一覧を閉じるのが正解の質問は、pick の代わりに、押すボタンを press に書く（avoid に書いたボタンでも押す）
+[[flow.answers]]
+at = "main/chapter4:52.0"
+press = "EvidenceListUI/CloseButton"
+note = "ここでは何も突きつけない"
