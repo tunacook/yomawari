@@ -183,15 +183,19 @@ rules:
       baseline_samples: 300
 
   - id: R-07
-    severity: major
+    severity: minor
     title: 同じところで重いフレームが出る
     description: >-
       frame_ms 以上かかったフレームが、同じ本文の行か、同じ演出のコマンドの attribute_sec 秒以内に repeats 回以上出た。
-      遷移中・起動や scene・ロードの直後は除く。1 回の重いフレームは、当てはまる行・コマンドが複数あっても 1 件にする
+      遷移中・起動や scene・ロードの直後は除く。1 回の重いフレームは、当てはまる行・コマンドが複数あっても 1 件にする。
+      重いフレームのあと fps_window_sec 秒の FPS の中央値が、ふだん（ランの中央値）より major_fps_drop_ratio 以上落ちていれば
+      Major、そうでなければ Minor（1 フレームだけ詰まって、FPS はほとんど変わらない）
     params:
       frame_ms: 100
       attribute_sec: 2
       repeats: 2
+      fps_window_sec: 3
+      major_fps_drop_ratio: 0.2
 
   - id: R-08
     severity: major
