@@ -65,9 +65,9 @@ def test_fuzz_mode_has_no_intent():
 
 
 def _reading_with_hud(st, s):
-    _game(s, st, "menu", name="MemoryScenarioPlaying", modal=False,
+    _game(s, st, "menu", name="EpisodePlaying", modal=False,
           buttons=[{"name": "OpenDialog", "rect": [0, 0.0, 0.23, 0.08]}])
-    _game(s, st, "line", line_id="memories/m1:1", text="a")
+    _game(s, st, "line", line_id="episodes/m1:1", text="a")
 
 
 def test_intent_scales_detour_ops():
@@ -78,12 +78,12 @@ def test_intent_scales_detour_ops():
     progress = {op.label: op.weight for op in s._apply_intent(cands)}
     assert progress["advance"] == w["advance"]  # 本文送りはそのまま
     assert progress["right_click"] == pytest.approx(w["right_click"] * CFG["progress_detour_factor"])
-    assert progress["click MemoryScenarioPlaying/OpenDialog"] == pytest.approx(w["click"] * CFG["progress_detour_factor"])
+    assert progress["click EpisodePlaying/OpenDialog"] == pytest.approx(w["click"] * CFG["progress_detour_factor"])
     run.intent = "explore"
     explore = {op.label: op.weight for op in s._apply_intent(cands)}
     assert explore["right_click"] == pytest.approx(w["right_click"] * CFG["explore_detour_factor"])
     # モーダル（右クリックメニューなど）の中では変えない
-    _game(s, st, "menu", name="RClickMenuUI", modal=True, buttons=[{"name": "ToSave", "rect": [0.1, 0.1, 0.2, 0.2]}])
+    _game(s, st, "menu", name="QuickMenuUI", modal=True, buttons=[{"name": "ToSave", "rect": [0.1, 0.1, 0.2, 0.2]}])
     cands = normal_candidates(st, Guard({}), w, False)
     assert s._apply_intent(cands) == cands
 

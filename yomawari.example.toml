@@ -75,7 +75,7 @@ expect_exit = []              # 押すと終了するボタン。終了コード
 external = []                 # ブラウザなどを開くボタン。1回のランで1回だけ押す
 irregular_only = []           # タイトルへ戻る、解像度・言語の変更など。fuzz のイレギュラー操作のときだけ押す
 deny = []                     # 押さない（課金、データの送信など）
-# 例: expect_exit = ["TitleUI/QuitButton", "RClickMenuUI/ToExit"]
+# 例: expect_exit = ["TitleUI/QuitButton", "QuickMenuUI/ToExit"]
 
 [fuzz]
 op_interval_sec = 0.5         # 通常の操作の間隔

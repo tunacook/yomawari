@@ -74,7 +74,7 @@ void OnCurtainVisibilityChanged(bool visible)
 {
     YomawariLog.Emit("transition",
         "\"phase\":" + YomawariFormat.Str(visible ? "start" : "end") +
-        ",\"name\":" + YomawariFormat.Str("CurtainUI"));
+        ",\"name\":" + YomawariFormat.Str("BlackoutUI"));
 }
 ```
 

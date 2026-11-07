@@ -201,7 +201,7 @@ def _answers(raw: Any, where: str) -> tuple[Answer, ...]:
             at = [at]
         if not isinstance(at, list) or not at or not all(isinstance(x, str) and x for x in at):
             raise ConfigError(
-                f"{aw}.at に質問の本文の行（line_id。例: \"main/scenarioA_004:44.0\"。いくつもあるときは配列）を書いてください"
+                f"{aw}.at に質問の本文の行（line_id。例: \"main/chapter1_04:44.0\"。いくつもあるときは配列）を書いてください"
             )
         pick, press = a.get("pick"), a.get("press")
         if (pick is None) == (press is None):
@@ -214,7 +214,7 @@ def _answers(raw: Any, where: str) -> tuple[Answer, ...]:
             out.append(Answer(tuple(at), (), str(a.get("note", "")), press))
             continue
         if not isinstance(pick, list) or not pick or not all(isinstance(x, str) and x for x in pick):
-            raise ConfigError(f"{aw}.pick に、選ぶ手順ごとの選ぶものの文字を配列で書いてください（例: [\"No.050*\", \"屋上\"]）")
+            raise ConfigError(f"{aw}.pick に、選ぶ手順ごとの選ぶものの文字を配列で書いてください（例: [\"No.030*\", \"屋上\"]）")
         out.append(Answer(tuple(at), tuple(pick), str(a.get("note", ""))))
     return tuple(out)
 
@@ -367,7 +367,7 @@ class FlowTracker:
             if flow.steps[i].when.match(state, opened_by):
                 if flow.steps[i].when.screen is None:
                     # scene だけで書いた手順（思い出を読む）は、あとの手順の画面が手前に出ていれば、そちらを先にする。
-                    # Rachel では、思い出を読み終えて要約に戻っても、答えるまで scene が memories/… のまま変わらない
+                    # Rachel では、思い出を読み終えて要約に戻っても、答えるまで scene が思い出の scene のまま変わらない
                     later = next((j for j in range(i + 1, len(flow.steps))
                                   if flow.steps[j].when.screen is not None and not self.is_done(j)
                                   and flow.steps[j].when.match(state, opened_by)), None)

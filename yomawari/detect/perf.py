@@ -89,7 +89,7 @@ class Cmd:
 
     t: float
     launch: int
-    key: str  # 「@char Kaori」など
+    key: str  # 「@char Aoi」など
     line: str | None
     before: list[Sample]
 

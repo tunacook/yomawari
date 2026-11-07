@@ -66,16 +66,16 @@ def test_flow_tries_the_option_ai_favors_first():
         run.advisor = ChoiceAdvisor(ask, "m")
         k = FUZZ_DEFAULTS["flow_factor"]
         click = FUZZ_DEFAULTS["weights"]["click"]
-        frag = "MemoryFragmentListUI/MemoryFragmentListSlot(Clone)"
+        frag = "WordListUI/WordSlot(Clone)"
         _feed(st, "scene", name="main/s6")
         s.on_event(Event("game", "line", {"line_id": "main/s6:70", "text": "ねぇ、<br>どこだって？"}, 0))
         st.feed(Event("game", "line", {"line_id": "main/s6:70", "text": "ねぇ、どこだって？"}, 0))
-        _only(st, "MemoryListUI", LIST)
-        _press(s, st, run, "MemoryListUI/MemoryListGridSlot (Clone)")
-        _only(st, "MemorySummaryUI", SUMMARY)
+        _only(st, "AlbumUI", LIST)
+        _press(s, st, run, "AlbumUI/AlbumSlot (Clone)")
+        _only(st, "EpisodeUI", SUMMARY)
         run.flow.done_once.add((_sig(run.flow.active.steps[1]), tuple(run.flow.path)))  # 読んだことにする
-        _press(s, st, run, "MemorySummaryUI/ShowFragmentListButton")
-        _only(st, "MemoryFragmentListUI", FRAGS)
+        _press(s, st, run, "EpisodeUI/ShowWordsButton")
+        _only(st, "WordListUI", FRAGS)
         st.set_read_text({frag: "駅前の公園", frag + "#1": "夕焼けの屋上"})
         w = _weights(s, st)
         if enabled:
