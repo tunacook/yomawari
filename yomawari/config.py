@@ -90,6 +90,9 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "behind_verify_misses": 2,
     # 押して反応したことのあるボタンでも、続けてこの回数反応しなければ、反応しないボタンとして後回しにする
     "answered_miss_limit": 3,
+    # 押しても反応しなかったボタンが、そのあと開示されたら（反応しなかったあとに見たいちばん明るい見た目より dim_ratio /
+    # dim_min_gap の基準で明るくなった、または読める文字が revive_letters 文字以上増えた）、反応しないボタンから外して候補に戻す
+    "revive_letters": 3,
     "dim_factor": 0.05,
     "hover_wait_sec": 0.3,  # 明るさを測る前に、カーソルをボタンのない場所へ動かしてから待つ時間（ホバーの演出が戻るまで）
     "blocked_wait_sec": 5.0,

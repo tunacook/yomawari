@@ -94,6 +94,18 @@ def alike(a: tuple[float, float], b: tuple[float, float], ratio: float, min_gap:
     return not dark({"a": a}, b, ratio, min_gap) and not dark({"b": b}, a, ratio, min_gap)
 
 
+def brighter(now: tuple[float, float], before: tuple[float, float], ratio: float, min_gap: float) -> bool:
+    """now が before よりはっきり明るい: 平均と明るい部分のどちらでも、before が now と比べて暗い（dark の基準）。
+    片方だけでは、後ろの絵の揺れで明るく見えることがあるので、両方を見る。"""
+    (bm, bp), (nm, np_) = before, now
+    return bm < nm * ratio and nm - bm >= min_gap and bp < np_ * ratio and np_ - bp >= min_gap
+
+
+def letters(text: str | None, masked_chars: str = "") -> int:
+    """読める文字（伏せ字の文字を除いた、英字・かな・漢字など）の数。数字・記号・空白は数えない。"""
+    return sum(1 for c in text or "" if c.isalpha() and c not in masked_chars)
+
+
 def brightest(values: Values) -> tuple[float, float]:
     return max(v[0] for v in values.values()), max(v[1] for v in values.values())
 
