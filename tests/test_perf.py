@@ -1,4 +1,4 @@
-"""パフォーマンスの判定（R-01〜R-10、detect/perf.py）を、rules.yaml の値のまま、時刻を与えて確かめる。"""
+"""パフォーマンスの判定（R-01〜R-11、detect/perf.py）を、rules.yaml の値のまま、時刻を与えて確かめる。"""
 
 from __future__ import annotations
 
@@ -87,11 +87,35 @@ def test_game_cpu_spike_is_judged_even_with_other_load(repo_rules, repo_perf):
     s.step(1, cpu=90, sys_cpu=95.0)
     assert s.ids().count("R-04") == 1
     # AI に聞いているあいだは外す
-    s2 = warm(repo_rules, repo_perf)
-    s2.step(5, gpu=80, ai=True)
+    s2 = warm(repo_rules, repo_perf, n=300)
+    s2.step(5, gpu=80, fps=40, ai=True)
     assert "R-05" not in s2.ids()
-    s2.step(3, gpu=80)
+    s2.step(3, gpu=80, fps=40)
     assert s2.ids().count("R-05") == 1
+
+
+def test_r05_gpu_is_fine_while_fps_holds_and_needs_five_minutes_of_baseline(repo_rules, repo_perf):
+    # FPS が落ちていなければ、GPU を使っても出さない
+    s = warm(repo_rules, repo_perf, n=300)
+    s.step(10, gpu=80)
+    assert "R-05" not in s.ids()
+    # ふだんの値は 300 サンプルたまってから決める（始めの場面だけで決めない）
+    s2 = warm(repo_rules, repo_perf, n=100)
+    s2.step(10, gpu=80, fps=40)
+    assert "R-05" not in s2.ids()
+
+
+def test_r11_cpu_heavy_without_gpu(repo_rules, repo_perf):
+    s = warm(repo_rules, repo_perf)
+    s.step(9, cpu=150, gpu=5)
+    assert "R-11" not in s.ids()
+    s.step(1, cpu=150, gpu=5)
+    issues = [i for i in s.issues if i.rule_id == "R-11"]
+    assert len(issues) == 1 and "Main:1.0" in issues[0].detail
+    # GPU も使っていれば出さない
+    s2 = warm(repo_rules, repo_perf)
+    s2.step(20, cpu=150, gpu=40)
+    assert "R-11" not in s2.ids()
 
 
 def test_r06_memory_jump_that_stays(repo_rules, repo_perf):
@@ -118,6 +142,19 @@ def test_r07_hitch_after_the_same_command_twice(repo_rules, repo_perf):
     assert len(issues) == 1 and "@spawn Rain" in issues[0].detail
 
 
+def test_r07_one_heavy_frame_is_one_issue(repo_rules, repo_perf):
+    s = warm(repo_rules, repo_perf)
+    for _ in range(3):
+        s.feed("game", "line", line_id="Main:3.0")
+        s.feed("game", "command", name="camera", line_id="Main:3.0")
+        s.feed("game", "command", name="wait", target="1.0", line_id="Main:3.0")
+        s.step(1, frame=150)
+        s.step(10)
+    issues = [i for i in s.issues if i.rule_id == "R-07"]
+    assert len(issues) == 1
+    assert "行 `Main:3.0`" in issues[0].detail and "`@camera` のあと" in issues[0].detail
+
+
 def test_r08_command_that_drops_fps_twice(repo_rules, repo_perf):
     s = warm(repo_rules, repo_perf)
     for n in range(2):
@@ -133,6 +170,28 @@ def test_r08_command_that_drops_fps_twice(repo_rules, repo_perf):
     assert stats["@char Kaori"]["n"] == 1 and stats["@spawn Rain"]["fps"] > 0.4
     lines = "\n".join(s.engine.perf.report_lines())
     assert lines.index("@spawn Rain") < lines.index("@char Kaori")
+
+
+def test_r08_one_memory_jump_is_one_issue_for_commands_run_together(repo_rules, repo_perf):
+    s = warm(repo_rules, repo_perf)
+    for n in range(3):  # 同じ場所を 3 回通る（3 回目で 2 回目になるコマンドがあっても、同じ場所なので出さない）
+        s.feed("game", "command", name="hidePrinter", line_id="Main:3.0")
+        s.step(1)
+        s.feed("game", "command", name="goto", target="main/next", line_id="Main:3.1")
+        s.feed("game", "command", name="wait", target="0", line_id="Main:3.2")
+        if n == 1:
+            s.feed("game", "command", name="stopBgm", line_id="Main:3.3")
+        s.step(4, rss=1300)
+        s.step(60)
+    issues = [i for i in s.issues if i.rule_id == "R-08"]
+    assert len(issues) == 1 and "同じときに悪くなったコマンド" in issues[0].detail
+    # GPU が上がっても FPS が落ちなければ出さない
+    s2 = warm(repo_rules, repo_perf)
+    for n in range(2):
+        s2.feed("game", "command", name="camera", target="", line_id=f"Main:{n}.0")
+        s2.step(4, gpu=80)
+        s2.step(6)
+    assert "R-08" not in s2.ids()
 
 
 def test_r01_memory_growth_and_r03_threads(repo_rules, repo_perf):

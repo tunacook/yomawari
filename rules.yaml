@@ -168,12 +168,17 @@ rules:
 
   - id: R-05
     severity: major
-    title: GPU 使用率が急に上がる
-    description: ゲームの GPU 使用率が、R-04 と同じ条件で上がった
+    title: GPU 使用率が急に上がり、FPS も落ちる
+    description: >-
+      ゲームの GPU 使用率が R-04 と同じ条件で上がり、そのあいだ FPS もふだんより fps_drop_ratio 以上落ちていた
+      （FPS が落ちていなければ、GPU は使っても構わない）。ふだんの値は、サンプルが baseline_samples 個たまってから決める
+      （ランの始めの一部の場面だけで決めない）
     params:
       add: 30
       ratio: 2.0
       sec: 3
+      fps_drop_ratio: 0.1
+      baseline_samples: 300
 
   - id: R-06
     severity: major
@@ -192,7 +197,7 @@ rules:
     title: 同じところで重いフレームが出る
     description: >-
       frame_ms 以上かかったフレームが、同じ本文の行か、同じ演出のコマンドの attribute_sec 秒以内に repeats 回以上出た。
-      遷移中・起動や scene・ロードの直後は除く
+      遷移中・起動や scene・ロードの直後は除く。1 回の重いフレームは、当てはまる行・コマンドが複数あっても 1 件にする
     params:
       frame_ms: 100
       attribute_sec: 2
@@ -203,14 +208,17 @@ rules:
     title: 演出のコマンドで重くなる
     description: >-
       同じコマンドと対象（@spawn Rain、@char Kaori など）の実行後 window_sec 秒の値が、実行前 window_sec 秒より悪い
-      （FPS が fps_drop_ratio 以上落ちる、CPU・GPU 使用率が cpu_add・gpu_add ポイント以上上がる、メモリが mem_mb 以上増える）
-      ことが、repeats 回以上あった。前後とも min_samples 個以上のサンプルがあるときだけ数える
+      （FPS が fps_drop_ratio 以上落ちる、CPU 使用率が cpu_add ポイント以上上がる、GPU 使用率が gpu_add ポイント以上上がり
+      FPS も gpu_fps_drop_ratio 以上落ちる、メモリが mem_mb 以上増える）ことが、repeats 回以上あった。
+      前後とも min_samples 個以上のサンプルがあるときだけ数える。同じときに実行した複数のコマンドが同じ悪化に当たったら、
+      いちばん大きく悪化したものの 1 件にまとめる
     params:
       window_sec: 3
       min_samples: 2
       fps_drop_ratio: 0.3
       cpu_add: 50
       gpu_add: 30
+      gpu_fps_drop_ratio: 0.1
       mem_mb: 100
       repeats: 2
 
@@ -218,13 +226,15 @@ rules:
     severity: major
     title: ほかの場所より重い scene がある
     description: >-
-      ランの終わりに、scene ごとの中央値をラン全体の中央値と比べる。FPS が fps_drop_ratio 以上低い、または CPU・GPU 使用率が
-      cpu_add・gpu_add ポイント以上高い。サンプルが min_samples 個以上の scene だけ
+      ランの終わりに、scene ごとの中央値をラン全体の中央値と比べる。FPS が fps_drop_ratio 以上低い、CPU 使用率が cpu_add ポイント
+      以上高い、または GPU 使用率が gpu_add ポイント以上高く FPS も gpu_fps_drop_ratio 以上低い。サンプルが min_samples 個以上の
+      scene だけ
     params:
       min_samples: 30
       fps_drop_ratio: 0.25
       cpu_add: 50
       gpu_add: 30
+      gpu_fps_drop_ratio: 0.1
 
   - id: R-10
     severity: major
@@ -232,15 +242,27 @@ rules:
     description: >-
       ランの終わりに、scene ごとの値と、演出のコマンドごとの実行前後の差を、同じビルド名・同じマシンの前回までのラン
       （perf の history_runs 回）と比べる。FPS が ratio 以上落ちた、CPU・GPU 使用率が ratio 以上かつ cpu_add・gpu_add ポイント以上
-      上がった、メモリの最大が ratio 以上かつ mem_mb 以上増えた
+      上がった（GPU は FPS も gpu_fps_drop_ratio 以上落ちたときだけ）、メモリの最大が ratio 以上かつ mem_mb 以上増えた
     params:
       ratio: 0.2
       cpu_add: 10
       gpu_add: 10
+      gpu_fps_drop_ratio: 0.1
       mem_mb: 100
       min_samples: 30
 
-# パフォーマンスの判定（R-01〜R-10）で共通の設定
+  - id: R-11
+    severity: major
+    title: GPU を使わずに CPU ばかり使う
+    description: >-
+      ゲームの CPU 使用率（1 コアを 100%）が cpu_min 以上、GPU 使用率が gpu_max 以下の状態で sec 秒以上続いた
+      （描画以外の処理が重い）。遷移中・起動や scene の直後は除く
+    params:
+      cpu_min: 100
+      gpu_max: 15
+      sec: 10
+
+# パフォーマンスの判定（R-01〜R-11）で共通の設定
 perf:
   # 起動（boot）してからこの秒数は計らない（読み込み・シェーダーのコンパイル）
   warmup_sec: 30

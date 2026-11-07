@@ -643,7 +643,9 @@ class FuzzSession:
         fresh = {o for o in options if not tracker.exhausted(o)}
         if options and not fresh:
             tracker.note_exhausted()
-            fresh = set(options)  # 試せる組み合わせをすべて試した。ほかの道もないので、どれも同じに戻す
+            # 試せる組み合わせをすべて試した。ほかの道もないので、このランで選んだ回数の少ないものから選び直す
+            # （同じものを選び続けない。run 2026-11-07_1343: 2 つとも外れと覚えた選択肢で、先頭の「話す」を 16 回選んだ）
+            fresh = tracker.least_picked(options)
         # いま選んでいるもの（思い出）の枝を試し終えた（言葉をすべて試した、言葉の一覧が空の行き止まり）のに、
         # その先の決まったボタン（言葉を選ぶ）の手順か、選べるものが1つもない手順の画面にいる。人が一覧に戻って選び直すように、
         # 手順の操作は優先せず、流れから外れるボタン（要約を閉じる・一覧に戻る）を優先して前の手順へ戻る
@@ -1569,7 +1571,9 @@ class FuzzSession:
             done = sum(st.completed for st in self.run.flow.stats.values())
             tracker = self.run.flow
             before = (tracker.active.name if tracker.active else None, tracker.index)
-            tracker.pressed(t.label, t.name, responded, t.text if t.kind == "choice" else None,
+            # 選択肢は、画面が変わっただけでなく、ゲームがその選択肢を選んだと知らせたとき（choices_done）だけ、答えたとする
+            picked = responded and (t.kind != "choice" or self.state.chosen == t.name)
+            tracker.pressed(t.label, t.name, picked, t.text if t.kind == "choice" else None,
                             t.text if t.kind == "button" else None)
             if sum(st.completed for st in tracker.stats.values()) > done:
                 self._note_flow(before, (None, 0))  # 最後まで進めた（events.jsonl に流れの終わりを残す）

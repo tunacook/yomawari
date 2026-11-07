@@ -116,6 +116,10 @@ class GameState:
     # 選んだあとの本文 160 行目のあとに同じ id の選択肢を 3 回出し直し、ハーネスは 2 分半のあいだ消えた選択肢の位置を
     # 押し続けた）。選択肢の id は出るたびに変わる（同じ選択肢でも、出直せば別の id になる）ので、長く覚えても無視し続けない
     handled_choices: set[str] = field(default_factory=set)
+    # 最後に選ばれた選択肢の id（choices_done）。scene が変わっても消さない。ハーネスが押した選択肢が本当に選ばれたかを
+    # これで確かめる（run 2026-11-06_2334: 「話さない」を押しても選ばれず、あとで別の操作で「話す」が選ばれたのに、
+    # 「話さない」を答えたと覚え、バッドエンドから戻ったときに外れとした）
+    chosen: str | None = None
     transitions: set[str] = field(default_factory=set)
     resolution: dict[str, Any] | None = None
     saving: bool = False
@@ -238,6 +242,7 @@ class GameState:
         self.choices = []
         if d.get("id") is not None:
             self.handled_choices.add(str(d.get("id")))
+            self.chosen = str(d.get("id"))
 
     def _on_transition(self, d: dict[str, Any], t: float) -> None:
         name = str(d.get("name"))
