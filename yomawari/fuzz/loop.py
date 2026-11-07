@@ -623,7 +623,9 @@ class FuzzSession:
             self._note_flow(before, after)
         flow = tracker.active
         if flow is None:
-            return cands
+            # 流れの外でも、読んだ思い出（どれかの流れの once の手順を、いま選んでいるもので済ませた）は読み直さない
+            low = float(cfg["flow_avoid_factor"])
+            return [op.scaled("flow", low) if self._read_before(op.target) else op for op in cands]
         self._sync_lists()
         if before[0] is None:
             # 流れを始めた（同じ質問に戻ってきたときも）: 質問の前の本文を覚え、途中で読んだ本文を数え直す
@@ -666,8 +668,9 @@ class FuzzSession:
                 f = boost if spent else low
             elif spent:
                 pass
-            elif t is not None and t.kind == "button" and any(
-                    s.when.screen == t.menu and s.targets and s.presses(t.label, t.name, t.text) for s in done):
+            elif t is not None and t.kind == "button" and (any(
+                    s.when.screen == t.menu and s.targets and s.presses(t.label, t.name, t.text) for s in done)
+                    or self._read_before(t)):
                 f = low  # 同じ選び方で一度済ませた手順のボタン（読んだ思い出をもう一度読む）
             elif step is not None and op.kind == "advance" and step.advance:
                 f = boost
@@ -698,6 +701,9 @@ class FuzzSession:
                 keep = cur.label if cur is not None and cur.purpose == "fill" and cur.label in unshown else None
                 out += self._toward(row, keep or run.ledger.nearest(row, unshown), "flow", "fill")
         return out
+
+    def _read_before(self, t: Target | None) -> bool:
+        return t is not None and t.kind == "button" and self.run.flow.read_before(t.label, t.name, t.text)
 
     def _option_of(self, step: Any, t: Target | None) -> str | None:
         """いまの手順で選べるもの（ボタンの label・選択肢の本文）か。当てはまらなければ None。"""
@@ -1654,6 +1660,8 @@ class FuzzSession:
         if op.target is not None and op.target.kind == "button":
             (self.run.silent.discard if responded else self.run.silent.add)(op.target.label)
             self._note_silent(op.target, responded)
+            if responded:
+                self.run.flow.seen(op.target.label, op.target.name, op.target.text)
             if responded and self.run.resume_until is not None and self.run.save_hints.next_page(op.target):
                 self.run.resume_pages += 1
             if responded:

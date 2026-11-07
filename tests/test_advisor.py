@@ -8,7 +8,7 @@ import pytest
 from yomawari.config import FUZZ_DEFAULTS
 from yomawari.events import Event
 from yomawari.fuzz.advisor import ChoiceAdvisor, build_prompt
-from yomawari.fuzz.flow import FlowTracker, parse_flows
+from yomawari.fuzz.flow import _sig, FlowTracker, parse_flows
 from yomawari.judge.ollama import OllamaError
 
 from .test_flow import FRAGS, LIST, SUMMARY, TRIAL, _feed, _only, _press, _session, _weights
@@ -73,7 +73,7 @@ def test_flow_tries_the_option_ai_favors_first():
         _only(st, "MemoryListUI", LIST)
         _press(s, st, run, "MemoryListUI/MemoryListGridSlot (Clone)")
         _only(st, "MemorySummaryUI", SUMMARY)
-        run.flow.done_once.add((run.flow.active.name, 1, tuple(run.flow.path)))  # 読んだことにする
+        run.flow.done_once.add((_sig(run.flow.active.steps[1]), tuple(run.flow.path)))  # 読んだことにする
         _press(s, st, run, "MemorySummaryUI/ShowFragmentListButton")
         _only(st, "MemoryFragmentListUI", FRAGS)
         st.set_read_text({frag: "駅前の公園", frag + "#1": "夕焼けの屋上"})
