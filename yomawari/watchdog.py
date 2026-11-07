@@ -428,8 +428,8 @@ class Harness:
                 # 進め方の経験は、ボタンの役割と同じファイル（runs/_experience/<ゲーム>.json）に覚える
                 experience=Experience(self.roles.path),
             )
-            # ゲームの流れで外れと分かった組み合わせを、ランをまたいで覚える
-            self._fuzz.flow.remember(self._fuzz.experience.flow_wrong)
+            # ゲームの流れで外れ・正解と分かった組み合わせを、ランをまたいで覚える
+            self._fuzz.flow.remember(self._fuzz.experience.flow_wrong, self._fuzz.experience.flow_right)
             if self.fuzz_cfg["ai_choice"] and self.fuzz_cfg["use_flow"] and self.spec.flows and self.judge_cfg is not None:
                 # 流れの手順で選ぶものを、本文の文脈から AI に点数を付けさせる（fuzz/advisor.py）
                 self._fuzz.advisor = ChoiceAdvisor.from_judge(self.judge_cfg, float(self.fuzz_cfg["ai_timeout_sec"]))

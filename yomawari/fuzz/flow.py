@@ -312,6 +312,12 @@ class FlowTracker:
         # 外れと分かった組み合わせ（同じ質問にまた戻ってきた、その前の答え）。進め方の経験と共有し、ランをまたいで覚える
         self.wrong: set[tuple[Ctx, Path]] = set()
         self.wrong_loaded = 0  # 前のランまでに外れと分かっていた組み合わせの数
+        # 正解と分かった組み合わせ（答えたあと、同じ質問に戻らずに、ゲームが出した別の質問に着いた、その前の答え）。
+        # 進め方の経験と共有し、ランをまたいで覚える（DESIGN.md §9「答えの選び方」）
+        self.right: set[tuple[Ctx, Path]] = set()
+        self.right_loaded = 0
+        self.judged: list[tuple[tuple[Ctx, Path], bool]] = []  # 答えの当たり外れが分かったもの（ループが読んで消す）
+        self.deliberate_wrong = 0  # 正解が分かっている質問で、わざと外れを答えた回数
         self._loaded_leaves: set[tuple[Ctx, Path]] = set()
         self.dead: set[tuple[Ctx, Path]] = set()  # 行き止まり（言葉がまだない思い出）。開示の状態で変わる
         self.lines_after = 0  # 最後まで進めてから届いた本文の行の数
@@ -322,12 +328,20 @@ class FlowTracker:
     def step(self) -> Step | None:
         return self.active.steps[self.index] if self.active is not None else None
 
-    def remember(self, wrong: set[tuple[Ctx, Path]]) -> None:
-        """前のランまでに外れと分かった組み合わせを使う（同じ set に、このランで外れと分かったものを足す）。"""
+    def remember(self, wrong: set[tuple[Ctx, Path]], right: set[tuple[Ctx, Path]] | None = None) -> None:
+        """前のランまでに外れ・正解と分かった組み合わせを使う（同じ set に、このランで分かったものを足す）。"""
         self.wrong = wrong
         self.wrong_loaded = len(wrong)
         self.leaves |= wrong
         self._loaded_leaves = set(wrong)
+        if right is not None:
+            self.right = right
+            self.right_loaded = len(right)
+
+    def known_right(self, ctx: Ctx | None = None) -> list[Path]:
+        """質問（いまの質問）で、正解と分かっている選んだものの並び。"""
+        ctx = ctx if ctx is not None else self.ctx
+        return [p for c, p in self.right if c == ctx]
 
     def line_seen(self) -> None:
         """本文の行が届いた。"""
@@ -355,6 +369,15 @@ class FlowTracker:
                         # 同じ質問に戻ってきた: 前の答えは外れだった。ランをまたいで覚える
                         # （行き止まり（言葉がまだない思い出）は、開示の状態で変わるので覚えない）
                         self.wrong.add(self.last_leaf)
+                        self.right.discard(self.last_leaf)
+                        self.judged.append((self.last_leaf, False))
+                    elif self.last_leaf is not None and (f.start.by == "game" or f.start.choices):
+                        # 同じ質問に戻らずに、ゲームが出した別の質問（ゲームが開いた画面・選択肢で始まる流れ）に着いた:
+                        # 前の答えは正解だった。ハーネスが開いた画面で始まる流れ（思い出を読み返すなど）は、
+                        # 答えのあとに寄り道しただけかもしれないので数えない
+                        if self.last_leaf not in self.wrong:
+                            self.right.add(self.last_leaf)
+                        self.judged.append((self.last_leaf, True))
                     self.last_leaf = None
                     self.ctx_seen.add(self.ctx)
                     break
@@ -600,6 +623,8 @@ class FlowTracker:
     def title_returned(self) -> None:
         if self.active is not None:
             self._break("タイトルに戻った")
+        # 答えのあとタイトルに戻った（バッドエンドなど）なら、その答えの当たり外れは分からない
+        self.last_leaf = None
         # タイトルからは、はじめから遊ぶかセーブをロードするので、開示の状態が変わる
         self.forget_reveals("タイトルに戻った")
 
@@ -632,4 +657,12 @@ class FlowTracker:
         if self.wrong_loaded or new:
             out.append(f"流れの答えで、前のランまでに外れと分かっていた組み合わせ {self.wrong_loaded} 通りを避けた。"
                        f"このランで新しく外れと分かったのは {new} 通り（runs/_experience/<ゲーム>.json の flow_wrong に覚える）")
-        return out + [e for e in self.events if "すべて試しても" in e]
+        if self.deliberate_wrong:
+            out.append(f"正解が分かっている質問で、わざと外れを {self.deliberate_wrong} 回答えた"
+                       "（バッドエンド・外れへの返事を確かめるため。ランの目的の wrong_answer_prob）")
+        new_right = len(self.right) - self.right_loaded
+        if self.right_loaded or new_right:
+            out.append(f"流れの答えで、前のランまでに正解と分かっていた組み合わせは {self.right_loaded} 通り。"
+                       f"このランで新しく正解と分かったのは {max(new_right, 0)} 通り"
+                       "（runs/_experience/<ゲーム>.json の flow_right に覚える）")
+        return out + [e for e in self.events if "すべて試しても" in e or "わざと外れ" in e or "外れのはず" in e]

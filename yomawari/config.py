@@ -134,6 +134,11 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "flow_avoid_factor": 0.02,  # 流れの途中で押すと流れから外れるボタン（avoid）の重みに掛ける
     "flow_idle_sec": 10.0,  # 流れのどの画面・scene でもない状態がこれだけ続いたら、流れが途切れたとする
     "flow_retry_lines": 6,  # 流れを最後まで進めて（答えて）からこの行数以内に同じ流れが始まったら、同じ質問に戻ったとする
+    # 質問の正解をどこから得るか（DESIGN.md §9「答えの選び方」）。profile: プロファイルの answers と覚えた正解 /
+    # learn: 覚えた正解だけ。目的（purpose）で変える
+    "answer_source": "profile",
+    "wrong_answer_prob": 0.3,  # 正解が分かっている質問で、正解の前にわざと外れを答える確率。目的（purpose）で変える
+    "wrong_answers_per_question": 1,  # わざと外れを答えるとき、1つの質問で答える外れの数（そのあと正解を答える）
     # 続きから遊ぶ（fuzz/resume.py）。ラン中にゲームを起動し直したら、この秒数のあいだ「続きから」のボタン・いちばん新しい
     # セーブ済みのスロット・（見えているスロットがどれも空なら）ページを送るボタンの重みに resume_factor を、「はじめから」に
     # resume_new_game_factor を掛ける。0 にすると使わない

@@ -46,7 +46,7 @@ from .ops import (
     normal_candidates,
     state_key,
 )
-from .flow import FlowTracker
+from .flow import Answer, FlowTracker, matches, text_matches
 from .resume import SaveHints, newest_slots, older_than, stamp_key
 from .rollback import EDGE_OPS, EDGE_TIMINGS, PATTERNS, RollbackWatch, Step, describe, edge_timing, step_of
 from .listing import (
@@ -157,6 +157,11 @@ class FuzzRun:
     lines: deque[str] = field(default_factory=lambda: deque(maxlen=100))  # 最近の本文
     question: list[str] = field(default_factory=list)  # 流れを始めたときの、質問の前の本文
     read_lines: list[str] = field(default_factory=list)  # 流れの途中で読んだ本文
+    line_ids: deque[str] = field(default_factory=lambda: deque(maxlen=100))  # 最近の本文の行（line_id）
+    # 質問ごとの正解（DESIGN.md §9「答えの選び方」）。質問（流れの名前, 始めたときの行）→ プロファイルの answers のうち当たったもの
+    ctx_answers: dict[Any, tuple[Answer, ...]] = field(default_factory=dict)
+    wrong_left: dict[Any, int] = field(default_factory=dict)  # 質問 → この流れでまだわざと答える外れの数
+    wrong_given: set[Any] = field(default_factory=set)  # わざと答えた外れ (質問, 選んだものの並び)
     advice_seen: set[Any] = field(default_factory=set)
     # 画面の文字を読む（fuzz/reading.py）
     read_done: set[str] = field(default_factory=set)  # 画面から文字を読んだボタン（見た目が変わったら読み直す）
@@ -373,7 +378,9 @@ class FuzzSession:
                                                 "why": why}, self.launch))
 
     def _remember_line(self, d: dict[str, Any]) -> None:
-        """本文を覚える（AI に文脈として渡す）。"""
+        """本文を覚える（AI に文脈として渡す。行はプロファイルの正解の質問と照らす）。"""
+        if d.get("line_id") is not None:
+            self.run.line_ids.append(str(d["line_id"]))
         text = " ".join(re.sub(r"<[^>]*>", "", str(d.get("text") or "")).split())  # <br> などのタグは詰める
         if not text:
             return
@@ -394,6 +401,7 @@ class FuzzSession:
                 self.run.guard.book.confirm(key, "to_title", f"タイトル画面（{self.state.title_menu}）が再び出た")
             self._credit("rewind")
             self.run.flow.title_returned()
+            self.run.wrong_left.clear()  # 次にまた同じ質問に着いたら、わざと外れを答えるかを決め直す
             self._forget_ledger("タイトルに戻った")
             self._end_play()
             self._choose_intent("タイトルに戻った")
@@ -621,6 +629,7 @@ class FuzzSession:
         after = (tracker.active.name if tracker.active else None, tracker.index)
         if after != before:
             self._note_flow(before, after)
+        self._judged()
         flow = tracker.active
         if flow is None:
             # 流れの外でも、読んだ思い出（どれかの流れの once の手順を、いま選んでいるもので済ませた）は読み直さない
@@ -631,6 +640,7 @@ class FuzzSession:
             # 流れを始めた（同じ質問に戻ってきたときも）: 質問の前の本文を覚え、途中で読んだ本文を数え直す
             run.question = list(run.lines)[-int(cfg["ai_context_lines"]):]
             run.read_lines = []
+            self._start_question(flow)
         boost, low = float(cfg["flow_factor"]), float(cfg["flow_avoid_factor"])
         # 選べるもの（候補）: 選択肢は見えているもの、ボタンは手順の画面の一覧の台帳（画面の外の項目も含む。目標として
         # そこへ向かうため）。押しても反応しないと分かっているもの（押せない・伏せ字、押して反応がなかった、文字で空と
@@ -648,6 +658,15 @@ class FuzzSession:
             tracker.dead_end()
         # 試行錯誤: すべて試し終えた枝（外れだった組み合わせ）は後回し
         fresh = {o for o in options if not tracker.exhausted(o)}
+        known = self._answer_options(options, texts)  # 正解が分かっている質問なら、正解に沿う候補
+        wrong = run.wrong_left.get(tracker.ctx, 0) > 0  # 正解の前に、わざと外れを答える
+        if known and not wrong:
+            # 正解は、このランで一度答えて試し終えた枝でも選ぶ（タイトルから遊び直して同じ質問に着いたなど）
+            fresh |= known
+        elif known and wrong and fresh <= known and options - known:
+            # わざと外れを答えるのに、まだ答えたことのない外れがない: 外れと分かっているもののうち、選んだ回数の少ないもの
+            fresh = tracker.least_picked(options - known)
+        press_ans = self._press_answer() if step is not None and step.picks and not wrong else ()
         if options and not fresh:
             tracker.note_exhausted()
             # 試せる組み合わせをすべて試した。ほかの道もないので、このランで選んだ回数の少ないものから選び直す
@@ -658,13 +677,15 @@ class FuzzSession:
         # 手順の操作は優先せず、流れから外れるボタン（要約を閉じる・一覧に戻る）を優先して前の手順へ戻る
         # （run 2026-11-06_1646: 言葉のない思い出で、「言葉を選ぶ」と空の言葉の一覧を閉じるのを繰り返した）
         spent = step is not None and tracker.spent() and (not step.picks or not options)
-        goal = None if spent else self._flow_goal(row, fresh, quiet, texts)
+        goal = None if spent or press_ans else self._flow_goal(row, fresh, quiet, texts, known, wrong)
         out = []
         for op in cands:
             t = op.target
             f = 1.0
             o = self._option_of(step, t)
-            if t is not None and flow.avoids(t.label, t.name, t.text):
+            if press_ans and t is not None and t.kind == "button" and matches(t.label, t.name, press_ans):
+                f = boost  # 選ばずに押すのが正解のボタン（avoid に書いたものでも押す）
+            elif t is not None and flow.avoids(t.label, t.name, t.text):
                 f = boost if spent else low
             elif spent:
                 pass
@@ -756,8 +777,10 @@ class FuzzSession:
                 texts[label] = b.text
         return row, out, texts
 
-    def _flow_goal(self, row: Row | None, fresh: set[str], quiet: set[str], texts: dict[str, str]) -> str | None:
+    def _flow_goal(self, row: Row | None, fresh: set[str], quiet: set[str], texts: dict[str, str],
+                   known: set[str] | None = None, wrong: bool = False) -> str | None:
         """選ぶ手順の目標: まだ試していない候補を、次の順に並べた先頭。
+        0. 正解が分かっている質問なら、正解に沿うもの（わざと外れを答えるときは、正解に沿わないもの）
         1. いまの枝で試しかけのもの（同じ思い出の、ほかの言葉を試す） 2. 本文の文脈にいちばん合うと AI が答えたもの
         3. 見た目で押せそうなもの（暗くない・押せなかったものと同じ見た目でない） 4. 表示範囲から近いもの
         5. ランごとに決めた順（いつも同じものから試さない）。
@@ -774,14 +797,102 @@ class FuzzSession:
 
         def rank(o: str) -> tuple:
             near = distance(run.ledger.items[o].rect, row.view) if row is not None and o in run.ledger.items else 0.0
-            return (o not in going if going else False, o not in favored, o in quiet, near, run.tie[o])
+            answer = (o in known) == wrong if known is not None else False
+            return (answer, o not in going if going else False, o not in favored, o in quiet, near, run.tie[o])
         best = min(fresh, key=rank)
         # いまの目標が、順番の先頭と同じ順位（近さより前の項目）のままなら、目標を変えない。動かすたびに近さが変わって
         # 目標が入れ替わると、逆の向きへ動かして行き来するため
         cur = run.ledger.goals.get(row.key) if row is not None else None
-        if cur is not None and cur.by == "flow" and cur.label in fresh and rank(cur.label)[:3] == rank(best)[:3]:
+        if cur is not None and cur.by == "flow" and cur.label in fresh and rank(cur.label)[:4] == rank(best)[:4]:
             return cur.label
         return best
+
+    def _start_question(self, flow: Any) -> None:
+        """流れを始めた: プロファイルの正解のうち、この質問のもの（流れを始めたときの直近 ai_context_lines 行のどれかが at に
+        当たる）を覚え、正解が分かっていれば、わざと外れを答えるかを決める（DESIGN.md §9「答えの選び方」）。"""
+        run, cfg, ctx = self.run, self.cfg, self.run.flow.ctx
+        if ctx is None:
+            return
+        if flow.answers:
+            ids = list(run.line_ids)[-int(cfg["ai_context_lines"]):]
+            hit = tuple(a for a in flow.answers if any(fnmatchcase(i, p) for i in ids for p in a.at))
+            if hit:
+                # 外れへの返事のあとに同じ質問に戻ったときは、質問の行が直近にないことがあるので、前に当たったものを使う
+                run.ctx_answers[ctx] = hit
+        if ctx not in run.wrong_left and (self._profile_answers() or run.flow.known_right()):
+            prob = float(cfg["wrong_answer_prob"])
+            run.wrong_left[ctx] = int(cfg["wrong_answers_per_question"]) if prob > 0 and run.rng.random() < prob else 0
+
+    def _profile_answers(self) -> tuple[Answer, ...]:
+        """いまの質問の、プロファイルの正解（answer_source が profile のときだけ）。"""
+        if self.cfg["answer_source"] != "profile":
+            return ()
+        return self.run.ctx_answers.get(self.run.flow.ctx, ())
+
+    def _text_of(self, o: str) -> str | None:
+        """選んだもの（ボタンの label・選択肢の本文）の画面に見える文字。"""
+        item = self.run.ledger.items.get(o)
+        if item is not None and item.text:
+            return item.text
+        for menu in self.state.menus.values():
+            for b in menu.buttons:
+                if b.label == o:
+                    return b.text
+        return None if "#" in o else o  # label でなければ選択肢の本文
+
+    def _answer_options(self, options: set[str], texts: dict[str, str]) -> set[str] | None:
+        """いまの手順の候補のうち、正解に沿うもの。正解が分からない質問なら None。
+
+        プロファイルの正解は、ここまでに選んだものの文字が pick の前の手順と合うときに、いまの手順の pick の文字で照らす。
+        プロファイルに正解がなければ（answer_source が learn なら、いつも）、覚えた正解（flow_right）の並びで照らす。"""
+        tracker = self.run.flow
+        path = tuple(tracker.path)
+        depth = len(path)
+        answers = self._profile_answers()
+        if answers:
+            out: set[str] = set()
+            for a in answers:
+                if len(a.pick) <= depth:
+                    continue
+                if all(text_matches(self._text_of(path[k]), (a.pick[k],)) for k in range(depth)):
+                    out |= {o for o in options if text_matches(texts.get(o) or self._text_of(o), (a.pick[depth],))}
+            return out
+        learned = tracker.known_right()
+        if learned:
+            return {o for o in options if any(len(r) > depth and r[:depth] == path and r[depth] == o for r in learned)}
+        return None
+
+    def _press_answer(self) -> tuple[str, ...]:
+        """選ばずに押すのが正解のボタン（プロファイルの answers の press）。"""
+        return tuple(a.press for a in self._profile_answers() if a.press)
+
+    def _is_answer(self, ctx: Any, path: tuple[str, ...]) -> bool:
+        answers = self.run.ctx_answers.get(ctx, ()) if self.cfg["answer_source"] == "profile" else ()
+        if answers:
+            return any(len(a.pick) == len(path) and all(text_matches(self._text_of(p), (a.pick[k],))
+                                                        for k, p in enumerate(path)) for a in answers)
+        return path in self.run.flow.known_right(ctx)
+
+    def _answered(self) -> None:
+        """流れを最後まで進めた（答えた）。わざと外れを答えるつもりで、正解でないものを答えたら、外れの残りを減らす。"""
+        run, tracker = self.run, self.run.flow
+        leaf = tracker.last_leaf
+        if leaf is None or run.wrong_left.get(leaf[0], 0) <= 0 or self._is_answer(*leaf):
+            return
+        run.wrong_left[leaf[0]] -= 1
+        run.wrong_given.add(leaf)
+        tracker.deliberate_wrong += 1
+
+    def _judged(self) -> None:
+        """答えの当たり外れが分かった。わざと答えた外れなのに先へ進んだら、「ハーネスの記録」に書く。"""
+        run, tracker = self.run, self.run.flow
+        for (ctx, path), right in tracker.judged:
+            if right and (ctx, path) in run.wrong_given:
+                shown = " → ".join(self._text_of(p) or p for p in path)
+                tracker.events.append(
+                    f"流れ「{ctx[0]}」の `{ctx[1]}` で、外れのはずの答え（{shown}）のあと、同じ質問に戻らずに先へ進んだ"
+                    "（プロファイルの正解が古いか、ゲームの判定の不具合の可能性がある）")
+        tracker.judged.clear()
 
     def _advice(self, pick: set[str], texts: dict[str, str]) -> set[str]:
         """先に試す候補のうち、本文の文脈にいちばん合うと AI が答えたもの。答えがまだ・聞かない目的なら空。"""
@@ -1650,6 +1761,7 @@ class FuzzSession:
                             t.text if t.kind == "button" else None)
             if sum(st.completed for st in tracker.stats.values()) > done:
                 self._note_flow(before, (None, 0))  # 最後まで進めた（events.jsonl に流れの終わりを残す）
+                self._answered()
                 self._maybe_edge("answer")
         if responded:
             self.run.responsive.add((key, op.label))

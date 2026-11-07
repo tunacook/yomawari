@@ -27,7 +27,7 @@ PURPOSE_DEFAULTS: dict[str, dict[str, Any]] = {
         "mode": "random",
         "focus": ["S-02", "S-03", "S-01", "H-01"],
         "fuzz": {"intent_progress": 1.0, "intent_explore": 1.0, "recover_ops": 0, "learn": True,
-                 "saved_slot_factor": 1.0},
+                 "saved_slot_factor": 1.0, "answer_source": "learn"},
     },
     "play": {
         "description": "通常のプレイ。人が遊ぶように本編を先へ進め、寄り道は少なめにする",
@@ -60,7 +60,7 @@ PURPOSE_DEFAULTS: dict[str, dict[str, Any]] = {
         "mode": "random",
         "focus": ["S-02", "S-03"],
         "fuzz": {"intent_progress": 1.0, "intent_explore": 0.0, "learn": True, "progress_bonus": 20.0,
-                 "rewind_factor": 0.02, "progress_detour_factor": 0.05, "edge_prob": 0.0},
+                 "rewind_factor": 0.02, "progress_detour_factor": 0.05, "edge_prob": 0.0, "wrong_answer_prob": 0.0},
     },
     "aging": {
         "description": "放置。操作せずに起動したままにして、ハング・メモリの増加・ログの異常を見る",
