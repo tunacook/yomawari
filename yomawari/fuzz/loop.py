@@ -63,6 +63,13 @@ RECOVERABLE = ("S-02", "S-03")
 DRAG = {"up": (0.0, -1.0), "down": (0.0, 1.0), "left": (-1.0, 0.0), "right": (1.0, 0.0)}
 
 
+
+def _pick_matches(text: str | None, pattern: str) -> bool:
+    """画面から読んだ文字が、プロファイルの正解の pick に当たるか。画面から読んだ文字には、前後にアイコンや枠の読み違い
+    （「•No.002 …」の「•」など）が付くことがあるので、前後に余計な文字があってもよいとする
+    （run 2026-11-07_1909: 「•No.002 …」が "No.002*" に当たらず、正解の思い出を目標にしなかった）。"""
+    return text_matches(text, (pattern, f"*{pattern}*"))
+
 @dataclass
 class FuzzRun:
     """ラン全体で持ち越すもの（試行回数、external の使用済み、統計）。起動し直しても引き継ぐ。"""
@@ -788,7 +795,8 @@ class FuzzSession:
         run, tracker = self.run, self.run.flow
         if not fresh:
             return None
-        if row is not None and run.ledger.unshown(row):
+        if row is not None and run.ledger.unshown(row) and not (known and not wrong and fresh & known):
+            # 正解に沿う候補が見えていれば、台帳を埋め終えるのを待たずにそこへ向かう
             return None
         going = {o for o in fresh if tracker.tried(o)}
         favored = self._advice(going or fresh, texts)
@@ -851,12 +859,17 @@ class FuzzSession:
         answers = self._profile_answers()
         if answers:
             out: set[str] = set()
+            loose: set[str] = set()
             for a in answers:
                 if len(a.pick) <= depth:
                     continue
-                if all(text_matches(self._text_of(path[k]), (a.pick[k],)) for k in range(depth)):
-                    out |= {o for o in options if text_matches(texts.get(o) or self._text_of(o), (a.pick[depth],))}
-            return out
+                hit = {o for o in options if _pick_matches(texts.get(o) or self._text_of(o), a.pick[depth])}
+                if all(_pick_matches(self._text_of(path[k]), a.pick[k]) for k in range(depth)):
+                    out |= hit
+                else:
+                    loose |= hit
+            # 前に選んだものの文字が読めていない・読み違えた（思い出の番号が欠けたなど）ときは、いまの手順の文字だけで照らす
+            return out or loose
         learned = tracker.known_right()
         if learned:
             return {o for o in options if any(len(r) > depth and r[:depth] == path and r[depth] == o for r in learned)}
@@ -869,7 +882,7 @@ class FuzzSession:
     def _is_answer(self, ctx: Any, path: tuple[str, ...]) -> bool:
         answers = self.run.ctx_answers.get(ctx, ()) if self.cfg["answer_source"] == "profile" else ()
         if answers:
-            return any(len(a.pick) == len(path) and all(text_matches(self._text_of(p), (a.pick[k],))
+            return any(len(a.pick) == len(path) and all(_pick_matches(self._text_of(p), a.pick[k])
                                                         for k, p in enumerate(path)) for a in answers)
         return path in self.run.flow.known_right(ctx)
 
