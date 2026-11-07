@@ -298,3 +298,25 @@ def test_parse_ioreg_gpu():
     acc = plistlib.dumps([{"PerformanceStatistics": {"Device Utilization %": 17}}])
     assert parse_gpu_device(acc) == 17.0
     assert parse_gpu_device(b"broken") is None
+
+
+def test_r10_commands_need_repeats_and_a_bad_change_itself(repo_rules, repo_perf):
+    # コマンドごとの前回比は、今回も前回も min_cmd_runs 回以上実行したものだけ。今回の上がり方そのものも cpu_add 以上
+    # のときだけ（run 2026-11-07_1809: 1 回だけ実行した演出で、CPU の上がり方 -16 → +3 ポイントを Major にした）
+    s = warm(repo_rules, repo_perf)
+    perf = s.engine.perf
+    perf.history = [{"run": "prev", "scenes": {}, "commands": {
+        "@back once": {"n": 5, "cpu": -16.0},
+        "@back few_past": {"n": 1, "cpu": 2.0},
+        "@back small": {"n": 5, "cpu": -16.0},
+        "@back heavy": {"n": 5, "cpu": 2.0},
+    }}]
+    perf.cmd_stats = {
+        "@back once": {"cpu": [30.0]},  # 今回 1 回だけ
+        "@back few_past": {"cpu": [30.0, 30.0, 30.0]},  # 前回 1 回だけ
+        "@back small": {"cpu": [3.0, 3.0, 3.0]},  # 下がっていたものが少し上がっただけ
+        "@back heavy": {"cpu": [30.0, 30.0, 30.0]},
+    }
+    issues = [i for i in s.engine.finish(s.t) if i.rule_id == "R-10"]
+    assert len(issues) == 1
+    assert "`@back heavy`" in issues[0].detail and "+2 → +30 ポイント" in issues[0].detail
