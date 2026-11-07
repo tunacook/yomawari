@@ -64,6 +64,14 @@ class Target:
         return f"{self.key}#{self.nth}" if self.nth else self.key
 
     @property
+    def on_screen(self) -> bool:
+        """中心が描画領域の中にあるか（ほかの UI に覆われているかは問わない）。"""
+        if self.hidden:
+            return False
+        cx, cy = (self.rect[0] + self.rect[2]) / 2, (self.rect[1] + self.rect[3]) / 2
+        return 0 <= cx <= 1 and 0 <= cy <= 1
+
+    @property
     def visible(self) -> bool:
         """見えていて押せるか。ゲームが hidden / covered と伝えたもののほか、中心が描画領域の外にあるもの（hidden を出さない
         古いパッケージやエンジンでは、スクロールで隠れた項目の矩形が画面の外のまま来る）も見えていないとする。"""
@@ -281,12 +289,27 @@ class GameState:
 
     def top_modal(self) -> Menu | None:
         """いちばん新しいモーダル。ボタンがすべてほかの UI に覆われているモーダルは、手前に出ていないので除く
-        （ゲームが開いた選択画面と同時に右クリックメニューが開き、選択画面の下に隠れたときなど）。"""
+        （ゲームが開いた選択画面と同時に右クリックメニューが開き、選択画面の下に隠れたときなど）。
+
+        モーダルのボタンの一部がほかの UI に覆われていて、そのモーダルより後に出たモーダルでない画面に、覆われていない
+        ボタンが見えているなら、その画面が上に重なって手前に出ている（ゲームがモーダルの印を付け忘れた画面）。人が見て
+        手前にあるものを手前とし、その画面を返す（run 2026-11-07_1809: 一覧から開いた要約を、思い出から戻るロードのあと
+        ゲームが一覧をモーダル・要約をモーダルでないと伝え、要約が上に出ているのに一覧を動かし続けた）。"""
         modals = [
             m for m in self.menus.values()
             if m.modal and m.name not in self.behind and not (m.buttons and all(b.covered for b in m.buttons))
         ]
-        return max(modals, key=lambda m: m.order) if modals else None
+        if not modals:
+            return None
+        top = max(modals, key=lambda m: m.order)
+        if not any(b.covered and b.on_screen for b in top.buttons):
+            return top
+        over = [
+            m for m in self.menus.values()
+            if not m.modal and m.order > top.order and m.name not in self.behind and m.visible_buttons
+            and not any(b.covered and b.on_screen for b in m.buttons)
+        ]
+        return max(over, key=lambda m: m.order) if over else top
 
     def targets(self) -> list[Target]:
         """いま押せるもの。モーダルな menu があれば、いちばん新しいモーダルのボタンだけ。画面の外のボタンは除く。"""
