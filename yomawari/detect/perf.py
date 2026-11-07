@@ -774,6 +774,7 @@ class PerfMonitor:
         adds = {"cpu": float(self.p("R-10", "cpu_add")), "gpu": float(self.p("R-10", "gpu_add"))}
         gpu_drop = float(self.p("R-10", "gpu_fps_drop_ratio"))
         need = int(self.p("R-10", "min_samples"))
+        need_cmd = int(self.p("R-10", "min_cmd_runs"))
         runs = ", ".join(h["run"] for h in self.history)
         out: list[Issue] = []
         for scene, row in self.scene_stats().items():
@@ -797,20 +798,23 @@ class PerfMonitor:
                                    key=f"scene|{scene}", s=None, t=now, wall=wall)
         cur_cmds = self.command_stats()
         for key, row in cur_cmds.items():
-            past = [h["commands"][key] for h in self.history if key in h.get("commands", {})]
-            if not past:
+            # 1 回だけの実行（今回も前回も）は、ばらつきと区別できないので比べない
+            past = [h["commands"][key] for h in self.history if key in h.get("commands", {})
+                    and h["commands"][key].get("n", 0) >= need_cmd]
+            if row.get("n", 0) < need_cmd or not past:
                 continue
             bad = []
             pf = _median(p.get("fps") for p in past)
-            if pf is not None and row.get("fps") is not None and row["fps"] - pf >= ratio:
+            if pf is not None and row.get("fps") is not None and row["fps"] - pf >= ratio and row["fps"] >= ratio:
                 bad.append(f"FPS の落ち方 {pf * 100:.0f}% → {row['fps'] * 100:.0f}%")
             fps_low = pf is not None and row.get("fps") is not None and row["fps"] - pf >= gpu_drop
             for m in ("cpu", "gpu"):
                 if m == "gpu" and not fps_low:
                     continue
                 pv = _median(p.get(m) for p in past)
-                if pv is not None and row.get(m) is not None and row[m] - pv >= adds[m]:
-                    bad.append(f"{METRIC_JA[m]} の上がり方 +{pv:.0f} → +{row[m]:.0f} ポイント")
+                # 今回の上がり方そのものも add 以上のときだけ（下がっていたものが少し上がっただけなら出さない）
+                if pv is not None and row.get(m) is not None and row[m] - pv >= adds[m] and row[m] >= adds[m]:
+                    bad.append(f"{METRIC_JA[m]} の上がり方 {pv:+.0f} → {row[m]:+.0f} ポイント")
             if bad:
                 out += self._issue("R-10", f"`{key}` の実行前後の変化が、前回までのラン（{runs}）より悪くなりました: "
                                    f"{'、'.join(bad)}", key=f"cmd|{key}", s=None, t=now, wall=wall)

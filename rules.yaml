@@ -235,13 +235,17 @@ rules:
     description: >-
       ランの終わりに、scene ごとの値と、演出のコマンドごとの実行前後の差を、同じビルド名・同じマシンの前回までのラン
       （perf の history_runs 回）と比べる。FPS が ratio 以上落ちた、CPU・GPU 使用率が ratio 以上かつ cpu_add・gpu_add ポイント以上
-      上がった（GPU は FPS も gpu_fps_drop_ratio 以上落ちたときだけ）。メモリは見ない（R-01 で見る）
+      上がった（GPU は FPS も gpu_fps_drop_ratio 以上落ちたときだけ）。メモリは見ない（R-01 で見る）。
+      コマンドは、今回と前回のどちらも min_cmd_runs 回以上実行したものだけ比べ、今回の変化そのものも悪い
+      （FPS が ratio 以上落ちる、CPU・GPU が cpu_add・gpu_add ポイント以上上がる）ときだけ出す（1 回だけの実行や、
+      下がっていたものが少し上がっただけのものは、ばらつきと区別できないため）
     params:
       ratio: 0.2
       cpu_add: 10
       gpu_add: 10
       gpu_fps_drop_ratio: 0.1
       min_samples: 30
+      min_cmd_runs: 3
 
   - id: R-11
     severity: major
