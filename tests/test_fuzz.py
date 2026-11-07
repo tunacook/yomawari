@@ -684,3 +684,33 @@ def test_button_that_progressed_before_is_not_quiet_after_one_miss():
     # 続けて何度も反応しなければ、ほかのボタンと同じに後回しにする（run 2026-11-06_2050）
     run.miss_streak["TitleUI/NewGameButton"] = FUZZ_DEFAULTS["answered_miss_limit"]
     assert "TitleUI/NewGameButton" in s._quiet()
+
+
+def test_op_events_say_where_the_op_came_from():
+    # 行ったり来たりしたときに、どの仕組みがその操作を出し、どの層が重みを変え、どの候補と競り合っていたかを
+    # events.jsonl からあとで突き止められるようにする（run 2026-11-07_0849 では、drag left / drag right を交互に
+    # 約 110 回出した仕組みを特定できなかった）
+    from yomawari.fuzz.ops import Op
+    op = Op("click", weight=2.0).scaled("flow", 20.0).scaled("intent", 1.0).scaled("looks", 0.5)
+    assert op.weight == 20.0 and op.why == (("flow", 20.0), ("looks", 0.5))
+    assert op.to_json()["by"] == "normal" and op.to_json()["why"] == [["flow", 20.0], ["looks", 0.5]]
+    assert Op("key", arg="esc", irregular=True).to_json()["by"] == "irregular"
+    assert "why" not in Op("advance").to_json()
+
+    d = RandomDecider(random.Random(0))
+    cands = [Op("drag", arg="left", weight=3.0, group="move"), Op("drag", arg="right", weight=1.0, group="move"),
+             Op("advance", weight=4.0)]
+    picked = d.choose("modal:ListUI", cands)
+    odds = d.last_odds
+    assert odds["n"] == 3 and abs(sum(p for _, p in odds["top"]) - 1.0) < 1e-3
+    assert dict(odds["top"])[picked.label] == odds["p"]
+    # グループの重みは中のいちばん大きい重み（move は 3、advance は 4）。move の中は 3 : 1
+    assert dict(odds["top"])["advance"] == round(4 / 7, 4)
+    assert dict(odds["top"])["drag left"] == round(3 / 7 * 3 / 4, 4)
+
+    # 実際のランでも、op イベントに by と odds が出る。一覧を探す操作は search
+    game, run, issues, events, _ = run_sim("random", 6.0, title=LIST_TITLE, list_modal=False)
+    ops = [e.data for e in events if e.kind == "op"]
+    assert all("by" in o for o in ops)
+    assert any(o["by"] == "search" for o in ops)
+    assert all("odds" in o for o in ops if not o["irregular"] and o["trigger"] is None)

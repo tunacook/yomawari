@@ -805,3 +805,14 @@ def test_answered_option_that_keeps_missing_is_no_longer_favored():
     assert _weights(s, st)[f"click {labels[1]}"] == click * k  # 1回反応しなかっただけなら、まだ選ぶ
     run.miss_streak[labels[1]] = FUZZ_DEFAULTS["answered_miss_limit"]
     assert _weights(s, st)[f"click {labels[1]}"] == click  # 続けて反応しなければ、選ばない
+
+
+def test_flow_records_its_factor_on_ops():
+    # 流れが重みを変えた操作には、why に ("flow", 倍率) が残る（events.jsonl の op で、なぜ選ばれたかを見る）
+    s, st, run, _ = _session()
+    k, low = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"]
+    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=LIST)
+    cands = normal_candidates(st, Guard({}), s.cfg["weights"], False)
+    ops = {op.label: op for op in s._apply_flow(cands, 0.0)}
+    assert ops["click MemoryListUI/MemoryListGridSlot (Clone)"].why == (("flow", k),)
+    assert ops["click MemoryListUI/SelectButton"].why == (("flow", low),)

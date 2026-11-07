@@ -136,7 +136,7 @@ def search_candidates(found: list[Lead], weights: dict[str, float], group: str =
             if w <= 0:
                 continue
             point = None if kind == "key" else lead.point
-            op = Op(kind, arg=arg, weight=w, novelty=False, group=group, point=point)
+            op = Op(kind, arg=arg, weight=w, novelty=False, group=group, point=point, by=group)
             if (kind, arg) not in best or best[(kind, arg)].weight < w:
                 best[(kind, arg)] = op
     return list(best.values())
@@ -167,6 +167,6 @@ def blind_candidates(point: tuple[float, float], weight: float) -> list[Op]:
     ops: list[Op] = []
     for d in ("down", "up", "right", "left"):
         for kind, arg in REVEAL[d]:
-            ops.append(Op(kind, arg=arg, weight=weight / len(REVEAL[d]), novelty=True, group="search",
+            ops.append(Op(kind, arg=arg, weight=weight / len(REVEAL[d]), novelty=True, group="search", by="blind",
                           point=None if kind == "key" else point))
     return ops
