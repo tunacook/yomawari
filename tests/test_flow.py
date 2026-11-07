@@ -94,8 +94,12 @@ def test_parse_answers():
     raw[0]["answers"] = [{"at": "main/scenarioA_004:44.0", "pick": ["No.050*", "屋上"], "note": "屋上の思い出"}]
     flows = parse_flows(raw)
     (ans,) = flows[0].answers
-    assert ans.at == "main/scenarioA_004:44.0" and ans.pick == ("No.050*", "屋上") and ans.note == "屋上の思い出"
+    assert ans.at == ("main/scenarioA_004:44.0",) and ans.pick == ("No.050*", "屋上") and ans.note == "屋上の思い出"
     assert flows[1].answers == ()
+    # 外れへの返事のあとに出し直す質問のように、同じ質問の行がいくつもあるときは配列で書ける
+    raw[0]["answers"] = [{"at": ["main/scenarioA_006:27.0", "main/scenarioA_006:47.0"], "pick": ["No.050*", "玄関"]}]
+    (ans,) = parse_flows(raw)[0].answers
+    assert ans.at == ("main/scenarioA_006:27.0", "main/scenarioA_006:47.0")
 
     def bad(answers):
         f = {"name": "x", "start": {"choices": True}, "steps": [{"choose": True}], "answers": answers}
@@ -104,6 +108,10 @@ def test_parse_answers():
         bad([{"at": "a:1", "pick": ["x"], "line": "a:1"}])
     with pytest.raises(ConfigError, match="at に質問"):
         bad([{"pick": ["x"]}])
+    with pytest.raises(ConfigError, match="at に質問"):
+        bad([{"at": [], "pick": ["x"]}])
+    with pytest.raises(ConfigError, match="at に質問"):
+        bad([{"at": ["a:1", ""], "pick": ["x"]}])
     with pytest.raises(ConfigError, match="pick に"):
         bad([{"at": "a:1", "pick": []}])
     with pytest.raises(ConfigError, match="選ぶ手順は 1 個"):

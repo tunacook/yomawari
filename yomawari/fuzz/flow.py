@@ -164,10 +164,12 @@ ANSWER_KEYS = ("at", "pick", "note")
 class Answer:
     """プロファイルに書いた、質問ごとの正解（DESIGN.md §9「答えの選び方」）。
 
-    at: 質問の本文の行（line_id。ワイルドカード可）。pick: 選ぶ手順ごとに、選ぶものの画面に見える文字（ワイルドカード可）。
+    at: 質問の本文の行（line_id。ワイルドカード可）。外れへの返事のあとに出し直す質問のように、同じ質問の行が
+        いくつもあるときは配列で書け、どれかに当たればその質問とする。
+    pick: 選ぶ手順ごとに、選ぶものの画面に見える文字（ワイルドカード可）。
     """
 
-    at: str
+    at: tuple[str, ...]
     pick: tuple[str, ...]
     note: str = ""
 
@@ -186,12 +188,16 @@ def _answers(raw: Any, where: str) -> tuple[Answer, ...]:
         if unknown:
             raise ConfigError(f"{aw}: 知らない項目です: {', '.join(unknown)}（{' / '.join(ANSWER_KEYS)}）")
         at = a.get("at")
-        if not isinstance(at, str) or not at:
-            raise ConfigError(f"{aw}.at に質問の本文の行（line_id。例: \"main/scenarioA_004:44.0\"）を書いてください")
+        if isinstance(at, str):
+            at = [at]
+        if not isinstance(at, list) or not at or not all(isinstance(x, str) and x for x in at):
+            raise ConfigError(
+                f"{aw}.at に質問の本文の行（line_id。例: \"main/scenarioA_004:44.0\"。いくつもあるときは配列）を書いてください"
+            )
         pick = a.get("pick")
         if not isinstance(pick, list) or not pick or not all(isinstance(x, str) and x for x in pick):
             raise ConfigError(f"{aw}.pick に、選ぶ手順ごとの選ぶものの文字を配列で書いてください（例: [\"No.050*\", \"屋上\"]）")
-        out.append(Answer(at, tuple(pick), str(a.get("note", ""))))
+        out.append(Answer(tuple(at), tuple(pick), str(a.get("note", ""))))
     return tuple(out)
 
 
