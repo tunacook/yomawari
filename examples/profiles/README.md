@@ -4,7 +4,7 @@
 
 | ファイル | エンジン | 状態 |
 |---|---|---|
-| [unity-naninovel.profile.toml](unity-naninovel.profile.toml) | Unity + Naninovel（Rachel） | 文字と名前による役割の推定と、押した結果での確定（②）は実装済み。見た目（画像）による推定は未実装 |
+| [unity-naninovel.profile.toml](unity-naninovel.profile.toml) | Unity + Naninovel（選択肢と、推理パートで証拠を選ぶ画面がある、一般的なノベルゲームの例） | 文字と名前による役割の推定と、押した結果での確定（②）は実装済み。見た目（画像）による推定は未実装 |
 | [tyrano.profile.toml](tyrano.profile.toml) | ティラノスクリプト | 未検証（ゲーム側のプラグインもハーネス側の対応もない） |
 | [renpy.profile.toml](renpy.profile.toml) | Ren'Py | 未検証（同上） |
 
