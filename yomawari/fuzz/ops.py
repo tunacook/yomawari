@@ -42,10 +42,11 @@ class Op:
     novelty: bool = False  # True なら Decider が試行回数で重みを下げる
     group: str | None = None  # Decider がまとめて選ぶ単位（button / move / leave）。None なら操作ごと
     point: tuple[float, float] | None = None  # ホイール・ドラッグの位置（描画領域の正規化座標）
-    # どの仕組みが出した操作か（normal: 画面ごとの通常の操作 / search・return・blind・flow_search: 画面の外を探す /
-    # escape・recover: 抜け出す）。events.jsonl の op に残し、行ったり来たりしたときに出どころを突き止める
+    # どの仕組みが出した操作か（normal: 画面ごとの通常の操作 / list: 一覧の目標へ向かう / flow: ゲームの流れの手順 /
+    # blind: 向きを決めずに探す / escape・recover: 抜け出す）。events.jsonl の op に残し、行ったり来たりしたときに出どころを突き止める
     by: str = "normal"
-    why: tuple[tuple[str, float], ...] = ()  # 重みを変えた層と倍率（screen・looks・intent・resume・save_first・flow）
+    why: tuple[tuple[str, float], ...] = ()  # 重みを変えた層と倍率（screen・looks・intent・resume・save_first・flow・list）
+    goal: str | None = None  # 一覧の目標（その項目の label）へ向かう操作なら、その label（fuzz/listing.py）
 
     def scaled(self, layer: str, f: float) -> Op:
         """重みに f を掛け、掛けた層を why に残したもの。f が 1 ならそのまま。"""
@@ -67,6 +68,8 @@ class Op:
                                "by": "irregular" if self.irregular else self.by}
         if self.why:
             out["why"] = [[layer, round(f, 4)] for layer, f in self.why]
+        if self.goal is not None:
+            out["goal"] = self.goal
         return out
 
 
@@ -91,7 +94,7 @@ def normal_candidates(
 
     locked のボタン（ゲームが押せないと伝えたもの）は入れない。screen_weights はプロファイルの
     [screens.<menu>] weight で、その menu のボタンの重みに掛ける。factors はボタン（label）ごとに重みに掛けるもの
-    （暗い・空のボタンは小さく、新しく明るくなったボタンは大きく。fuzz/looks.py）。画面の外を探す操作は fuzz/search.py。
+    （暗い・空のボタンは小さく。fuzz/looks.py）。一覧の目標へ向かう操作は fuzz/listing.py。
     """
     if state.busy:
         return []

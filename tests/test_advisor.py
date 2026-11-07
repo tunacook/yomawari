@@ -55,7 +55,7 @@ def test_prompt_includes_what_was_read():
 
 
 def test_flow_tries_the_option_ai_favors_first():
-    # 言葉の一覧で、文字（画面から読んだもの）と本文の文脈から AI がいちばん合うと答えた言葉を先に試す
+    # 言葉の一覧で、文字（画面から読んだもの）と本文の文脈から AI がいちばん合うと答えた言葉を先に試す（目標にする）
     def ask(prompt, schema):
         assert "ねぇ、どこだって？" in prompt
         return {"scores": [{"id": 0, "reason": "-", "score": 1}, {"id": 1, "reason": "屋上", "score": 8}]}
@@ -64,7 +64,7 @@ def test_flow_tries_the_option_ai_favors_first():
         s, st, run, events = _session({"ai_choice": enabled})
         run.flow = FlowTracker(parse_flows(tomllib.loads(TRIAL)["flow"]))
         run.advisor = ChoiceAdvisor(ask, "m")
-        k, ai = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["ai_choice_factor"]
+        k = FUZZ_DEFAULTS["flow_factor"]
         click = FUZZ_DEFAULTS["weights"]["click"]
         frag = "MemoryFragmentListUI/MemoryFragmentListSlot(Clone)"
         _feed(st, "scene", name="main/s6")
@@ -81,13 +81,14 @@ def test_flow_tries_the_option_ai_favors_first():
         if enabled:
             for _ in range(200):
                 w = _weights(s, st)
-                if w[f"click {frag}#1"] != click * k:
+                if [e for e in events if e.kind == "advice"]:
                     break
                 time.sleep(0.01)
-            assert w[f"click {frag}#1"] == pytest.approx(click * k * ai) and w[f"click {frag}"] == click * k
+            w = _weights(s, st)
+            assert w[f"click {frag}#1"] == click * k and w[f"click {frag}"] == click
             advice = [e.data for e in events if e.kind == "advice"]
             assert advice and advice[0]["favored"] == ["夕焼けの屋上"]
         else:
-            assert w[f"click {frag}#1"] == w[f"click {frag}"] == click * k
+            assert sorted([w[f"click {frag}#1"], w[f"click {frag}"]]) == [click, click * k]
             assert run.advisor.asked == 0
         run.advisor.close()

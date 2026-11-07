@@ -487,12 +487,12 @@ def test_list_screen_scrolls_and_leaves():
     # 押しても反応しないスロットばかりのモーダルでも、スクロールして先を出し、Esc で抜ける。見た目に差がないので、
     # 押して確かめるより先に一覧を最後まで見て回り、見終えてから抜ける
     game, run, issues, events, _ = run_sim("random", 8.0, title=LIST_TITLE)
-    assert {"ListUI/Slot"} | {f"ListUI/Slot#{i}" for i in range(1, LIST_SLOTS)} <= run.seen
+    assert game.max_offset >= 1.4 - 1e-9  # 台帳を埋めるために、いちばん下のスロットが見えるまで動かした
+    assert {"ListUI/Slot"} | {f"ListUI/Slot#{i}" for i in range(1, LIST_SLOTS)} <= set(run.ledger.items)
     assert game.list_closed > 0
     results = [e.data for e in events if e.kind == "op_result"]
     assert any(r["kind"] in ("drag", "wheel_down", "key") and r["responded"] for r in results)
-    # 見ていない項目のある向きが分かっている間（最後の項目が見えるまで）は、向きを決めずに動かす操作（逆向きの
-    # ドラッグなど）を混ぜない
+    # 台帳を埋めている間（最後の項目が見えるまで）は、目標と逆の向きへ動かす操作（ドラッグなど）を混ぜない
     def last_visible(e):
         if not (e.source == "game" and e.kind == "menu" and e.data["name"] == "ListUI"):
             return False
@@ -556,34 +556,36 @@ def test_list_screen_is_searched_to_the_end():
 
 
 def test_non_modal_list_is_searched_to_the_end():
-    # モーダルでない一覧（Rachel の回想一覧）には、ランダムに動かす操作（move）は出ない。探す操作だけで端まで行く
+    # モーダルでない一覧（Rachel の回想一覧）には、ランダムに動かす操作（move）は出ない。台帳を埋める操作だけで端まで行く
     game, run, issues, events, _ = run_sim("random", 6.0, title=LIST_TITLE, list_modal=False)
     _assert_searched(game, run, events)
     # 端まで見るまでは、見ていないスロットのある下へだけ動かす（見終わってスロットがどれも反応しなければ、ほかの向きも試す）
     ops = [e.data["label"] for e in events if e.kind == "op"]
     moves = [o for o in ops if o.split()[0] in ("drag", "wheel_down", "wheel_up", "key")]
     assert moves[:3] and all(o in ("drag up", "wheel_down 3", "key down") for o in moves[:3])
-    # ハーネスが ListButton で開いた寄り道の画面なので、一通り見たら、ほかの向きへ動かして探し続けない
+    # ハーネスが ListButton で開いた寄り道の画面なので、台帳を埋めたら目標を持たず、ほかの向きへ動かして探し続けない
     assert set(moves) <= {"drag up", "wheel_down 3", "key down"}
     assert any("寄り道" in n and "TitleUI/ListButton" in n for n in run.notes)
 
 
-def test_list_opened_by_game_is_searched_in_all_directions_until_limit():
-    # ゲームが開いた一覧は、押せるものを見つけないと進めない。一通り見ても押せるものがなければ、すべての向きを試し、
-    # blind_search_limit 回で諦めて記録する
-    cfg = {**CFG, "blind_search_limit": 5}
-    game, run, issues, events, _ = run_sim("random", 8.0, cfg=cfg, list_modal=False, list_at_boot=True)
-    assert {f"ListUI/Slot#{i}" for i in range(1, LIST_SLOTS)} <= run.seen
-    ops = [e.data["label"] for e in events if e.kind == "op"]
-    assert {"drag down", "wheel_up 3", "key up"} & set(ops)  # 下以外の向きも試した
-    assert run.blind_tries["ListUI"] == 5
+def test_list_opened_by_game_is_probed_item_by_item():
+    # ゲームが開いた一覧は、押せるものを見つけないと進めない。台帳を埋めても押せそうなものがなければ、未確認の項目を
+    # 1つずつ目標にして押して確かめ、どれも押せないと分かったら記録する。矩形の分かる一覧なので、向きを決めずに
+    # すべての向きへ動かす探し方（blind）はしない
+    game, run, issues, events, _ = run_sim("random", 20.0, list_modal=False, list_at_boot=True)
+    labels = {"ListUI/Slot"} | {f"ListUI/Slot#{i}" for i in range(1, LIST_SLOTS)}
+    assert labels <= set(run.ledger.items)
+    pressed = {e.data["target"] for e in events if e.kind == "op_result" and e.data["kind"] == "click"}
+    assert labels <= pressed  # 画面の外の項目も、目標にして押して確かめた
+    assert all(run.ledger.items[x].status == "no" for x in labels)
+    assert not run.blind_tries
     assert any("ゲームが開いた画面" in n and "見つからなかった" in n for n in run.notes)
 
 
 def _assert_searched(game, run, events):
     # いちばん下のスロットの中心が描画領域に入るのは、0.2 ずつ動かして 1.4 のとき
     assert game.max_offset >= 1.4 - 1e-9
-    assert {f"ListUI/Slot#{i}" for i in range(1, LIST_SLOTS)} <= run.seen
+    assert {f"ListUI/Slot#{i}" for i in range(1, LIST_SLOTS)} <= set(run.ledger.items)
     assert any(e.kind == "op" and e.data["kind"] in ("wheel_down", "drag", "key") for e in events)
 
 
@@ -708,9 +710,9 @@ def test_op_events_say_where_the_op_came_from():
     assert dict(odds["top"])["advance"] == round(4 / 7, 4)
     assert dict(odds["top"])["drag left"] == round(3 / 7 * 3 / 4, 4)
 
-    # 実際のランでも、op イベントに by と odds が出る。一覧を探す操作は search
+    # 実際のランでも、op イベントに by と odds が出る。一覧の目標へ向かう操作は list で、目標の label を goal に残す
     game, run, issues, events, _ = run_sim("random", 6.0, title=LIST_TITLE, list_modal=False)
     ops = [e.data for e in events if e.kind == "op"]
     assert all("by" in o for o in ops)
-    assert any(o["by"] == "search" for o in ops)
+    assert any(o["by"] == "list" and o.get("goal", "").startswith("ListUI/Slot") for o in ops)
     assert all("odds" in o for o in ops if not o["irregular"] and o["trigger"] is None)

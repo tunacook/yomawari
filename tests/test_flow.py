@@ -140,11 +140,15 @@ def test_follows_question_flow_and_avoids_leaving():
     del run.opened_by["MemoryListUI"]
     w = _weights(s, st)
     assert run.flow.active.name == "質問に答える" and run.flow.index == 0
-    assert w["click MemoryListUI/MemoryListGridSlot (Clone)"] == click * k
+    # 選ぶ手順は、候補の順番の先頭（目標）だけを優先し、ほかの候補はふだんの重み
+    slots = {k_: v for k_, v in w.items() if "GridSlot" in k_}
+    goal = next(k_ for k_, v in slots.items() if v == click * k)
+    assert sorted(slots.values()) == [click, click, click * k]
     assert w["click MemoryListUI/SelectButton"] == pytest.approx(click * low)
-    # 押しても反応しなかったスロット（ロック中）と同じ見た目のものは、手順のボタンでも優先しない
-    run.silent.add("MemoryListUI/MemoryListGridSlot (Clone)#1")
-    assert _weights(s, st)["click MemoryListUI/MemoryListGridSlot (Clone)#1"] == click
+    # 押しても反応しなかったスロット（ロック中）は、手順のボタンでも優先しない（目標は次の候補へ移る）
+    run.silent.add(goal.removeprefix("click "))
+    w = _weights(s, st)
+    assert w[goal] == click and sum(1 for k_, v in w.items() if "GridSlot" in k_ and v == click * k) == 1
     # 要約が出た（読む前）: 「この思い出を読む」
     _feed(st, "menu", name="MemorySummaryUI", modal=True, buttons=SUMMARY)
     w = _weights(s, st)
@@ -320,7 +324,8 @@ def test_retrying_the_same_question_tries_other_answers():
 
     ask()
     w = _weights(s, st)
-    assert all(w[f"click {slot}{n}"] == click * k for n in ("", "#1", "#2"))
+    # どれもまだ試していない: 目標（順番の先頭）の1つだけを優先する
+    assert sorted(w[f"click {slot}{n}"] for n in ("", "#1", "#2")) == [click, click, click * k]
     answer(slot, frag, read=True)
     # 外れて同じ質問に戻った: 試しかけの思い出（slot）を先に、外れた言葉は後回し
     ask()
@@ -332,7 +337,7 @@ def test_retrying_the_same_question_tries_other_answers():
     ask()
     w = _weights(s, st)
     assert w[f"click {slot}"] == pytest.approx(click * low)
-    assert w[f"click {slot}#1"] == click * k and w[f"click {slot}#2"] == click * k
+    assert sorted(w[f"click {slot}{n}"] for n in ("#1", "#2")) == [click, click * k]
     assert run.flow.stats["質問に答える"].retried == 2
     assert any("もう一度始めた（前の組み合わせが外れだった）のは 2 回、試した組み合わせは 2 通り" in n
                for n in run.flow.summary())
@@ -376,7 +381,8 @@ def test_same_question_after_different_wrong_replies():
     ask(["main/s6:80", "main/s6:81"])  # 外れ方 B への返事
     w = _weights(s, st)
     # 思い出 slot の言葉は（言葉を選ぶを押したかどうかによらず）すべて外れた
-    assert w[f"click {slot}"] == pytest.approx(click * low) and w[f"click {slot}#1"] == click * k
+    assert w[f"click {slot}"] == pytest.approx(click * low)
+    assert sorted(w[f"click {slot}{n}"] for n in ("#1", "#2")) == [click, click * k]
     assert run.flow.stats["質問に答える"].retried == 2
     # 答えてから本文が flow_retry_lines を超えて進んだら、別の質問
     run.flow.active = None
@@ -407,8 +413,9 @@ steps = [{ choose = true }]
     _feed(st, "line", line_id="main/s1:5", text="行く？")
     _feed(st, "choices", items=items)
     w = _weights(s, st)
-    # どちらも外れた: どれも同じ重みに戻し、記録に書く
-    assert w["click choices/はい"] == w["click choices/いいえ"] == FUZZ_DEFAULTS["weights"]["click"] * FUZZ_DEFAULTS["flow_factor"]
+    # どちらも外れた: どれも同じ扱いに戻して（目標の1つだけを優先し）、記録に書く
+    click = FUZZ_DEFAULTS["weights"]["click"]
+    assert sorted([w["click choices/はい"], w["click choices/いいえ"]]) == [click, click * FUZZ_DEFAULTS["flow_factor"]]
     assert any("2 通り）をすべて試しても先に進めなかった" in n for n in run.flow.summary())
 
 
@@ -519,12 +526,14 @@ def test_dim_options_are_tried_after_bright_ones():
     s._dim = {labels[2], labels[3]}
     w = _weights(s, st)
     assert run.flow.index == 4
-    assert [w[f"click {x}"] for x in labels] == [click * k, click * k, click, click]
-    # 明るい2枚は外れだった
+    # 明るいものを先に（目標は明るい2枚のどちらか）
+    assert sorted(w[f"click {x}"] for x in labels[:2]) == [click, click * k]
+    assert [w[f"click {x}"] for x in labels[2:]] == [click, click]
+    # 明るい2枚は外れだった: 暗いものの番（目標は暗い2枚のどちらか）
     ctx, path = run.flow.ctx, tuple(run.flow.path)
     run.flow.leaves |= {(ctx, (*path, labels[0])), (ctx, (*path, labels[1]))}
     w = _weights(s, st)
-    assert [w[f"click {x}"] for x in labels[2:]] == [click * k, click * k]
+    assert sorted(w[f"click {x}"] for x in labels[2:]) == [click, click * k]
     assert not any("すべて試しても" in e for e in run.flow.events)
     # 押して反応がなかったもの（押して確かめた）は、暗いものの番になっても選ばない
     run.silent.add(labels[3])
@@ -609,7 +618,7 @@ def test_going_back_restarts_from_that_step():
     _feed(st, "menu_close", name="MemorySummaryUI")
     w = _weights(s, st)
     assert run.flow.index == 0 and run.flow.path == []
-    assert w[f"click {SLOT}#1"] == click * k
+    assert sorted(w[f"click {x}"] for x in (SLOT, f"{SLOT}#1", f"{SLOT}#2")) == [click, click, click * k]
     # 一覧のまま選び直したら、選んだものを置き換える
     run.flow.pressed(f"{SLOT}#1", "MemoryListGridSlot (Clone)", True)
     run.flow.pressed(f"{SLOT}#2", "MemoryListGridSlot (Clone)", True)
@@ -626,74 +635,104 @@ def test_going_back_restarts_from_that_step():
     assert w["click MemorySummaryUI/ShowFragmentListButton"] == click * k
 
 
-def test_tried_all_visible_options_looks_off_screen():
-    # run 2026-11-05_2230: 質問の一覧が最後のほうで開き、見えている思い出 2 つ（No.050・No.052）の言葉をすべて試しても、
-    # 一覧を動かさずに同じ 2 つを 1 時間試し続けた。見えているものを試し終えたら、画面の外のまだ試していないものを探す
+def test_flow_fills_the_ledger_then_goes_to_an_off_screen_option():
+    # run 2026-11-05_2230: 質問の一覧が最後のほうで開き、見えている思い出 2 つの言葉をすべて試しても、一覧を動かさずに
+    # 同じ 2 つを 1 時間試し続けた。台帳（DESIGN.md §9「一覧の台帳と目標」）では、まず見えていない項目を見にいって
+    # 台帳を埋め、候補の順番の先頭（目標）へまっすぐ向かう
     s, st, run, _ = _session()
     run.flow = FlowTracker(parse_flows(tomllib.loads(ONCE_PROFILE)["flow"]))
     k, low, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"], FUZZ_DEFAULTS["weights"]["click"]
-    slots = [{"name": "MemoryListGridSlot (Clone)", "rect": [0.1 + 0.2 * i, 0.3, 0.25 + 0.2 * i, 0.5]} for i in range(2)]
-    slots += [{"name": "MemoryListGridSlot (Clone)", "rect": [0.1, -0.5, 0.25, -0.3], "hidden": True},
-              {"name": "MemoryListGridSlot (Clone)", "rect": [0.3, -0.5, 0.45, -0.3], "hidden": True}]
+    lf = FUZZ_DEFAULTS["list_factor"]
+
+    def slots(top):
+        # top: 上の 2 つ（#2・#3）が見えているか。見えていなければ、上の 2 つは画面の上、下の 2 つが見えている
+        y = (0.3, 1.3) if top else (-0.7, 0.3)
+        out = [{"name": "MemoryListGridSlot (Clone)", "rect": [0.1 + 0.2 * i, y[0] + (0 if top else 1.0),
+                                                              0.25 + 0.2 * i, y[0] + 0.2 + (0 if top else 1.0)]}
+               for i in range(2)]
+        out += [{"name": "MemoryListGridSlot (Clone)", "rect": [0.1 + 0.2 * i, y[0] if top else -0.7,
+                                                               0.25 + 0.2 * i, (y[0] + 0.2) if top else -0.5]}
+                for i in range(2)]
+        for b in out:
+            cy = (b["rect"][1] + b["rect"][3]) / 2
+            if not 0 <= cy <= 1:
+                b["hidden"] = True
+        return out
+
     _feed(st, "line", line_id="main/scenarioB_004:323.0", text="アカウント名を選ぼう。")
-    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=slots)
-    _weights(s, st)
+    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=slots(top=False))
+    w = _weights(s, st)
+    # 上の 2 つがまだ見えていない: 台帳を埋めるために上へ動かす（押す目標はまだ決めない）
+    assert w["wheel_up 3"] == w["drag down"] == click * lf
+    assert w[f"click {SLOT}"] == w[f"click {SLOT}#1"] == click
+    assert any("台帳を埋め始めた" in n for n in run.notes)
     ctx = run.flow.ctx
     run.flow.leaves |= {(ctx, (SLOT,)), (ctx, (f"{SLOT}#1",))}
+    # 上へ動かした: 上の 2 つが見えた（#3 は伏せ字）
     run.masked_chars = "?？"
-    st.set_read_text({f"{SLOT}#3": "？？？"})  # 伏せ字のものは探さない（#2 だけを探す）
+    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=slots(top=True))
+    st.set_read_text({f"{SLOT}#3": "？？？"})
     w = _weights(s, st)
+    assert run.ledger.items[f"{SLOT}#3"].status == "masked"
+    assert w[f"click {SLOT}#2"] == click * k  # 目標: まだ試していない #2（伏せ字の #3 は選ばない）
+    assert w[f"click {SLOT}#3"] == click
+    # 下へ戻っても、目標の #2 へ向かう（上へ動かす）
+    _feed(st, "menu", name="MemoryListUI", modal=True, buttons=slots(top=False))
+    w = _weights(s, st)
+    ops = {op.label: op for op in s._apply_flow(normal_candidates(st, Guard({}), s.cfg["weights"], False), 0.0)}
+    assert ops["wheel_up 3"].goal == f"{SLOT}#2" and ops["wheel_up 3"].by == "flow"
+    assert w["wheel_down 3"] < click * lf
     assert w[f"click {SLOT}"] == w[f"click {SLOT}#1"] == pytest.approx(click * low)
-    assert w["wheel_up 3"] == w["drag down"] == click * k
-    assert w["wheel_down 3"] < click * k  # 上へ探す（下へはふだんの動かす操作のまま）
     assert not any("すべて試しても" in e for e in run.flow.events)
-    assert any("画面の外のまだ試していない項目を探した" in n for n in run.notes)
     # 画面の外のものも試し終えたら（残りは伏せ字の #3 だけ）、すべて試したと記録する
     run.flow.leaves.add((ctx, (f"{SLOT}#2",)))
-    w = _weights(s, st)
-    assert w["wheel_up 3"] < click * k
+    _weights(s, st)
     assert any("すべて試しても" in e for e in run.flow.events)
 
 
-def test_off_screen_search_keeps_one_direction():
-    # run 2026-11-06_2334: 縦にも横にも広い思い出の一覧で、まだ試していない思い出が上にも下にも右にもあり、上下左右へ
-    # 動かす操作を混ぜて候補に入れた。逆の向きへ動かして打ち消し合い、5 時間行ったり来たりした（動かせば中身は動くので、
-    # あきらめることもない）。いちばん近いものの向きに絞り、見えるものが変わらなくなるまで同じ向きに続ける
+def test_flow_goal_keeps_one_direction_and_gives_up():
+    # run 2026-11-06_2334・2026-11-07_0849: 縦にも横にも広い思い出の一覧で、まだ試していない思い出が上にも下にも右にもあり、
+    # 上下左右へ動かす操作を混ぜて候補に入れた。逆の向きへ動かして打ち消し合い、行ったり来たりした。目標は 1 つだけにし、
+    # その向きへだけ動かす。続けて近づかなければ、その目標はあきらめて次の目標にする
     s, st, run, _ = _session()
     run.flow = FlowTracker(parse_flows(tomllib.loads(ONCE_PROFILE)["flow"]))
-    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
-    give_up = FUZZ_DEFAULTS["search_give_up"]
+    click, lf = FUZZ_DEFAULTS["weights"]["click"], FUZZ_DEFAULTS["list_factor"]
+    give_up = FUZZ_DEFAULTS["list_move_give_up"]
     slots = [{"name": "MemoryListGridSlot (Clone)", "rect": [0.1 + 0.2 * i, 0.3, 0.25 + 0.2 * i, 0.5]} for i in range(2)]
     slots += [{"name": "MemoryListGridSlot (Clone)", "rect": [0.1, -0.5, 0.25, -0.3], "hidden": True},  # 上（遠い）
-              {"name": "MemoryListGridSlot (Clone)", "rect": [0.1, 0.6, 0.25, 0.8], "hidden": True},  # 下（近い）
-              {"name": "MemoryListGridSlot (Clone)", "rect": [0.85, 0.3, 1.0, 0.5], "hidden": True}]  # 右（中くらい）
+              {"name": "MemoryListGridSlot (Clone)", "rect": [0.1, 1.1, 0.25, 1.3], "hidden": True},  # 下（近い）
+              {"name": "MemoryListGridSlot (Clone)", "rect": [1.25, 0.3, 1.4, 0.5], "hidden": True}]  # 右（中くらい）
     _feed(st, "line", line_id="main/scenarioB_004:323.0", text="アカウント名を選ぼう。")
     _feed(st, "menu", name="MemoryListUI", modal=True, buttons=slots)
     _weights(s, st)
+    for item in run.ledger.items.values():
+        item.shown = True  # 台帳は埋め終えた（前に見た）
     ctx = run.flow.ctx
     run.flow.leaves |= {(ctx, (SLOT,)), (ctx, (f"{SLOT}#1",))}
 
     def boosted():
-        w = _weights(s, st)
-        return {label for label in ("wheel_up 3", "drag down", "wheel_down 3", "drag up", "drag left", "drag right")
-                if w.get(label, 0) >= click * k}
+        # 目標へ向かう操作（goal の付いた、動かす操作）
+        ops = s._apply_flow(normal_candidates(st, Guard({}), s.cfg["weights"], False), 0.0)
+        return {op.label for op in ops if op.goal is not None and op.target is None and not op.label.startswith("key")}
 
-    assert boosted() == {"wheel_down 3", "drag up"}  # 下だけ
-    row = ("MemoryListUI", "MemoryListGridSlot (Clone)")
-    # 下へ動かしても見えるものが変わらない（端で跳ね返るだけ）: give_up 回までは下のまま、そのあとはほかの向き
-    for _ in range(give_up - 1):
-        run.flow_moved.add(row)
-        assert boosted() == {"wheel_down 3", "drag up"}
-    run.flow_moved.add(row)
-    assert boosted() == {"drag left"}  # 次に近いのは右（上より近い）
-    # 右へ動かして見えるものが変わったら、数え直して右を続ける
-    run.flow_moved.add(row)
-    run.flow_way[row] = ("right", (), give_up - 1)
-    assert boosted() == {"drag left"} and run.flow_way[row][2] == 0
-    # 一覧を閉じたら、決めた向きもあきらめた向きも忘れる
+    assert boosted() == {"wheel_down 3", "drag up"}  # いちばん近い下の #3 だけ
+    w = _weights(s, st)
+    assert w["drag up"] == click * lf
+    goal = run.ledger.goals["MemoryListUI/MemoryListGridSlot (Clone)"]
+    assert goal.label == f"{SLOT}#3"
+    # 下へ動かしても目標が近づかない（端で跳ね返るだけ）: give_up 回までは下のまま、そのあとは次に近い右
+    # （近づかなかった手段のホイールは後回しにし、ドラッグを続ける）
+    for n in range(give_up):
+        now = boosted()
+        assert now == {"wheel_down 3", "drag up"}, n
+        s._moving = ("MemoryListUI/MemoryListGridSlot (Clone)", f"{SLOT}#3", "drag up", goal.dist)
+    assert boosted() == {"drag left"}
+    assert f"{SLOT}#3" in run.ledger.unreachable
+    assert any("近づかなかった" in n for n in run.notes)
+    # 一覧を閉じたら、届かなかった目標も忘れる
     _feed(st, "menu_close", name="MemoryListUI")
-    s._search_candidates()
-    assert not run.flow_way and not run.flow_stuck
+    s._sync_lists()
+    assert not run.ledger.unreachable and not run.ledger.goals
 
 
 def test_wrong_answers_are_remembered_across_runs(tmp_path):
@@ -752,8 +791,8 @@ def test_flow_step_ops_are_not_worn_down_by_repeats():
     _feed(st, "menu", name="MemoryListUI", modal=True, buttons=LIST)
     cands = normal_candidates(st, Guard({}), s.cfg["weights"], False)
     out = {op.label: op for op in s._apply_flow(cands, 0.0)}
-    slot = out["click MemoryListUI/MemoryListGridSlot (Clone)"]
-    assert not slot.novelty
+    slot = next(op for op in out.values() if op.goal is not None)  # 手順の目標の思い出
+    assert not slot.novelty and slot.by == "flow"
     assert out["click MemoryListUI/SelectButton"].novelty  # 手順の外のボタンは今までどおり
     dec = run.decider
     for _ in range(50):
@@ -832,5 +871,6 @@ def test_flow_records_its_factor_on_ops():
     _feed(st, "menu", name="MemoryListUI", modal=True, buttons=LIST)
     cands = normal_candidates(st, Guard({}), s.cfg["weights"], False)
     ops = {op.label: op for op in s._apply_flow(cands, 0.0)}
-    assert ops["click MemoryListUI/MemoryListGridSlot (Clone)"].why == (("flow", k),)
+    goal = next(op for op in ops.values() if op.goal is not None)
+    assert goal.why == (("flow", k),) and goal.target.name == "MemoryListGridSlot (Clone)"
     assert ops["click MemoryListUI/SelectButton"].why == (("flow", low),)
