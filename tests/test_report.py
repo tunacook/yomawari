@@ -1,7 +1,18 @@
 """レポートの「不具合の疑い」（post/report.py）。"""
 
 from yomawari.events import Issue
-from yomawari.post.report import RunSummary, render
+from yomawari.post.report import (
+    DOUBT_BUTTON,
+    DOUBT_ERROR,
+    DOUBT_LOG,
+    DOUBT_NOTE,
+    DOUBT_PERF,
+    DOUBT_SILENT,
+    DOUBT_STALL,
+    DOUBT_UNKNOWN,
+    RunSummary,
+    render,
+)
 
 
 def _summary(**kw):
@@ -33,7 +44,9 @@ def test_suspects_come_right_after_the_summary_in_order_of_severity(tmp_path):
     # 同じ重さなら、性能の検出はあと
     order = _section(render(_summary(), [_issue("R-08", "major", "重い", "w"), _issue("L-01", "major", "エラー", "w")], tmp_path))
     assert order.index("[L-01]") < order.index("[R-08]")
-    assert "| Major | [S-05] S-05 の題 | `main/s1:10` | 1 | ボタンが反応しない |" in sec
+    assert f"| Major | [S-05] S-05 の題 | `main/s1:10` | 1 | {DOUBT_BUTTON} | ボタンが反応しない |" in sec
+    assert f"| 1 | {DOUBT_UNKNOWN} | 本文が進まない |" in sec
+    assert f"| 2 | {DOUBT_PERF} |" in sec
     # Minor はルールごとに1行
     assert sec.count("[R-07]") == 1 and "| 2 か所 | 2 |" in sec
 
@@ -43,7 +56,8 @@ def test_error_log_just_before_is_shown_as_the_clue(tmp_path):
     log = _issue("L-01", "major", err, "2026-01-01T00:00:00+09:00")
     hit = _issue("S-02", "critical", "本文が進まない", "2026-01-01T00:01:30+09:00")
     sec = _section(render(_summary(), [log, hit], tmp_path))
-    assert "| Critical | [S-02] S-02 の題 | - | 1 | 直前のエラーログ: スクリプトを読み込めない |" in sec
+    assert f"| Critical | [S-02] S-02 の題 | - | 1 | {DOUBT_ERROR} | 直前のエラーログ: スクリプトを読み込めない |" in sec
+    assert f"| {DOUBT_LOG} |" in sec
     assert "Stack.Trace" not in sec
     # 窓の外、別の起動のエラーログは手がかりにしない
     far = _issue("S-02", "critical", "本文が進まない", "2026-01-01T00:02:01+09:00")
@@ -59,7 +73,8 @@ def test_stalls_notes_and_silent_buttons_are_gathered(tmp_path):
              "流れの `main/s1:5` で、外れのはずの答え（はい）のあと、同じ質問に戻らずに先へ進んだ（プロファイルの正解が古いか、ゲームの判定の不具合の可能性がある）"]
     sec = _section(render(_summary(stall_rows=[("`main/s1:1`", "9 分。ランが終わるまで進まなかった")], harness_notes=notes,
                                    silent_buttons={"ListUI/Slot": 2}), [], tmp_path))
-    assert "| 要確認 | 進めなかった区間 | `main/s1:1` | 1 | 9 分。ランが終わるまで進まなかった |" in sec
+    assert f"| 要確認 | 進めなかった区間 | `main/s1:1` | 1 | {DOUBT_STALL} | 9 分。ランが終わるまで進まなかった |" in sec
+    assert sec.count(DOUBT_NOTE) == 3 and DOUBT_SILENT in sec
     assert "巻き戻せなかった" in sec and "押せるものが見つからなかった" in sec
     assert "外れのはずの答え（はい）のあと" in sec and "ゲームの判定の不具合の可能性がある" in sec
     assert "操作: 10 回" not in sec

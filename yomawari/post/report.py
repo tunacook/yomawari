@@ -13,6 +13,15 @@ SEVERITY_LABEL = {"critical": "Critical", "major": "Major", "minor": "Minor", "i
 SUSPECT_NOTE_WORDS = ("不具合の可能性", "進めない可能性")
 LOG_ERROR_RULE = "L-01"
 CELL_LEN = 120  # 「不具合の疑い」の表の1マスの文字数（長いものは下の節で読む）
+# 「不具合の疑い」の見立て。誤検知かもしれないものも載せ、どう疑わしいかを人が切り分けられるようにする
+DOUBT_ERROR = "ゲームの不具合の疑いが強い（直前にエラーログ）"
+DOUBT_LOG = "ゲームのエラーログ。動作に影響するかは未確定"
+DOUBT_UNKNOWN = "ゲームの不具合か、ハーネスの誤検知かは未確定"
+DOUBT_BUTTON = "ハーネスの誤検知の可能性あり（押せない場面で押しただけかもしれない）"
+DOUBT_PERF = "ハーネスの誤検知の可能性あり（負荷のばらつきかもしれない）"
+DOUBT_STALL = "ハーネスの誤検知の可能性あり（進め方の問題かもしれない）"
+DOUBT_NOTE = "ハーネスの誤検知の可能性あり（ハーネスの推定）"
+DOUBT_SILENT = "ハーネスの誤検知の可能性あり（ロック中など仕様かもしれない）"
 
 
 @dataclass
@@ -103,6 +112,17 @@ def _error_before(issue: Issue, issues: list[Issue], window: float) -> Issue | N
     return max(near, key=lambda pair: pair[0])[1] if near else None
 
 
+def _doubt(issue: Issue) -> str:
+    """検出の種類から見た、誤検知の可能性（判定ではなく、切り分けの入り口）。"""
+    if issue.rule_id == LOG_ERROR_RULE:
+        return DOUBT_LOG
+    if issue.rule_id == "S-05":
+        return DOUBT_BUTTON
+    if issue.rule_id.startswith("R-"):
+        return DOUBT_PERF
+    return DOUBT_UNKNOWN
+
+
 def _suspects(summary: RunSummary, issues: list[Issue], groups: list[IssueGroup]) -> list[str]:
     """「不具合の疑い」の節: 検出・進めなかった区間・ハーネスの記録に散らばった疑いを、重い順に1つの表にまとめる。
     Critical と Major は検出ごとに、Minor と Info は件数が多くなるのでルールごとに1行にする。"""
@@ -116,8 +136,9 @@ def _suspects(summary: RunSummary, issues: list[Issue], groups: list[IssueGroup]
             i = g.first
             err = next((e for e in (_error_before(x, issues, window) for x in issues if x.key == i.key) if e), None)
             clue = f"直前のエラーログ: {err.detail}" if err is not None else i.detail
-            rows.append(f"| {SEVERITY_LABEL[sev]} | [{i.rule_id}] {i.title} | {_place(i)} | {g.count} | {_cell(clue)} |")
-    rows += [f"| 要確認 | 進めなかった区間 | {where} | 1 | {_cell(clue)} |" for where, clue in summary.stall_rows]
+            doubt = DOUBT_ERROR if err is not None else _doubt(i)
+            rows.append(f"| {SEVERITY_LABEL[sev]} | [{i.rule_id}] {i.title} | {_place(i)} | {g.count} | {doubt} | {_cell(clue)} |")
+    rows += [f"| 要確認 | 進めなかった区間 | {where} | 1 | {DOUBT_STALL} | {_cell(clue)} |" for where, clue in summary.stall_rows]
     for sev in ("minor", "info"):
         by_rule: dict[str, list[IssueGroup]] = {}
         for g in groups:
@@ -126,18 +147,18 @@ def _suspects(summary: RunSummary, issues: list[Issue], groups: list[IssueGroup]
         for rule, gs in by_rule.items():
             total = sum(g.count for g in gs)
             rows.append(f"| {SEVERITY_LABEL[sev]} | [{rule}] {gs[0].first.title} | {len(gs)} か所 | {total} | "
-                        f"{_cell(gs[0].first.detail)} |")
+                        f"{_doubt(gs[0].first)} | {_cell(gs[0].first.detail)} |")
     notes = [n for n in summary.harness_notes if any(w in n for w in SUSPECT_NOTE_WORDS)]
-    rows += [f"| 要確認 | ハーネスの記録 | - | 1 | {_cell(n)} |" for n in notes]
+    rows += [f"| 要確認 | ハーネスの記録 | - | 1 | {DOUBT_NOTE} | {_cell(n)} |" for n in notes]
     if summary.silent_buttons:
         names = "、".join(f"`{k}`" for k in sorted(summary.silent_buttons))
-        rows.append(f"| 要確認 | 一度も反応しなかったボタン | - | {len(summary.silent_buttons)} | {_cell(names)} |")
+        rows.append(f"| 要確認 | 一度も反応しなかったボタン | - | {len(summary.silent_buttons)} | {DOUBT_SILENT} | {_cell(names)} |")
     out = ["## 不具合の疑い", "",
-           ("このランで不具合かもしれないと見たものを、重い順にまとめた。確定ではなく、ハーネスの進め方が原因のものや、"
-            "仕様どおりのものも含む。詳しくは下の各節を見る"), ""]
+           ("このランで不具合かもしれないと見たものを、重い順にまとめた。確定ではなく、ハーネスの誤検知かもしれないものや、"
+            "仕様どおりのものも載せる。「見立て」は検出の種類から見たもので、切り分けの入り口にする。詳しくは下の各節を見る"), ""]
     if not rows:
         return out + ["なし", ""]
-    return out + ["| 重さ | 疑い | 場所 | 回数 | 手がかり |", "|---|---|---|---|---|", *rows, ""]
+    return out + ["| 重さ | 疑い | 場所 | 回数 | 見立て | 手がかり |", "|---|---|---|---|---|---|", *rows, ""]
 
 
 def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
