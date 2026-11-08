@@ -28,8 +28,10 @@ _PERMISSION_PANES = {
 
 
 def parse_lsappinfo_pid(out: str) -> int | None:
-    """`lsappinfo info -only pid <ASN>` の出力（`"pid"=12345`）から pid を取り出す。"""
-    m = re.search(r'"pid"\s*=\s*(\d+)', out)
+    """`lsappinfo info -only pid <ASN>` の出力から pid を取り出す。
+
+    macOS 26 では `"pid"=12345`、macOS 27 では `pid = 12345 !cgsConnection ...` の形で出る。"""
+    m = re.search(r'(?<!\w)"?pid"?\s*=\s*(\d+)', out)
     return int(m.group(1)) if m else None
 
 

@@ -132,7 +132,28 @@ def test_parse_lsappinfo_pid():
     from yomawari.platform.mac import parse_lsappinfo_pid
 
     assert parse_lsappinfo_pid('"pid"=91521\n') == 91521
+    # macOS 27 の形（実機の出力）
+    out = ("[ NULL ]  [ NULL ]  \n    bundleID=[ NULL ] \n    bundle path=[ NULL ] \n    executable path=[ NULL ] \n"
+           "    pid = 3880 !cgsConnection !signalled type=[ NULL ]  flavor=[ NULL ]  Version=[ NULL ]  Arch=!!none \n\n")
+    assert parse_lsappinfo_pid(out) == 3880
     assert parse_lsappinfo_pid("") is None
+    assert parse_lsappinfo_pid("parentpid = 12\n") is None
+
+
+def test_unknown_frontmost_app_is_not_reported_as_cannot_activate():
+    # 前面のアプリを OS から取得できないときは、押さず、「前面にできない」とも言わない（ゲームは前面にあるかもしれない）
+    import pytest
+
+    from yomawari.input.pointer import InputBlocked, Pointer
+    from yomawari.state import GameState
+
+    class NoFront(FakeWindows):
+        def activate(self, pid):
+            self.activated.append(pid)  # 前面にしても、前面のアプリは分からないまま
+
+    p = Pointer(NoFront(WindowInfo(1, ScreenRect(0, 0, 100, 100), True), front=None), None, 1, GameState(), activate_wait=0)
+    with pytest.raises(InputBlocked, match="取得できません"):
+        p.ensure_front()
 
 
 def test_locked_screen_blocks_input_and_is_noted():
