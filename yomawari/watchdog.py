@@ -23,7 +23,7 @@ from typing import Any
 
 from . import __version__, launcher
 from .bus import EventBus
-from .config import BuildConfig
+from .config import FUZZ_DEFAULTS, BuildConfig
 from .detect.engine import Engine, Rule, RuleError
 from .detect.perf import load_history, load_perf
 from .judge import ollama
@@ -36,7 +36,7 @@ from .fuzz.guard import Guard
 from .fuzz.loop import FuzzRun, FuzzSession
 from .fuzz.looks import load_inactive_words, load_masked_chars
 from .fuzz.resume import load_save_hints
-from .post.stalls import find_stalls, load_events, render_stalls
+from .post.stalls import find_stalls, load_events, render_stalls, stall_rows
 from .fuzz.roles import RoleBook
 from .input.base import InputDriver
 from .input.pointer import Pointer
@@ -233,14 +233,15 @@ class Harness:
             except TimeoutError:
                 pass
 
-    def _stall_lines(self, run_dir: Path) -> list[str]:
-        """「進めなかったところ」の節。操作しないモード（aging）では出さない。"""
+    def _stall_sections(self, run_dir: Path) -> tuple[list[str], list[tuple[str, str]]]:
+        """「進めなかったところ」の節と、「不具合の疑い」に載せる行。操作しないモード（aging）では出さない。"""
         if self._fuzz is None:
-            return []
+            return [], []
         sec = float(self.fuzz_cfg["stall_report_sec"])
         if sec <= 0:
-            return []
-        return render_stalls(find_stalls(load_events(run_dir / "events.jsonl"), sec), sec)
+            return [], []
+        stalls = find_stalls(load_events(run_dir / "events.jsonl"), sec)
+        return render_stalls(stalls, sec), stall_rows(stalls)
 
     def _status(self, now: float, force: bool = False) -> None:
         if self.on_status is None or (not force and now - self._last_status < 1.0):
@@ -542,6 +543,7 @@ class Harness:
                 perf_lines = perf.report_lines()
             self._status(time.monotonic(), force=True)
             self._bus.close()
+            stall_lines, stall_table = self._stall_sections(run_dir)
             summary = RunSummary(
                 run_id=run_dir.name,
                 build_name=self.build.name,
@@ -565,7 +567,10 @@ class Harness:
                 },
                 harness_notes=self.notes,
                 silent_buttons=self.engine.silent_buttons(),
-                stalls=self._stall_lines(run_dir),
+                stalls=stall_lines,
+                stall_rows=stall_table,
+                suspect_error_window_sec=float(self.fuzz_cfg.get(  # 操作しないモード（aging）では fuzz の設定がない
+                    "suspect_error_window_sec", FUZZ_DEFAULTS["suspect_error_window_sec"])),
                 perf=perf_lines,
             )
             report = write_report(summary, self.issues, run_dir)

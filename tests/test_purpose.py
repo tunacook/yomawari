@@ -96,4 +96,4 @@ def test_report_shows_purpose_and_puts_focus_first(tmp_path: Path):
     text = render(summary, [_issue("S-05", "反応しない"), _issue("S-02", "進まない")], tmp_path)
     assert "| 目的 | stuck: 進行不能を探す |" in text
     assert "| 重点的に見るルール | S-02, S-03 |" in text
-    assert text.index("[S-02] 進まない（重点）") < text.index("[S-05] 反応しない")
+    assert text.index("[S-02] 進まない（重点）") < text.index("[S-05] 反応しない", text.index("## Major"))
