@@ -40,7 +40,8 @@ class Item:
     menu: str
     name: str
     rect: Rect  # 最後に受け取った矩形
-    text: str | None = None  # 見えたときに画面から読んだ文字
+    text: str | None = None  # 見えたときに画面から読んだ文字（最後に読んだもの）
+    readings: list[str] = field(default_factory=list)  # これまでに読んだ文字（重なりなし）。読むたびに番号だけ・題名だけと変わるため
     status: str = UNKNOWN  # 押した結果で決める（見た目では変えない）
     shown: bool = False  # 画面を開いてから、見えたことがあるか（閉じたら False に戻す）
 
@@ -108,6 +109,8 @@ class Ledger:
         if item.text is not None and _norm(item.text) != _norm(b.text) and item.status in (OK, NO):
             item.status = UNKNOWN  # 中身が入れ替わった（同じ並びの番号に、別の項目が来た）
         item.text = b.text
+        if b.text not in item.readings:
+            item.readings.append(b.text)
         if masked(b.text, masked_chars):
             item.status = MASKED
         elif item.status == MASKED:

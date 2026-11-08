@@ -703,8 +703,10 @@ class FuzzSession:
             elif step is not None and op.kind == "advance" and step.advance:
                 f = boost
             elif o is not None and step is not None and step.picks:
-                # 選ぶ手順: 目標（決めた順番の先頭）だけを優先する。ほかの候補はふだんの重み、試し終えたものは後回し
-                f = boost if o == goal else (low if o in options and o not in fresh else 1.0)
+                # 選ぶ手順: 目標（決めた順番の先頭）だけを優先する。正解が分からなければ、ほかの候補はふだんの重み。試し終えたものは後回し
+                # 正解が分かっている質問（わざと外れを答えるときを除く）では、ほかの候補も後回しにする。目標へ動かしている途中で
+                # 別の候補を押さないように（run 2026-11-08_2022: 正解へ向かう途中で、見えていた別の思い出を押して読み始めた）
+                f = boost if o == goal else (low if o in options and (o not in fresh or (known and not wrong)) else 1.0)
             elif o is not None:
                 f = boost  # 決まったボタンの手順（この思い出を読む・言葉を選ぶ・答えを決める）
             if f >= boost and not spent:
@@ -848,11 +850,20 @@ class FuzzSession:
                     return b.text
         return None if "#" in o else o  # label でなければ選択肢の本文
 
+    def _picked(self, o: str, pick: str | tuple[str, ...], shown: str | None = None) -> bool:
+        """選んだもの（の、いま見えている文字とこれまでに読んだ文字のどれか）が、pick の1つの手順に当たるか。
+        同じ項目でも読むたびに番号だけ・題名だけと変わるので、最後に読んだ文字だけでは比べない。"""
+        item = self.run.ledger.items.get(o)
+        seen = (shown, self._text_of(o), *(item.readings if item is not None else ()))
+        spellings = (pick,) if isinstance(pick, str) else pick
+        return any(_pick_matches(t, s) for t in seen for s in spellings)
+
     def _answer_options(self, options: set[str], texts: dict[str, str]) -> set[str] | None:
         """いまの手順の候補のうち、正解に沿うもの。正解が分からない質問なら None。
 
         プロファイルの正解は、ここまでに選んだものの文字が pick の前の手順と合うときに、いまの手順の pick の文字で照らす。
-        プロファイルに正解がなければ（answer_source が learn なら、いつも）、覚えた正解（flow_right）の並びで照らす。"""
+        プロファイルに正解がないか、書いた文字に当たる候補がまだない（文字を読めていない）なら、覚えた正解（flow_right）の並びで
+        照らす（answer_source が learn なら、いつも）。"""
         tracker = self.run.flow
         path = tuple(tracker.path)
         depth = len(path)
@@ -863,17 +874,19 @@ class FuzzSession:
             for a in answers:
                 if len(a.pick) <= depth:
                     continue
-                hit = {o for o in options if _pick_matches(texts.get(o) or self._text_of(o), a.pick[depth])}
-                if all(_pick_matches(self._text_of(path[k]), a.pick[k]) for k in range(depth)):
+                hit = {o for o in options if self._picked(o, a.pick[depth], texts.get(o))}
+                if all(self._picked(path[k], a.pick[k]) for k in range(depth)):
                     out |= hit
                 else:
                     loose |= hit
             # 前に選んだものの文字が読めていない・読み違えた（思い出の番号が欠けたなど）ときは、いまの手順の文字だけで照らす
-            return out or loose
-        learned = tracker.known_right()
+            if out or loose:
+                return out or loose
+        # プロファイルの正解を読めていないときの代わりなので、外れと分かった並び（ビルドで番号が変わったなど）は使わない
+        learned = [r for r in tracker.known_right() if not answers or (tracker.ctx, r) not in tracker.wrong]
         if learned:
             return {o for o in options if any(len(r) > depth and r[:depth] == path and r[depth] == o for r in learned)}
-        return None
+        return set() if answers else None
 
     def _press_answer(self) -> tuple[str, ...]:
         """選ばずに押すのが正解のボタン（プロファイルの answers の press）。"""
@@ -882,8 +895,8 @@ class FuzzSession:
     def _is_answer(self, ctx: Any, path: tuple[str, ...]) -> bool:
         answers = self.run.ctx_answers.get(ctx, ()) if self.cfg["answer_source"] == "profile" else ()
         if answers:
-            return any(len(a.pick) == len(path) and all(_pick_matches(self._text_of(p), a.pick[k])
-                                                        for k, p in enumerate(path)) for a in answers)
+            return any(len(a.pick) == len(path) and all(self._picked(p, a.pick[k]) for k, p in enumerate(path))
+                       for a in answers)
         return path in self.run.flow.known_right(ctx)
 
     def _answered(self) -> None:

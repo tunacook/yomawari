@@ -172,15 +172,23 @@ class Answer:
 
     at: 質問の本文の行（line_id。ワイルドカード可）。外れへの返事のあとに出し直す質問のように、同じ質問の行が
         いくつもあるときは配列で書け、どれかに当たればその質問とする。
-    pick: 選ぶ手順ごとに、選ぶものの画面に見える文字（ワイルドカード可）。
+    pick: 選ぶ手順ごとに、選ぶものの画面に見える文字（ワイルドカード可）。画面から番号だけ・題名だけが読めることがあるので、
+        1つの手順に書き方をいくつも配列で書け、どれかに当たればよい。
     press: 何も選ばずに一覧を閉じるのが正解のときなど、選ぶ手順の代わりに押すボタン（steps の press と同じ書き方）。
         pick と press は、どちらか一方だけ書く。flow の avoid に書いたボタンでも、正解として押す。
     """
 
     at: tuple[str, ...]
-    pick: tuple[str, ...] = ()
+    pick: tuple[str | tuple[str, ...], ...] = ()
     note: str = ""
     press: str = ""
+
+
+def _is_spelling(x: Any) -> bool:
+    """pick の1つの手順: 文字か、文字の配列（書き方がいくつもあるとき）。"""
+    if isinstance(x, list):
+        return bool(x) and all(isinstance(s, str) and s for s in x)
+    return isinstance(x, str) and bool(x)
 
 
 def _answers(raw: Any, where: str) -> tuple[Answer, ...]:
@@ -213,9 +221,12 @@ def _answers(raw: Any, where: str) -> tuple[Answer, ...]:
                 raise ConfigError(f"{aw}.press に、選ぶ代わりに押すボタンの名前を書いてください（例: \"ListUI/CloseButton\"）")
             out.append(Answer(tuple(at), (), str(a.get("note", "")), press))
             continue
-        if not isinstance(pick, list) or not pick or not all(isinstance(x, str) and x for x in pick):
-            raise ConfigError(f"{aw}.pick に、選ぶ手順ごとの選ぶものの文字を配列で書いてください（例: [\"No.030*\", \"屋上\"]）")
-        out.append(Answer(tuple(at), tuple(pick), str(a.get("note", ""))))
+        if not isinstance(pick, list) or not pick or not all(_is_spelling(x) for x in pick):
+            raise ConfigError(
+                f"{aw}.pick に、選ぶ手順ごとの選ぶものの文字を配列で書いてください"
+                "（例: [\"No.030*\", \"屋上\"]。書き方がいくつもあれば [[\"No.030*\", \"題名\"], \"屋上\"]）"
+            )
+        out.append(Answer(tuple(at), tuple(tuple(x) if isinstance(x, list) else x for x in pick), str(a.get("note", ""))))
     return tuple(out)
 
 
