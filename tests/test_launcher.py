@@ -75,7 +75,8 @@ def test_real_defaults_roundtrip(tmp_path: Path):
         r = subprocess.run(["defaults", "read", domain, "volume"], capture_output=True, text=True)
         assert r.stdout.strip() == "7"
         plat.prefs_replace(domain, None)
-        assert subprocess.run(["defaults", "read", domain], capture_output=True).returncode != 0
+        # 値が消えている。ドメインごとの読み取りは OS で違う（macOS 27 では、消したあとも空の内容を返して成功する）
+        assert subprocess.run(["defaults", "read", domain, "volume"], capture_output=True).returncode != 0
     finally:
         subprocess.run(["defaults", "delete", domain], capture_output=True)
         # cfprefsd が空の plist ファイルを残すので消しておく

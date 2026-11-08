@@ -60,7 +60,11 @@ class Pointer:
             return
         self.platform.activate(self.pid)
         time.sleep(self.activate_wait)
-        if self.platform.frontmost_pid() != self.pid:
+        front = self.platform.frontmost_pid()
+        if front is None:
+            # 分からないまま押すと、ほかのアプリに入力が届くことがあるので押さない
+            raise InputBlocked("前面のアプリを OS から取得できません（ハーネスの不具合か、OS の変更の可能性があります）")
+        if front != self.pid:
             raise InputBlocked("ゲームを前面にできません")
 
     def click(self, target: Target, button: str = "left", clicks: int = 1) -> tuple[float, float]:
