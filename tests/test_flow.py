@@ -1111,3 +1111,33 @@ def test_right_answers_are_remembered_across_runs(tmp_path):
     tr.remember(exp.flow_wrong, exp.flow_right)
     assert tr.known_right(("選択肢で答える", "main/s1:10")) == [("いいえ",)]
     assert any("前のランまでに正解と分かっていた組み合わせは 1 通り" in n for n in tr.summary())
+
+
+def test_profile_answer_survives_ocr_noise_and_goes_before_filling_the_ledger():
+    # 画面から読んだ文字の前後のごみ（「•」など）があっても正解に当て、正解が見えていれば台帳を埋め終えるのを待たずに
+    # そこへ向かう（run 2026-11-07_1909: 「•No.002 …」が "No.002*" に当たらず、正解が見えているのに一覧を見て回った）
+    from yomawari.fuzz.flow import Answer
+
+    s, st, run, _ = _session({"wrong_answer_prob": 0.0})
+    doc = tomllib.loads(ONCE_PROFILE)
+    doc["flow"][0]["answers"] = [{"at": "main/chapter2_04:3*", "pick": ["No.002*", "空"]}]
+    run.flow = FlowTracker(parse_flows(doc["flow"]))
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    slots = [{"name": "AlbumSlot (Clone)", "rect": [0.1 + 0.2 * i, 0.3, 0.25 + 0.2 * i, 0.5]} for i in range(2)]
+    slots += [{"name": "AlbumSlot (Clone)", "rect": [0.1 + 0.2 * i, -0.7, 0.25 + 0.2 * i, -0.5], "hidden": True}
+              for i in range(2)]
+    _line(s, st, "main/chapter2_04:323.0", "どこだっけ？")
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=slots)
+    st.set_read_text({SLOT: "No.001 教室", f"{SLOT}#1": "•No.002 屋上 の 昼"})
+    w = _weights(s, st)
+    assert run.ledger.unshown(next(iter(s._rows.values())))  # 画面の外の 2 つはまだ見ていない
+    assert w[f"click {SLOT}#1"] == click * k and w[f"click {SLOT}"] == click
+    # 前に選んだ思い出の文字が番号なしで読めた（読み落とし）: いまの手順の文字だけで照らす
+    run.flow.path = [f"{SLOT}#1"]
+    st.set_read_text({SLOT: "No.001 教室", f"{SLOT}#1": "屋上の昼"})
+    run.ledger.items[f"{SLOT}#1"].text = "屋上の昼"
+    assert s._answer_options({FRAG, f"{FRAG}#1"}, {FRAG: "海", f"{FRAG}#1": "空"}) == {f"{FRAG}#1"}
+    # 前に選んだものが正解の思い出と読めれば、その思い出の正解だけ（ほかの思い出の正解の言葉は使わない）
+    run.ctx_answers[run.flow.ctx] = (Answer(("x",), ("No.002*", "空")), Answer(("x",), ("No.009*", "海")))
+    run.ledger.items[f"{SLOT}#1"].text = "No.002 屋上の昼"
+    assert s._answer_options({FRAG, f"{FRAG}#1"}, {FRAG: "海", f"{FRAG}#1": "空"}) == {f"{FRAG}#1"}
