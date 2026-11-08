@@ -104,6 +104,13 @@ def test_parse_answers():
     raw[0]["answers"] = [{"at": "main/chapter4_04:303.0", "press": "AlbumUI/SelectButton"}]
     (ans,) = parse_flows(raw)[0].answers
     assert ans.press == "AlbumUI/SelectButton" and ans.pick == ()
+    # 番号だけ・題名だけが読めることがあるので、1つの手順に書き方をいくつも書ける
+    raw[0]["answers"] = [{"at": "main/chapter1_04:44.0", "pick": [["No.030*", "屋上の昼"], "屋上"]}]
+    (ans,) = parse_flows(raw)[0].answers
+    assert ans.pick == (("No.030*", "屋上の昼"), "屋上")
+    raw[0]["answers"] = [{"at": "main/chapter1_04:44.0", "pick": [[], "屋上"]}]
+    with pytest.raises(ConfigError, match="pick"):
+        parse_flows(raw)
 
     def bad(answers):
         f = {"name": "x", "start": {"choices": True}, "steps": [{"choose": True}], "answers": answers}
@@ -982,10 +989,11 @@ def _choose(s, run, text, cid):
 def test_profile_answer_is_tried_first():
     # プロファイルの正解（質問の行が at に当たる）を、ほかの候補より先に選ぶ
     k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    low = FUZZ_DEFAULTS["flow_avoid_factor"]
     s, st, run = _answer_session({"wrong_answer_prob": 0.0})
     _ask_yes_no(s, st)
     w = _weights(s, st)
-    assert w["click choices/いいえ"] == click * k and w["click choices/はい"] == click
+    assert w["click choices/いいえ"] == click * k and w["click choices/はい"] == pytest.approx(click * low)
     # 行が当たらない質問では、正解が分からない
     s, st, run = _answer_session({"wrong_answer_prob": 0.0})
     _ask_yes_no(s, st, "main/s2:10")
@@ -1068,7 +1076,8 @@ def test_learned_answer_is_used_when_source_is_learn():
     run.flow.right.add((("選択肢で答える", "main/s9:1"), ("はい",)))
     _ask_yes_no(s, st, "main/s9:1")
     w = _weights(s, st)
-    assert w["click choices/はい"] == click * k and w["click choices/いいえ"] == click
+    low = FUZZ_DEFAULTS["flow_avoid_factor"]
+    assert w["click choices/はい"] == click * k and w["click choices/いいえ"] == pytest.approx(click * low)
 
 
 def test_profile_answer_by_visible_text_and_press_answer():
@@ -1089,7 +1098,7 @@ def test_profile_answer_by_visible_text_and_press_answer():
 
     w = ask([{"at": "main/s6:7*", "pick": ["*屋上の*", "空"]}])
     assert w[f"click {SLOT}#1"] == click * k
-    assert w[f"click {SLOT}"] == click and w[f"click {SLOT}#2"] == click
+    assert w[f"click {SLOT}"] == pytest.approx(click * low) and w[f"click {SLOT}#2"] == pytest.approx(click * low)
     w = ask([{"at": "main/s6:7*", "press": "AlbumUI/SelectButton"}])
     assert w["click AlbumUI/SelectButton"] == click * k
     w = ask([])
@@ -1131,13 +1140,69 @@ def test_profile_answer_survives_ocr_noise_and_goes_before_filling_the_ledger():
     st.set_read_text({SLOT: "No.001 教室", f"{SLOT}#1": "•No.002 屋上 の 昼"})
     w = _weights(s, st)
     assert run.ledger.unshown(next(iter(s._rows.values())))  # 画面の外の 2 つはまだ見ていない
-    assert w[f"click {SLOT}#1"] == click * k and w[f"click {SLOT}"] == click
-    # 前に選んだ思い出の文字が番号なしで読めた（読み落とし）: いまの手順の文字だけで照らす
+    low = FUZZ_DEFAULTS["flow_avoid_factor"]
+    assert w[f"click {SLOT}#1"] == click * k and w[f"click {SLOT}"] == pytest.approx(click * low)
+    # 前に選んだ思い出の文字が番号なしでしか読めていない（読み落とし）: いまの手順の文字だけで照らす
     run.flow.path = [f"{SLOT}#1"]
     st.set_read_text({SLOT: "No.001 教室", f"{SLOT}#1": "屋上の昼"})
     run.ledger.items[f"{SLOT}#1"].text = "屋上の昼"
+    run.ledger.items[f"{SLOT}#1"].readings = ["屋上の昼"]
     assert s._answer_options({FRAG, f"{FRAG}#1"}, {FRAG: "海", f"{FRAG}#1": "空"}) == {f"{FRAG}#1"}
     # 前に選んだものが正解の思い出と読めれば、その思い出の正解だけ（ほかの思い出の正解の言葉は使わない）
     run.ctx_answers[run.flow.ctx] = (Answer(("x",), ("No.002*", "空")), Answer(("x",), ("No.009*", "海")))
     run.ledger.items[f"{SLOT}#1"].text = "No.002 屋上の昼"
     assert s._answer_options({FRAG, f"{FRAG}#1"}, {FRAG: "海", f"{FRAG}#1": "空"}) == {f"{FRAG}#1"}
+
+
+def _album_question(pick):
+    """思い出の一覧で、正解の pick を書いた質問に着いたところ。"""
+    s, st, run, _ = _session({"wrong_answer_prob": 0.0})
+    doc = tomllib.loads(ONCE_PROFILE)
+    doc["flow"][0]["answers"] = [{"at": "main/chapter2_04:3*", "pick": pick}]
+    run.flow = FlowTracker(parse_flows(doc["flow"]))
+    slots = [{"name": "AlbumSlot (Clone)", "rect": [0.1 + 0.2 * i, 0.3, 0.25 + 0.2 * i, 0.5]} for i in range(3)]
+    _line(s, st, "main/chapter2_04:323.0", "どこだっけ？")
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=slots)
+    return s, st, run
+
+
+def test_profile_answer_matches_any_spelling_and_any_past_reading():
+    # 番号が読めず題名だけ読めた思い出も、書き方を並べておけば正解に当たる（run 2026-11-08_2022）
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    low = FUZZ_DEFAULTS["flow_avoid_factor"]
+    s, st, run = _album_question([["No.002*", "屋上の昼"], "空"])
+    st.set_read_text({SLOT: "No.001", f"{SLOT}#1": "屋上の昼", f"{SLOT}#2": "No.003"})
+    w = _weights(s, st)
+    # 正解へ向かう間、ほかの思い出は押さない
+    assert w[f"click {SLOT}#1"] == click * k
+    assert w[f"click {SLOT}"] == pytest.approx(click * low) and w[f"click {SLOT}#2"] == pytest.approx(click * low)
+    # 前は番号が読めて、いまは題名だけ読める: 前に読んだ文字で当たる
+    s, st, run = _album_question(["No.002*", "空"])
+    st.set_read_text({SLOT: "No.001", f"{SLOT}#1": "No.002", f"{SLOT}#2": "No.003"})
+    _weights(s, st)
+    st.set_read_text({SLOT: "No.001", f"{SLOT}#1": "屋上の昼", f"{SLOT}#2": "No.003"})
+    w = _weights(s, st)
+    assert run.ledger.items[f"{SLOT}#1"].text == "屋上の昼"
+    assert w[f"click {SLOT}#1"] == click * k
+
+
+def test_learned_answer_stands_in_until_the_profile_answer_is_read():
+    # プロファイルの文字に当たる候補がなければ、覚えた正解で照らす。外れと分かった並びは使わない
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    s, st, run = _album_question(["No.009*", "空"])
+    st.set_read_text({SLOT: "No.001", f"{SLOT}#1": "No.002", f"{SLOT}#2": "No.003"})
+    w = _weights(s, st)
+    ctx = run.flow.ctx
+    options = {SLOT, f"{SLOT}#1", f"{SLOT}#2"}
+    assert s._answer_options(options, {}) == set()
+    run.flow.right.add((ctx, (f"{SLOT}#2",)))
+    assert s._answer_options(options, {}) == {f"{SLOT}#2"}
+    w = _weights(s, st)
+    assert w[f"click {SLOT}#2"] == click * k
+    run.flow.wrong.add((ctx, (f"{SLOT}#2",)))
+    assert s._answer_options(options, {}) == set()
+    # プロファイルの文字に当たる候補が読めれば、そちらを使う
+    run.flow.wrong.clear()
+    st.set_read_text({SLOT: "No.009", f"{SLOT}#1": "No.002", f"{SLOT}#2": "No.003"})
+    _weights(s, st)
+    assert s._answer_options(options, {}) == {SLOT}
