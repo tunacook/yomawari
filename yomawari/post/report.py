@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from ..events import SEVERITIES, Issue
 
 SEVERITY_LABEL = {"critical": "Critical", "major": "Major", "minor": "Minor", "info": "Info"}
+# 「不具合の疑い」に載せる、ハーネスの記録の言い回し（流れ・巻き戻し・一覧の探索が、不具合かもしれないと書くときのもの）
+SUSPECT_NOTE_WORDS = ("不具合の可能性", "進めない可能性")
+LOG_ERROR_RULE = "L-01"
+CELL_LEN = 120  # 「不具合の疑い」の表の1マスの文字数（長いものは下の節で読む）
 
 
 @dataclass
@@ -32,6 +37,8 @@ class RunSummary:
     focus: list[str] = field(default_factory=list)  # 目的で重点的に見るルール。深刻度ごとに先に並べる
     stalls: list[str] = field(default_factory=list)  # 「進めなかったところ」の節（post/stalls.py）
     perf: list[str] = field(default_factory=list)  # 「パフォーマンス」の節（detect/perf.py）
+    stall_rows: list[tuple[str, str]] = field(default_factory=list)  # 進めなかった区間の (場所, 手がかり)（post/stalls.py）
+    suspect_error_window_sec: float = 120.0  # 検出のこの秒数前までのエラーログを、手がかりとして「不具合の疑い」に並べる
 
 
 @dataclass
@@ -63,6 +70,76 @@ def _fence(text: str) -> str:
     return "```text\n" + text.rstrip("\n") + "\n```"
 
 
+def _cell(text: str) -> str:
+    """表の1マス: 1行目だけを、表を崩さない形で短くする。"""
+    line = text.strip().split("\n", 1)[0].replace("|", "\\|")
+    return line if len(line) <= CELL_LEN else line[:CELL_LEN] + "…"
+
+
+def _place(issue: Issue) -> str:
+    st = issue.evidence.get("state") or {}
+    where = st.get("line_id") or st.get("scene")
+    return f"`{where}`" if where else "-"
+
+
+def _wall(issue: Issue) -> datetime | None:
+    try:
+        return datetime.fromisoformat(issue.wall)
+    except ValueError:
+        return None
+
+
+def _error_before(issue: Issue, issues: list[Issue], window: float) -> Issue | None:
+    """同じ起動で、検出の直前（window 秒以内）に出たエラーログ。進まない・反応しないなどの原因の手がかりになる。"""
+    at = _wall(issue)
+    if at is None or issue.rule_id == LOG_ERROR_RULE:
+        return None
+    near = []
+    for other in issues:
+        when = _wall(other)
+        if other.rule_id == LOG_ERROR_RULE and other.launch == issue.launch and when is not None:
+            if 0 <= (at - when).total_seconds() <= window:
+                near.append((when, other))
+    return max(near, key=lambda pair: pair[0])[1] if near else None
+
+
+def _suspects(summary: RunSummary, issues: list[Issue], groups: list[IssueGroup]) -> list[str]:
+    """「不具合の疑い」の節: 検出・進めなかった区間・ハーネスの記録に散らばった疑いを、重い順に1つの表にまとめる。
+    Critical と Major は検出ごとに、Minor と Info は件数が多くなるのでルールごとに1行にする。"""
+    rows: list[str] = []
+    window = summary.suspect_error_window_sec
+    for sev in ("critical", "major"):
+        # 同じ重さなら、目的で重点的に見るルール、動作の検出、性能（R-）の順
+        rank = {rule: n for n, rule in enumerate(summary.focus)}
+        for g in sorted((g for g in groups if g.first.severity == sev),
+                        key=lambda g: (rank.get(g.first.rule_id, len(rank)), g.first.rule_id.startswith("R-"))):
+            i = g.first
+            err = next((e for e in (_error_before(x, issues, window) for x in issues if x.key == i.key) if e), None)
+            clue = f"直前のエラーログ: {err.detail}" if err is not None else i.detail
+            rows.append(f"| {SEVERITY_LABEL[sev]} | [{i.rule_id}] {i.title} | {_place(i)} | {g.count} | {_cell(clue)} |")
+    rows += [f"| 要確認 | 進めなかった区間 | {where} | 1 | {_cell(clue)} |" for where, clue in summary.stall_rows]
+    for sev in ("minor", "info"):
+        by_rule: dict[str, list[IssueGroup]] = {}
+        for g in groups:
+            if g.first.severity == sev:
+                by_rule.setdefault(g.first.rule_id, []).append(g)
+        for rule, gs in by_rule.items():
+            total = sum(g.count for g in gs)
+            rows.append(f"| {SEVERITY_LABEL[sev]} | [{rule}] {gs[0].first.title} | {len(gs)} か所 | {total} | "
+                        f"{_cell(gs[0].first.detail)} |")
+    notes = [n for n in summary.harness_notes if any(w in n for w in SUSPECT_NOTE_WORDS)]
+    rows += [f"| 要確認 | ハーネスの記録 | - | 1 | {_cell(n)} |" for n in notes]
+    if summary.silent_buttons:
+        names = "、".join(f"`{k}`" for k in sorted(summary.silent_buttons))
+        rows.append(f"| 要確認 | 一度も反応しなかったボタン | - | {len(summary.silent_buttons)} | {_cell(names)} |")
+    out = ["## 不具合の疑い", "",
+           ("このランで不具合かもしれないと見たものを、重い順にまとめた。確定ではなく、ハーネスの進め方が原因のものや、"
+            "仕様どおりのものも含む。詳しくは下の各節を見る"), ""]
+    if not rows:
+        return out + ["なし", ""]
+    return out + ["| 重さ | 疑い | 場所 | 回数 | 手がかり |", "|---|---|---|---|---|", *rows, ""]
+
+
 def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
     groups = group_issues(issues)
     counts = {s: sum(1 for g in groups if g.first.severity == s) for s in SEVERITIES}
@@ -83,6 +160,7 @@ def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
         "| 前回比 | （フェーズ4で対応） |",
         "",
     ]
+    out += _suspects(summary, issues, groups)
 
     for sev in SEVERITIES:
         sev_groups = [g for g in groups if g.first.severity == sev]

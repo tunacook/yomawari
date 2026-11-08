@@ -156,6 +156,15 @@ def _minutes(sec: float) -> str:
     return f"{sec / 60:.0f} 分" if sec >= 60 else f"{sec:.0f} 秒"
 
 
+def stall_rows(stalls: list[Stall]) -> list[tuple[str, str]]:
+    """「不具合の疑い」に載せる、区間ごとの (場所, 手がかり)。長い順。"""
+    rows = []
+    for st in sorted(stalls, key=lambda s: -s.sec):
+        where = st.line_id or st.scene
+        rows.append((f"`{where}`" if where else "-", f"{_minutes(st.sec)}。{st.ended}"))
+    return rows
+
+
 def render_stalls(stalls: list[Stall], min_sec: float) -> list[str]:
     """レポートの「進めなかったところ」の節。"""
     out = ["## 進めなかったところ", "",

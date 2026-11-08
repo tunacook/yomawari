@@ -150,6 +150,7 @@ resume_page_limit = 10        # そのとき、この回数ページを送って
 resume_new_game_factor = 0.05 # そのあいだ「はじめから」（new_game）の重みに掛ける
 saved_slot_factor = 0         # 続きから遊ぶとき以外に、セーブ済みのスロット（文字に日時がある）の重みに掛ける（0 は押さない）
 stall_report_sec = 300       # レポートの「進めなかったところ」: 新しい本文・scene・選択肢にこの秒数以上届かなかった区間を載せる（0 で載せない）
+suspect_error_window_sec = 120  # レポートの「不具合の疑い」: 検出のこの秒数前までのエラーログを、手がかりとして並べる
 
 [fuzz.weights]                # 通常の操作の重み
 advance = 20

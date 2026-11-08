@@ -154,6 +154,7 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "saved_slot_factor": 0.0,
     # レポートの「進めなかったところ」: 新しい本文・scene・選択肢にこの秒数以上届かなかった区間を載せる。0 で載せない
     "stall_report_sec": 300.0,
+    "suspect_error_window_sec": 120.0,  # レポートの「不具合の疑い」: 検出のこの秒数前までのエラーログを、手がかりとして並べる
     "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")
