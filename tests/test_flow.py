@@ -1206,3 +1206,28 @@ def test_learned_answer_stands_in_until_the_profile_answer_is_read():
     st.set_read_text({SLOT: "No.009", f"{SLOT}#1": "No.002", f"{SLOT}#2": "No.003"})
     _weights(s, st)
     assert s._answer_options(options, {}) == {SLOT}
+
+
+def test_answers_of_earlier_questions_are_not_used():
+    # 質問が続く場面で、直近の本文に前の質問の行が残っていても、いちばん新しい行で当たる正解だけを使う（run 2026-11-08_2227）
+    def ask(*lines):
+        s, st, run, _ = _session({"wrong_answer_prob": 0.0})
+        doc = tomllib.loads(ONCE_PROFILE)
+        doc["flow"][0]["answers"] = [
+            {"at": "main/chapter3:10.0", "pick": ["No.001*", "海"]},
+            {"at": "main/chapter3:10.0", "pick": ["No.003*", "山"]},
+            {"at": "main/chapter3:20.0", "pick": ["No.002*", "空"]},
+        ]
+        run.flow = FlowTracker(parse_flows(doc["flow"]))
+        for n, line in enumerate(lines):
+            _line(s, st, line, f"本文{n}")
+        slots = [{"name": "AlbumSlot (Clone)", "rect": [0.1 + 0.2 * i, 0.3, 0.25 + 0.2 * i, 0.5]} for i in range(3)]
+        _feed(st, "menu", name="AlbumUI", modal=True, buttons=slots)
+        st.set_read_text({SLOT: "No.001", f"{SLOT}#1": "No.002", f"{SLOT}#2": "No.003"})
+        _weights(s, st)
+        return s._answer_options({SLOT, f"{SLOT}#1", f"{SLOT}#2"}, {})
+
+    assert ask("main/chapter3:10.0") == {SLOT, f"{SLOT}#2"}  # 同じ行に書いた正解はどちらも使う
+    assert ask("main/chapter3:10.0", "main/chapter3:15.0", "main/chapter3:20.0") == {f"{SLOT}#1"}
+    # 質問の行のあとに本文が少し続いても（外れへの返事など）、その質問の正解のまま
+    assert ask("main/chapter3:10.0", "main/chapter3:11.0") == {SLOT, f"{SLOT}#2"}

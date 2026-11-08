@@ -70,6 +70,17 @@ def _pick_matches(text: str | None, pattern: str) -> bool:
     （run 2026-11-07_1909: 「•No.002 …」が "No.002*" に当たらず、正解の思い出を目標にしなかった）。"""
     return text_matches(text, (pattern, f"*{pattern}*"))
 
+
+def _nearest_answers(answers: tuple[Answer, ...], ids: list[str]) -> tuple[Answer, ...]:
+    """直近の本文の行（古い順）のうち、いちばん新しい行で at に当たる正解。その前の行で当たるものは、前の質問の正解なので含めない
+    （run 2026-11-08_2227: 質問が続く場面で、前の質問の正解まで当たり、前の質問の思い出を選び続けた）。"""
+    for line in reversed(ids):
+        hit = tuple(a for a in answers if any(fnmatchcase(line, p) for p in a.at))
+        if hit:
+            return hit
+    return ()
+
+
 @dataclass
 class FuzzRun:
     """ラン全体で持ち越すもの（試行回数、external の使用済み、統計）。起動し直しても引き継ぐ。"""
@@ -818,14 +829,14 @@ class FuzzSession:
         return best
 
     def _start_question(self, flow: Any) -> None:
-        """流れを始めた: プロファイルの正解のうち、この質問のもの（流れを始めたときの直近 ai_context_lines 行のどれかが at に
-        当たる）を覚え、正解が分かっていれば、わざと外れを答えるかを決める（DESIGN.md §9「答えの選び方」）。"""
+        """流れを始めた: プロファイルの正解のうち、この質問のもの（流れを始めたときの直近 ai_context_lines 行のうち、いちばん
+        新しい行で at に当たるもの）を覚え、正解が分かっていれば、わざと外れを答えるかを決める（DESIGN.md §9「答えの選び方」）。"""
         run, cfg, ctx = self.run, self.cfg, self.run.flow.ctx
         if ctx is None:
             return
         if flow.answers:
             ids = list(run.line_ids)[-int(cfg["ai_context_lines"]):]
-            hit = tuple(a for a in flow.answers if any(fnmatchcase(i, p) for i in ids for p in a.at))
+            hit = _nearest_answers(flow.answers, ids)
             if hit:
                 # 外れへの返事のあとに同じ質問に戻ったときは、質問の行が直近にないことがあるので、前に当たったものを使う
                 run.ctx_answers[ctx] = hit
