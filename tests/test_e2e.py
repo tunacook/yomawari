@@ -218,4 +218,44 @@ def test_cli_signal_stops_game_and_restores(tmp_path, mock_app, sig):
     events_path = log.parent / "events.jsonl"
     last = json.loads(events_path.read_text().splitlines()[-1])
     assert last["kind"] == "proc_exit" and last["data"]["by_harness"] is True
-    assert "中断の指示" in (log.parent / "report.md").read_text()
+    report = (log.parent / "report.md").read_text()
+    assert "中断の指示" in report
+    assert ("手動で中断した" if sig == "SIGINT" else "外から止められた") in report
+
+
+def test_cli_repeated_sigint_still_writes_report(tmp_path, mock_app):
+    """終了処理を待てずに Ctrl+C を何度も押しても、セーブを戻してレポートを出してから終わる。"""
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    save = tmp_path / "save"
+    save.mkdir()
+    (save / "slot1.dat").write_text("original")
+    cfg = write_config(
+        tmp_path,
+        f'[run]\nopen_report = false\n[builds.mock]\npath = "{mock_app}"\nsave_dir = "{save}"\n'
+        'prefs_domain = "test.yomawari.pytest.repeated"\n',
+    )
+    exe = Path(sys.executable).parent / "yomawari"
+    p = subprocess.Popen([str(exe), "--config", str(cfg), "run", "--build", "mock", "--hours", "1"],
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    log = None
+    for _ in range(100):
+        log = next((tmp_path / "runs").glob("*/player.log"), None)
+        if log and "boot" in log.read_text():
+            break
+        time.sleep(0.1)
+    (save / "slot1.dat").write_text("changed during run")
+    report = log.parent / "report.md"
+    for _ in range(200):  # レポートが出るまで押し続ける
+        if report.exists() or p.poll() is not None:
+            break
+        p.send_signal(signal.SIGINT)
+        time.sleep(0.02)
+    out, _ = p.communicate(timeout=30)
+    assert report.exists(), out.decode()
+    assert "| 終わり方 | 手動で中断した（Ctrl+C）。予定の 1 時間より前に止めた" in report.read_text()
+    assert (save / "slot1.dat").read_text() == "original"
+    assert not (tmp_path / "runs" / "restore_pending.json").exists()

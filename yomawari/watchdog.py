@@ -460,11 +460,28 @@ class Harness:
         interrupted = False
         backed_up = False
         # SIGTERM（kill や launchd の停止）も Ctrl+C と同じ終了処理に流す。
-        # 既定動作のまま死ぬと、別セッションで起動したゲームが残りセーブも戻らない
+        # 既定動作のまま死ぬと、別セッションで起動したゲームが残りセーブも戻らない。
+        # 2 回目以降は受け流す。終了処理を途中で打ち切ると、レポートが出ないまま終わる
         loop = asyncio.get_running_loop()
         main_task = asyncio.current_task()
         assert main_task is not None
-        loop.add_signal_handler(signal.SIGTERM, main_task.cancel)
+        stopping = False
+        told_waiting = False
+        stop_reason = ""
+
+        def request_stop(reason: str) -> None:
+            nonlocal stopping, told_waiting, stop_reason
+            if not stopping:
+                stopping = True
+                stop_reason = reason
+                main_task.cancel()
+            elif not told_waiting:
+                told_waiting = True
+                print("終了処理中です（ゲームの終了・セーブの復元・レポートの出力）。待てないときは Ctrl+\\ で強制終了できます"
+                      "（レポートは出ません。セーブは yomawari restore で戻せます）", file=sys.stderr)
+
+        loop.add_signal_handler(signal.SIGINT, request_stop, "手動で中断した（Ctrl+C）")
+        loop.add_signal_handler(signal.SIGTERM, request_stop, "外から止められた（SIGTERM。kill や launchd の停止など）")
         awake = self._keep_awake()
         dark = asyncio.create_task(self._display_off(opts.display_off_delay_sec)) if opts.display_off else None
         try:
@@ -494,9 +511,9 @@ class Harness:
                 launch += 1
         except asyncio.CancelledError:
             interrupted = True
-            self.notes.append("中断の指示（Ctrl+C / SIGTERM）を受けて終了しました")
+            self.notes.append(f"中断の指示を受けて終了しました: {stop_reason or '理由は不明'}")
         finally:
-            loop.remove_signal_handler(signal.SIGTERM)
+            stopping = True  # 時間どおりに終わるときも、ここからの中断の指示は受け流す
             if dark is not None:
                 dark.cancel()
             if awake is not None:
@@ -559,6 +576,8 @@ class Harness:
                 launches=self.launches,
                 restarts=self.restarts,
                 interrupted=interrupted,
+                stop_reason=stop_reason,
+                planned_hours=opts.hours,
                 rules_path=str(self.rules_path),
                 env={
                     "yomawari": __version__,
@@ -574,4 +593,6 @@ class Harness:
                 perf=perf_lines,
             )
             report = write_report(summary, self.issues, run_dir)
+            loop.remove_signal_handler(signal.SIGINT)
+            loop.remove_signal_handler(signal.SIGTERM)
         return RunResult(run_dir, report, self.issues, interrupted)
