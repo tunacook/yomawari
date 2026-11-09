@@ -218,7 +218,9 @@ rules:
       同じコマンドと対象（@spawn Rain、@char Aoi など）の実行後 window_sec 秒の値が、実行前 window_sec 秒より悪い
       （FPS が fps_drop_ratio 以上落ちる、CPU 使用率が cpu_add ポイント以上上がる、GPU 使用率が gpu_add ポイント以上上がり
       FPS も gpu_fps_drop_ratio 以上落ちる）ことが、repeats 回以上あった。メモリの増減は見ない（R-01 で見る）。
-      前後とも min_samples 個以上のサンプルがあるときだけ数える。同じときに実行した複数のコマンドが同じ悪化に当たったら、
+      前後とも min_samples 個以上のサンプルがあるときだけ数える。前後のどちらかに、遷移中・ロード中・起動や scene の直後
+      （perf.settle_sec）のサンプルがあれば数えない（切り替えの負荷と、コマンドの負荷を見分けられないため）。
+      同じときに実行した複数のコマンドが同じ悪化に当たったら、
       いちばん大きく悪化したものの 1 件にまとめる
     params:
       window_sec: 3

@@ -617,6 +617,10 @@ class PerfMonitor:
         need = int(self.p("R-08", "min_samples")) if self.has("R-08") else 2
         if len(c.before) < need or len(after) < need:
             return
+        if not all(self._ok(x) for x in [*c.before, *after]):
+            # scene の切り替え・ロードの負荷と重なると、そのコマンドの負荷と見分けられない
+            # （run 2026-11-09_1003 / 1358: R-08 の 7 件のうち 6 件が、切り替えとロードの前後だった）
+            return
         effects: dict[str, float] = {}
         fb, fa = _median(x.val("fps") for x in c.before), _median(x.val("fps") for x in after)
         if fb and fa is not None:

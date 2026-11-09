@@ -320,3 +320,38 @@ def test_r10_commands_need_repeats_and_a_bad_change_itself(repo_rules, repo_perf
     issues = [i for i in s.engine.finish(s.t) if i.rule_id == "R-10"]
     assert len(issues) == 1
     assert "`@back heavy`" in issues[0].detail and "+2 → +30 ポイント" in issues[0].detail
+
+
+def test_r08_ignores_commands_around_scene_and_load_boundaries(repo_rules, repo_perf):
+    # scene の切り替え・ロードの負荷を、そのとき実行したコマンドの負荷にしない
+    s = warm(repo_rules, repo_perf)
+    for n in range(3):
+        s.feed("game", "scene", name=f"Main{n}")
+        s.feed("game", "command", name="hidePrinter", line_id=f"Main{n}:1.0")
+        s.step(4, cpu=120)
+        s.step(10)
+    for n in range(3):
+        s.feed("game", "command", name="EndMemory", line_id=f"Memory{n}:9.0")
+        s.feed("game", "load", phase="start", slot="s")
+        s.step(2, cpu=120)
+        s.feed("game", "load", phase="end", slot="s")
+        s.step(2, cpu=120)
+        s.step(10)
+    for n in range(3):  # scene の切り替えの直前に実行したコマンド
+        s.feed("game", "command", name="wait", target="1.0", line_id=f"Main:{n}.0")
+        s.step(1)
+        s.feed("game", "scene", name="Next")
+        s.step(3, cpu=120)
+        s.step(10)
+    assert "R-08" not in s.ids()
+
+
+def test_r08_still_fires_away_from_boundaries(repo_rules, repo_perf):
+    s = warm(repo_rules, repo_perf)
+    s.feed("game", "scene", name="Next")
+    s.step(10)  # 切り替えから十分に離れている
+    for n in range(2):
+        s.feed("game", "command", name="spawn", target="Rain", line_id=f"Next:{n}.0")
+        s.step(4, cpu=120)
+        s.step(10)
+    assert "R-08" in s.ids()
