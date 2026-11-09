@@ -22,6 +22,7 @@ from .ops import Op
 class Decider(Protocol):
     def choose(self, key: str, candidates: list[Op]) -> Op | None: ...
     def feedback(self, key: str, op: Op, responded: bool) -> None: ...
+    def forget_last(self) -> None: ...
 
 
 class RandomDecider:
@@ -87,6 +88,12 @@ class RandomDecider:
         if sum(weights) <= 0:
             return self.rng.choice(items)
         return self.rng.choices(items, weights=weights)[0]
+
+    def forget_last(self) -> None:
+        """「直前に選んだ操作」を忘れる。起動し直したら、前の起動で同じ画面に選んだ操作は直前ではない
+        （run 2026-11-09_2259: 前の起動のタイトルで「続きから」を押したので、次の起動のタイトルで「続きから」を候補から外し、
+        「はじめから」を押して本編を最初からやり直した）。"""
+        self._last.clear()
 
     def feedback(self, key: str, op: Op, responded: bool) -> None:
         if responded:

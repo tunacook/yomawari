@@ -345,6 +345,7 @@ class FuzzSession:
         self._start_resume()
         if launch > 0:
             self._forget_progress("起動し直した")
+            run.decider.forget_last()
 
     # --- イベント（バスから同期で呼ばれる） ---
 
@@ -1033,7 +1034,7 @@ class FuzzSession:
             return [op.scaled("saved_slot", low)
                     if op.target is not None and op.target.label in labels else op for op in cands]
         boost, low = float(self.cfg["resume_factor"]), float(self.cfg["resume_new_game_factor"])
-        newest = newest_slots({t.label: t.text for t in saved}) or {t.label for t in saved}
+        newest = newest_slots({t.label: t.text for t in saved}, time.time()) or {t.label for t in saved}
         empty = inactive(targets, run.inactive_words, run.masked_chars)
         paging = not saved and bool(stuck_rows(self.state, empty))
         # 次のページがなければ探せないので、見えているものでよいとする
