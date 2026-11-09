@@ -108,6 +108,8 @@ def test_exception_is_l01(tmp_path, mock_app, fake_platform):
     assert len(l01) == 1 and l01[0].severity == "major"
     assert r.exit_code == 0  # Major のみ
     assert "Runner.cs:42" in r.report_path.read_text()
+    assert [i.severity for i in r.issues if i.rule_id == "L-06"] == ["minor"]
+    assert "`main/s1:12.0`" in r.report_path.read_text()
 
 
 def test_pending_restore_from_previous_run(tmp_path, mock_app, fake_platform):

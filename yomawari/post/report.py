@@ -12,10 +12,12 @@ SEVERITY_LABEL = {"critical": "Critical", "major": "Major", "minor": "Minor", "i
 # 「不具合の疑い」に載せる、ハーネスの記録の言い回し（流れ・巻き戻し・一覧の探索が、不具合かもしれないと書くときのもの）
 SUSPECT_NOTE_WORDS = ("不具合の可能性", "進めない可能性")
 LOG_ERROR_RULE = "L-01"
+LOG_WARNING_RULE = "L-06"
 CELL_LEN = 120  # 「不具合の疑い」の表の1マスの文字数（長いものは下の節で読む）
 # 「不具合の疑い」の見立て。誤検知かもしれないものも載せ、どう疑わしいかを人が切り分けられるようにする
 DOUBT_ERROR = "ゲームの不具合の疑いが強い（直前にエラーログ）"
 DOUBT_LOG = "ゲームのエラーログ。動作に影響するかは未確定"
+DOUBT_WARNING = "ゲームの警告ログ。動作に影響するかは未確定"
 DOUBT_UNKNOWN = "ゲームの不具合か、ハーネスの誤検知かは未確定"
 DOUBT_BUTTON = "ハーネスの誤検知の可能性あり（押せない場面で押しただけかもしれない）"
 DOUBT_PERF = "ハーネスの誤検知の可能性あり（負荷のばらつきかもしれない）"
@@ -89,7 +91,7 @@ def _cell(text: str) -> str:
 
 def _place(issue: Issue) -> str:
     st = issue.evidence.get("state") or {}
-    where = st.get("line_id") or st.get("scene")
+    where = issue.evidence.get("where") or st.get("line_id") or st.get("scene")
     return f"`{where}`" if where else "-"
 
 
@@ -118,6 +120,8 @@ def _doubt(issue: Issue) -> str:
     """検出の種類から見た、誤検知の可能性（判定ではなく、切り分けの入り口）。"""
     if issue.rule_id == LOG_ERROR_RULE:
         return DOUBT_LOG
+    if issue.rule_id == LOG_WARNING_RULE:
+        return DOUBT_WARNING
     if issue.rule_id == "S-05":
         return DOUBT_BUTTON
     if issue.rule_id.startswith("R-"):
@@ -125,9 +129,24 @@ def _doubt(issue: Issue) -> str:
     return DOUBT_UNKNOWN
 
 
+def _warning_rows(groups: list[IssueGroup]) -> list[str]:
+    """警告は場所ごとの件数が多くなるが、直すときは種類ごとに見るので、種類ごとに1行にする。回数の多い順。"""
+    by_kind: dict[str, list[IssueGroup]] = {}
+    for g in groups:
+        if g.first.rule_id == LOG_WARNING_RULE:
+            by_kind.setdefault(str(g.first.evidence.get("kind")), []).append(g)
+    rows = []
+    for gs in sorted(by_kind.values(), key=lambda gs: -sum(g.count for g in gs)):
+        i = gs[0].first
+        place = _place(i) if len(gs) == 1 else f"{_place(i)} ほか {len(gs) - 1} か所"
+        rows.append(f"| {SEVERITY_LABEL[i.severity]} | [{i.rule_id}] {i.title} | {place} | {sum(g.count for g in gs)} | "
+                    f"{_doubt(i)} | {_cell(i.detail)} |")
+    return rows
+
+
 def _suspects(summary: RunSummary, issues: list[Issue], groups: list[IssueGroup]) -> list[str]:
     """「不具合の疑い」の節: 検出・進めなかった区間・ハーネスの記録に散らばった疑いを、重い順に1つの表にまとめる。
-    Critical と Major は検出ごとに、Minor と Info は件数が多くなるのでルールごとに1行にする。"""
+    Critical と Major は検出ごとに、Minor と Info は件数が多くなるのでルールごとに1行にする（警告だけは種類ごと）。"""
     rows: list[str] = []
     window = summary.suspect_error_window_sec
     for sev in ("critical", "major"):
@@ -141,10 +160,11 @@ def _suspects(summary: RunSummary, issues: list[Issue], groups: list[IssueGroup]
             doubt = DOUBT_ERROR if err is not None else _doubt(i)
             rows.append(f"| {SEVERITY_LABEL[sev]} | [{i.rule_id}] {i.title} | {_place(i)} | {g.count} | {doubt} | {_cell(clue)} |")
     rows += [f"| 要確認 | 進めなかった区間 | {where} | 1 | {DOUBT_STALL} | {_cell(clue)} |" for where, clue in summary.stall_rows]
+    rows += _warning_rows(groups)
     for sev in ("minor", "info"):
         by_rule: dict[str, list[IssueGroup]] = {}
         for g in groups:
-            if g.first.severity == sev:
+            if g.first.severity == sev and g.first.rule_id != LOG_WARNING_RULE:
                 by_rule.setdefault(g.first.rule_id, []).append(g)
         for rule, gs in by_rule.items():
             total = sum(g.count for g in gs)

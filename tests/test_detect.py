@@ -106,3 +106,37 @@ def test_load_rules_validation(tmp_path):
     p.write_text("rules:\n  - id: C-03\n    severity: critical\n    title: t\n")
     with pytest.raises(RuleError):
         Engine(load_rules(p))  # timeout_sec がない
+
+
+def test_l06_log_warning_reads_place_from_message(repo_rules):
+    e = Engine(repo_rules)
+    spot = ev("game", "log_warning", 1, message="Scenario script 'main/s1' at line #12.0: Value 3 is out of range")
+    issues = run(e, [spot])
+    assert [(i.rule_id, i.severity) for i in issues] == [("L-06", "minor")]
+    assert issues[0].evidence["where"] == "main/s1:12.0"
+    assert issues[0].evidence["kind"] == "Value N is out of range"
+    assert issues[0].action is None  # 警告で再起動しない
+
+
+def test_l06_uses_last_line_when_message_has_no_place(repo_rules):
+    e = Engine(repo_rules)
+    issues = run(e, [
+        ev("game", "command", 1, name="char", target="A.B", line_id="main/s1:5.0"),
+        ev("game", "log_warning", 2, message="Expression 'A' applied to 'B' failed"),
+    ])
+    assert issues[0].evidence["where"] == "main/s1:5.0"
+    assert issues[0].evidence["kind"] == "Expression '*' applied to '*' failed"
+
+
+def test_l06_same_place_and_message_share_key_and_ignore_works(repo_rules):
+    repo_rules["L-06"].params["ignore_patterns"] = ["^Known noisy"]
+    e = Engine(repo_rules)
+    w = "Scenario script 'main/s1' at line #1.0: Oops"
+    issues = run(e, [
+        ev("game", "log_warning", 1, message=w),
+        ev("game", "log_warning", 2, message=w),
+        ev("game", "log_warning", 3, message="Known noisy thing"),
+        ev("log", "unity_log", 4, message=w, stack=[], has_stack=False),
+    ])
+    assert [i.rule_id for i in issues] == ["L-06", "L-06"]
+    assert issues[0].key == issues[1].key
