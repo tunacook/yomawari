@@ -142,6 +142,9 @@ class GameState:
     saves: int = 0  # セーブが始まった回数（押したボタンでセーブしたかを見るため。V-07）
     # スクリプトのコマンドを実行した回数（応答確認のあいだにスクリプトが進んでいたかを見るため。S-01）
     commands: int = 0
+    # 最後の本文のあとに実行したコマンドの行 ID（本文が出たら None に戻す）。本文のない演出の途中で検出したとき、
+    # 場所を最後の本文の行ではなく、スクリプトが実際にいる行にするため（run 2026-11-09_2259: S-01 の場所が前の場面の行になった）
+    command_line: str | None = None
     # 画面の見た目から、後ろに下がったと判定した menu（ハーネスが画像で判定して入れる。fuzz/loop.py の _look）。
     # 押せる候補から除く。閉じたら除く
     behind: set[str] = field(default_factory=set)
@@ -184,6 +187,7 @@ class GameState:
     def _on_line(self, d: dict[str, Any], t: float) -> None:
         self.line = {k: d.get(k) for k in ("label", "line_id", "speaker", "text")}
         self.line_done = False
+        self.command_line = None
         self.last_progress_t = t
         for m in self.menus.values():
             m.read_over = True
@@ -268,6 +272,8 @@ class GameState:
 
     def _on_command(self, d: dict[str, Any], t: float) -> None:
         self.commands += 1
+        if d.get("line_id"):
+            self.command_line = str(d["line_id"])
 
     def _on_load(self, d: dict[str, Any], t: float) -> None:
         self.loading = d.get("phase") == "start"
@@ -372,6 +378,7 @@ class GameState:
         return {
             "scene": self.scene,
             "line_id": self.line["line_id"] if self.line else None,
+            "command_line_id": self.command_line,  # 最後の本文のあとに実行したコマンドの行（なければ None）
             "line_done": self.line_done,
             "menus": sorted(self.menus),
             "top_modal": top.name if top else None,
