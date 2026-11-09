@@ -238,7 +238,7 @@ yomawari run [--build NAME | --build-path PATH] [--hours 8] [--purpose stuck|pla
 #   --mode: 目的の mode を上書きする。fuzz: 通常の操作 + イレギュラー操作 / random: 通常の操作のみ / aging: 操作せず観測のみ
 yomawari replay <issue-id>
 yomawari minimize <issue-id>
-yomawari report <run-id>
+yomawari report <run-id>   # 記録（events.jsonl・run.json）から report.md を作り直す。前のものは report.prev.md に残す
 yomawari builds list | add NAME PATH | edit NAME | check NAME
 yomawari inspect [--build NAME] [--seconds 60] [--click MENU/BUTTON ...]   # 画面の menu とボタン名を見る。押して入力を確かめる
 yomawari experience report [--build NAME] [--out PATH]   # 経験の蓄積から体験レポート（Markdown）を出す（§9「経験の蓄積」）
@@ -1057,6 +1057,8 @@ class Judge(Protocol):
 - `report.md` を深刻度別に出力し、`open`（Windowsは `os.startfile`）
 
 ### レポート構成
+`yomawari report <run-id>` で、記録から `report.md` を作り直せる。ハーネスは、ランの始めと終わりに `RunSummary` を `run.json` に書く（シード・目的・ハーネスの記録・一度も反応しなかったボタンなど、`events.jsonl` にないもの）。検出は `events.jsonl` の `issue` から読む。前の `report.md` は `report.prev.md` に残す。終了処理まで進まなかったラン（`run.json` が始めのままか、ない）は、`events.jsonl` から分かる範囲で埋める。進めなかった区間と性能の節は記録から作り直し、残っていないものはレポートの「ハーネスの記録」に書く。
+
 1. サマリ（ビルド、実行時間、操作数、再起動回数、深刻度別件数、前回比）
    - 不具合の疑い: 検出・進めなかった区間・ハーネスの記録・一度も反応しなかったボタンに散らばった疑いを、サマリの直後に重い順の1つの表にまとめる。Critical と Major は検出ごと、Minor と Info はルールごとに1行にする（L-06 だけは種類ごとに1行）。Critical・Major の手がかりには、同じ起動で `suspect_error_window_sec`（120 秒）前までのエラーログ（L-01）があれば、それを出す（run 2026-11-08_2227: 進まない検出の 45 秒前に、スクリプトを読み込めないエラーが出ていた）。確定ではなく、切り分けの入り口にする。ハーネスの誤検知かもしれないものも落とさず載せ、「見立て」の列に、検出の種類から見た疑わしさ（ゲームの不具合の疑いが強い・未確定・誤検知の可能性あり）を書く
 2. Critical / Major / Minor / Info（各ISSUE: ルールID、発生回数、最初の発生時刻、行ID/シーン、最小化した操作列、`yomawari replay <id>` コマンド、スクショ、ログ抜粋、画像判定結果）
