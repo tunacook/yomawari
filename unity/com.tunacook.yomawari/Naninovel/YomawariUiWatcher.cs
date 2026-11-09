@@ -265,9 +265,14 @@ namespace Yomawari
                 var rt = (RectTransform)b.transform;
                 if (!YomawariRect.TryGetScreen(rt, out var min, out var max)) continue;
                 var c = b.Choice;
+                // 消えていく途中でスクリプトが解放されると、文字を解決できずに Error が飛ぶ。
+                // 捕まえないと Update の未処理例外になり、ゲームの不具合（L-01）として報告されるので、消えたボタンとして扱う
+                string text;
+                try { text = c.Summary; }
+                catch (Error) { continue; }
                 if (json.Length > 1) json.Append(',');
                 json.Append("{\"id\":").Append(YomawariFormat.Str(c.Id))
-                    .Append(",\"text\":").Append(YomawariFormat.Str(c.Summary))
+                    .Append(",\"text\":").Append(YomawariFormat.Str(text))
                     .Append(",\"rect\":").Append(YomawariFormat.Rect(min.x, min.y, max.x, max.y, Screen.width, Screen.height))
                     .Append(",\"locked\":").Append(c.Locked ? "true" : "false")
                     .Append('}');
