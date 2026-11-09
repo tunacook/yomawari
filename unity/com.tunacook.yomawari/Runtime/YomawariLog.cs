@@ -10,7 +10,7 @@ namespace Yomawari
      * <summary>
      * Yomawari（夜間自動プレイのハーネス）にゲームの状態を伝える。起動引数 -yomawari があるときだけ
      * Player.log に [YOMAWARI] 行を出す。ハーネス側からゲームを操作する口は作らない（OS の入力だけ）。
-     * 出すもの: boot（起動時）、heartbeat（1 秒ごと、YomawariHeartbeat）、log_error（Error / Exception / Assert）
+     * 出すもの: boot（起動時）、heartbeat（1 秒ごと、YomawariHeartbeat）、log_error（Error / Exception / Assert）、log_warning（Warning）
      * </summary>
      */
     public static class YomawariLog
@@ -50,11 +50,16 @@ namespace Yomawari
             go.AddComponent<YomawariHeartbeat>();
         }
 
-        // Error / Exception / Assert だけを出す。Emit 自身の Debug.Log は LogType.Log なので再帰しない。
+        // Warning は log_warning、Error / Exception / Assert は log_error で出す。Emit 自身の Debug.Log は LogType.Log なので再帰しない。
         // logMessageReceived はメインスレッドのログだけを受け取る（別スレッドの例外は対象外）
         static void OnLog(string message, string stackTrace, LogType type)
         {
-            if (type == LogType.Log || type == LogType.Warning) return;
+            if (type == LogType.Log) return;
+            if (type == LogType.Warning)
+            {
+                Emit("log_warning", "\"message\":" + YomawariFormat.Str(message));
+                return;
+            }
             Emit("log_error",
                 "\"type\":" + YomawariFormat.Str(type.ToString()) +
                 ",\"message\":" + YomawariFormat.Str(message) +

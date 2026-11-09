@@ -227,6 +227,47 @@ class LogErrorDetector(Detector):
         ]
 
 
+# 警告の種類をまとめるときに、文面の中で変わる部分（名前と数値）を伏せる
+_WARNING_QUOTED = re.compile(r"'[^']*'")
+_WARNING_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+class LogWarningDetector(Detector):
+    """L-06: ゲームが出す log_warning イベント。場所と文面の組ごとに検出し、レポートでは種類（evidence の kind）ごとにまとめる。"""
+
+    def __init__(self, rule: Rule) -> None:
+        super().__init__(rule)
+        self.ignore = [re.compile(p) for p in rule.param("ignore_patterns")]
+        self.spots = [re.compile(p) for p in rule.param("spot_patterns")]
+        self.last_line: str | None = None
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        if ev.source != "game":
+            return []
+        if ev.kind in ("line", "command") and ev.data.get("line_id"):
+            self.last_line = str(ev.data["line_id"])
+        if ev.kind != "log_warning":
+            return []
+        msg = str(ev.data.get("message") or "")
+        if any(p.search(msg) for p in self.ignore):
+            return []
+        head = msg.splitlines()[0] if msg else ""
+        where = self.last_line
+        for p in self.spots:
+            m = p.match(head)
+            if m:
+                where, head = f"{m['script']}:{m['line']}", m["message"]
+                break
+        kind = _WARNING_NUMBER.sub("N", _WARNING_QUOTED.sub("'*'", head))
+        return [
+            self.issue(
+                f"Warning: {head[:200]}",
+                key=f"{where}|{head[:80]}", launch=ev.launch, t=ev.t, wall=ev.wall,
+                kind=kind[:200], where=where, message=head,
+            )
+        ]
+
+
 class ExitTimeoutDetector(Detector):
     """C-04: 終了を期待する操作（[guard.buttons] expect_exit）から、一定時間たってもプロセスが残る。"""
 
@@ -459,6 +500,7 @@ DETECTORS: dict[str, Callable[[Rule], Detector]] = {
     "S-05": ButtonNoResponseDetector,
     "V-07": DimButtonRespondedDetector,
     "L-01": LogErrorDetector,
+    "L-06": LogWarningDetector,
 }
 
 

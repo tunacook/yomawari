@@ -55,7 +55,8 @@ if a.mock_mode == "exception":
         "(Filename: Assets/Scripts/Runner.cs Line: 42)\n"
         "\n"
     )
-    # 実機の YomawariLog は logMessageReceived から log_error を出す
+    # 実機の YomawariLog は logMessageReceived から log_warning / log_error を出す
+    emit("log_warning", message="Scenario script 'main/s1' at line #12.0: Value 3 is out of range")
     emit(
         "log_error",
         type="Exception",

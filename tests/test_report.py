@@ -12,6 +12,7 @@ from yomawari.post.report import (
     DOUBT_SILENT,
     DOUBT_STALL,
     DOUBT_UNKNOWN,
+    DOUBT_WARNING,
     RunSummary,
     render,
 )
@@ -99,3 +100,24 @@ def test_summary_says_how_the_run_was_stopped(tmp_path):
 
 def test_summary_has_no_stop_row_when_the_run_finished(tmp_path):
     assert "終わり方" not in render(_summary(), [], tmp_path)
+
+
+def _warning(kind, where, wall="w"):
+    i = _issue("L-06", "minor", f"Warning: {kind}", wall, key=f"L-06:{where}|{kind}")
+    i.evidence.update(kind=kind, where=where)
+    return i
+
+
+def test_warnings_get_one_row_per_kind_with_count_and_place(tmp_path):
+    many = [_warning("Failed A", f"s:{n}") for n in range(3)] + [_warning("Failed A", "s:0")]
+    sec = _section(render(_summary(), many + [_warning("Failed B", "t:9")], tmp_path))
+    rows = [r for r in sec.splitlines() if "[L-06]" in r]
+    assert len(rows) == 2
+    assert "`s:0` ほか 2 か所 | 4 |" in rows[0] and "Failed A" in rows[0]  # 回数の多い順
+    assert "`t:9` | 1 |" in rows[1] and "Failed B" in rows[1]
+    assert DOUBT_WARNING in rows[0]
+
+
+def test_other_minor_rules_still_get_one_row_per_rule(tmp_path):
+    sec = _section(render(_summary(), [_issue("V-07", "minor", "a", "w"), _issue("V-07", "minor", "b", "w")], tmp_path))
+    assert len([r for r in sec.splitlines() if "[V-07]" in r]) == 1

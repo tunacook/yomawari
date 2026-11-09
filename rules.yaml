@@ -62,6 +62,20 @@ rules:
       # 誤検知になる既知のメッセージ（正規表現）。ゲームごとに追記する
       ignore_patterns: []
 
+  - id: L-06
+    severity: minor
+    title: Warning ログ
+    description: >-
+      ゲームの YomawariLog が Application.logMessageReceived から出す log_warning イベント。
+      エンジンが動きながら出す指定ミスの警告など、進行は止まらないが直したいものをレポートに載せる。
+      動作に影響するかは分からないので Minor にする。
+    params:
+      # 誤検知になる既知のメッセージ（正規表現）。ゲームごとに追記する
+      ignore_patterns: []
+      # 文面に場所が入っている形式（script・line・message の名前付きグループ）。合わなければ直前の行を場所にする
+      spot_patterns:
+        - "^Scenario script '(?P<script>[^']+)' at line #(?P<line>[\\d.]+): (?P<message>.*)$"
+
   - id: S-01
     severity: critical
     title: 応答確認に反応しない
