@@ -9,7 +9,6 @@ from yomawari.cli import app
 COMMANDS = [
     (["replay", "C-01-0001"], "replay"),
     (["minimize", "C-01-0001"], "minimize"),
-    (["report", "2026-10-18_0100_mac_dev"], "report"),
     (["schedule", "install", "--at", "02:30"], "schedule install"),
     (["schedule", "uninstall"], "schedule uninstall"),
 ]
@@ -32,7 +31,7 @@ def test_args_are_logged(caplog):
 
 def test_verbose_enables_debug(caplog):
     caplog.set_level(logging.DEBUG, logger="yomawari")
-    res = CliRunner().invoke(app, ["-v", "--config", "/tmp/y.toml", "report", "r1"])
+    res = CliRunner().invoke(app, ["-v", "--config", "/tmp/y.toml", "replay", "r1"])
     assert res.exit_code == 0
     assert any(r.levelno == logging.DEBUG and "config=" in r.getMessage() for r in caplog.records)
 

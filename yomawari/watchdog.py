@@ -36,6 +36,7 @@ from .fuzz.guard import Guard
 from .fuzz.loop import FuzzRun, FuzzSession
 from .fuzz.looks import load_inactive_words, load_masked_chars
 from .fuzz.resume import load_save_hints
+from .post.rebuild import save_summary
 from .post.stalls import find_stalls, load_events, render_stalls, stall_rows
 from .fuzz.roles import RoleBook
 from .input.base import InputDriver
@@ -232,6 +233,12 @@ class Harness:
                 await asyncio.wait_for(stop.wait(), timeout=interval)
             except TimeoutError:
                 pass
+
+    def _save_summary(self, summary: RunSummary, run_dir: Path) -> None:
+        try:
+            save_summary(summary, run_dir)
+        except OSError as e:
+            self.notes.append(f"ランの情報を保存できませんでした（yomawari report で作り直せません）: {e}")
 
     def _stall_sections(self, run_dir: Path) -> tuple[list[str], list[tuple[str, str]]]:
         """「進めなかったところ」の節と、「不具合の疑い」に載せる行。操作しないモード（aging）では出さない。"""
@@ -482,6 +489,28 @@ class Harness:
 
         loop.add_signal_handler(signal.SIGINT, request_stop, "手動で中断した（Ctrl+C）")
         loop.add_signal_handler(signal.SIGTERM, request_stop, "外から止められた（SIGTERM。kill や launchd の停止など）")
+        base = dict(
+            run_id=run_dir.name,
+            build_name=self.build.name,
+            build_path=str(self.build.path),
+            started=started_wall,
+            mode=opts.mode,
+            seed=seed,
+            purpose=opts.purpose.name if opts.purpose else None,
+            purpose_description=opts.purpose.description if opts.purpose else "",
+            focus=list(opts.purpose.focus) if opts.purpose else [],
+            planned_hours=opts.hours,
+            rules_path=str(self.rules_path),
+            env={
+                "yomawari": __version__,
+                "Python": f"{sys.version.split()[0]} ({pyplatform.machine()})",
+                "OS": f"{self.platform.name} {pyplatform.mac_ver()[0] or pyplatform.release()}",
+            },
+            suspect_error_window_sec=float(self.fuzz_cfg.get(  # 操作しないモード（aging）では fuzz の設定がない
+                "suspect_error_window_sec", FUZZ_DEFAULTS["suspect_error_window_sec"])),
+        )
+        # 終了処理まで進まなくても（強制終了など）、yomawari report で作り直せるように、始めにも書いておく
+        self._save_summary(RunSummary(**base, ended="", duration_sec=0.0, launches=0, restarts=0, interrupted=False), run_dir)
         awake = self._keep_awake()
         dark = asyncio.create_task(self._display_off(opts.display_off_delay_sec)) if opts.display_off else None
         try:
@@ -562,36 +591,20 @@ class Harness:
             self._bus.close()
             stall_lines, stall_table = self._stall_sections(run_dir)
             summary = RunSummary(
-                run_id=run_dir.name,
-                build_name=self.build.name,
-                build_path=str(self.build.path),
-                started=started_wall,
+                **base,
                 ended=now_wall(),
                 duration_sec=time.monotonic() - self._started,
-                mode=opts.mode,
-                seed=seed,
-                purpose=opts.purpose.name if opts.purpose else None,
-                purpose_description=opts.purpose.description if opts.purpose else "",
-                focus=list(opts.purpose.focus) if opts.purpose else [],
                 launches=self.launches,
                 restarts=self.restarts,
                 interrupted=interrupted,
                 stop_reason=stop_reason,
-                planned_hours=opts.hours,
-                rules_path=str(self.rules_path),
-                env={
-                    "yomawari": __version__,
-                    "Python": f"{sys.version.split()[0]} ({pyplatform.machine()})",
-                    "OS": f"{self.platform.name} {pyplatform.mac_ver()[0] or pyplatform.release()}",
-                },
                 harness_notes=self.notes,
                 silent_buttons=self.engine.silent_buttons(),
                 stalls=stall_lines,
                 stall_rows=stall_table,
-                suspect_error_window_sec=float(self.fuzz_cfg.get(  # 操作しないモード（aging）では fuzz の設定がない
-                    "suspect_error_window_sec", FUZZ_DEFAULTS["suspect_error_window_sec"])),
                 perf=perf_lines,
             )
+            self._save_summary(summary, run_dir)
             report = write_report(summary, self.issues, run_dir)
             loop.remove_signal_handler(signal.SIGINT)
             loop.remove_signal_handler(signal.SIGTERM)

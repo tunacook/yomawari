@@ -31,6 +31,7 @@ from .detect.engine import Rule, RuleError, load_rules
 from .fuzz.experience import SECTIONS, experience_path, forget, section_sizes
 from .fuzz.roles import RoleBook, load_role_hints
 from .platform import Platform, get_platform
+from .post.rebuild import rebuild_report
 from .profile import apply_rules, load_spec
 from .purpose import MODES, PurposeError
 from .purpose import resolve as resolve_purpose
@@ -361,9 +362,14 @@ def minimize(issue_id: str = typer.Argument(..., help="ISSUE の ID")) -> None:
 
 
 @app.command()
-def report(run_id: str = typer.Argument(..., help="ラン ID（runs/ 以下のディレクトリ名）")) -> None:
-    """ランの report.md を作り直す。"""
-    _stub("report", run_id=run_id)
+def report(ctx: typer.Context, run_id: str = typer.Argument(..., help="ラン ID（runs/ 以下のディレクトリ名）")) -> None:
+    """ランの report.md を、記録（events.jsonl・run.json）から作り直す。前のものは report.prev.md に残す。"""
+    cfg = _config(ctx)
+    run_dir = cfg.runs_dir / run_id
+    if Path(run_id).name != run_id or not (run_dir / "events.jsonl").is_file():
+        console.print(f"[red]ランの記録が見つかりません:[/] {run_dir / 'events.jsonl'}")
+        raise typer.Exit(EXIT_HARNESS_ERROR)
+    console.print(f"レポート: {rebuild_report(run_dir, cfg.rules_path)}")
 
 
 # --- builds ---

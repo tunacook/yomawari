@@ -112,6 +112,16 @@ def test_exception_is_l01(tmp_path, mock_app, fake_platform):
     assert "`main/s1:12.0`" in r.report_path.read_text()
 
 
+def test_report_command_rebuilds_the_same_findings(tmp_path, mock_app, fake_platform):
+    from yomawari.post.rebuild import rebuild_report
+    r = run_harness(tmp_path, mock_app, fake_platform, ["--mock-mode", "exception"], 1.5)
+    original = r.report_path.read_text()
+    rebuilt = rebuild_report(r.report_path.parent, RULES_PATH).read_text()
+    assert (r.report_path.parent / "report.prev.md").read_text() == original
+    assert rebuilt.split("## 実行環境")[0] == original.split("## 実行環境")[0]  # 実行環境の前は同じ
+    assert "`yomawari report` で作り直した" in rebuilt
+
+
 def test_pending_restore_from_previous_run(tmp_path, mock_app, fake_platform):
     """前回が異常終了してマーカーが残っていたら、次のランの最初に復元する。"""
     from yomawari.savestate import SaveState, SaveTarget
