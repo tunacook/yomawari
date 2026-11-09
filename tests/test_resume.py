@@ -13,7 +13,7 @@ from yomawari.fuzz.guard import Guard
 from yomawari.fuzz.loop import FuzzRun, FuzzSession
 from yomawari.fuzz.looks import load_inactive_words
 from yomawari.fuzz.ops import normal_candidates
-from yomawari.fuzz.resume import load_save_hints, newest_slots, stamp_key
+from yomawari.fuzz.resume import load_save_hints, newest_slots, older_than, stamp_key
 from yomawari.fuzz.roles import RoleBook, load_role_hints
 from yomawari.input.pointer import Pointer
 from yomawari.sensors.window import ScreenRect, WindowInfo
@@ -150,7 +150,7 @@ def test_saved_slots_are_not_pressed_without_purpose():
 def test_newest_slot_compares_time_only_when_some_date_is_unreadable():
     # run 2026-11-06_1418: 「8.2026 1F06 14:51:52」（日付が崩れた）より「9. 2026-1-06 12:58:58」を選び、前の章に戻った
     texts = {"a": "6. 2026-0-06 12:58:22", "b": "8.2026 1F06 14:51:52", "c": "9. 2026-1-06 12:58:58", "d": "7. Empty"}
-    assert newest_slots(texts) == {"b"}
+    assert newest_slots(texts, time.mktime((2026, 11, 6, 15, 0, 0, 0, 0, -1))) == {"b"}
     assert newest_slots({"a": "1. 2026-11-05 23:00:00", "b": "2. 2026-11-06 01:00:00"}) == {"b"}
     assert newest_slots({"d": "7. Empty"}) == set()
 
@@ -242,6 +242,59 @@ def test_relaunch_looks_for_own_save_on_other_pages():
     s, st, run = _session(launch=1)
     _show(st, "SaveLoadUI", LOAD, page1)
     assert _weights(s, st, 0.0)[f"click {_label(4)}"] == CLICK * BOOST
+
+
+MIDNIGHT_PAGE1 = {"a": "1.202611F091 23:29:00", "b": "6. 2026-11-10 00:49:24", "c": "31.2026-1510 01:00:48"}
+
+
+def test_newest_slot_across_midnight_with_unreadable_date():
+    # run 2026-11-09_2259: 日付が崩れた前日 23:29 のセーブを、時刻の大小で当日 00:49・01:00 のセーブより新しいとして
+    # 3 回ロードし、本編のかなり前に戻った。今から何秒前かで比べる
+    now = time.mktime((2026, 11, 10, 1, 1, 16, 0, 0, -1))
+    assert newest_slots(MIDNIGHT_PAGE1, now) == {"c"}
+    assert newest_slots({"a": MIDNIGHT_PAGE1["a"], "b": MIDNIGHT_PAGE1["b"]}, now) == {"b"}
+
+
+def test_older_than_across_midnight_with_unreadable_date():
+    saved = time.mktime((2026, 11, 10, 1, 1, 7, 0, 0, -1))
+    assert older_than((0, 0, 0, 23, 29, 0), saved, 60.0)  # 前日 23:29 は 1 時間 32 分前
+    assert not older_than((0, 0, 0, 1, 0, 48), saved, 60.0)  # 19 秒前（slack のうち）
+    assert not older_than((0, 0, 0, 1, 1, 30), saved, 60.0)  # 少しあと
+    assert older_than((0, 0, 0, 0, 49, 24), saved, 60.0)
+
+
+def test_relaunch_after_midnight_looks_for_own_save(monkeypatch):
+    # 01:01:07 に 4 ページ目へセーブして起動し直した。1 ページ目には前日 23:29（日付が崩れた）と当日 00:49 のセーブしか
+    # 見えない: どちらも押さず、ページを送って探す
+    monkeypatch.setattr(time, "time", lambda: time.mktime((2026, 11, 10, 1, 1, 18, 0, 0, -1)))
+    s, st, run = _session(launch=1)
+    run.saved_wall = time.mktime((2026, 11, 10, 1, 1, 7, 0, 0, -1))
+    _show(st, "SaveLoadUI", LOAD, _page({_label(0): MIDNIGHT_PAGE1["a"], _label(5): MIDNIGHT_PAGE1["b"]}))
+    w = _weights(s, st, 0.0)
+    assert w["click SaveLoadUI/NextPageButton"] == CLICK * BOOST
+    assert f"click {_label(0)}" not in w and f"click {_label(5)}" not in w
+    # 探し尽くしたら、見えているうちで新しい当日 00:49 を選ぶ（前日 23:29 ではない）
+    run.resume_pages = FUZZ_DEFAULTS["resume_page_limit"]
+    w = _weights(s, st, 0.0)
+    assert w[f"click {_label(5)}"] == CLICK * BOOST and f"click {_label(0)}" not in w
+
+
+def test_relaunch_forgets_last_choice_on_title():
+    # run 2026-11-09_2259: 前の起動のタイトルで「続きから」を押したので、次の起動では「直前と同じ操作」として
+    # 「続きから」が候補から外れ、「はじめから」を押した。起動し直したら直前の操作を忘れる
+    s, st, run = _session(launch=1)
+    _show(st, "TitleUI", TITLE, TITLE_TEXT)
+    cands = s._apply_resume(normal_candidates(st, run.guard, s.cfg["weights"], False), 0.0)
+    cont = next(op for op in cands if op.label == "click TitleUI/ContinueButton")
+    # 同じ起動の中では、今までどおり直前と同じ操作を続けて選ばない
+    run.decider._last["title"] = cont.label
+    assert run.decider.choose("title", cands).label != cont.label
+    run.decider._last["title"] = cont.label
+    FuzzSession(run, st, s.pointer, lambda _: None, 2, lambda _: None)
+    assert not run.decider._last
+    # 忘れたあとは「続きから」が候補に残り、resume_factor の重みでほぼ選ばれる
+    picks = [run.decider.choose("title", cands).label for _ in range(1)]
+    assert picks == [cont.label]
 
 
 def _page(saved):

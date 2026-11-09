@@ -77,28 +77,39 @@ def stamp_key(text: str | None) -> tuple[int, ...] | None:
     return (*date, int(t.group(1)), int(t.group(2)), int(t.group(3) or 0))
 
 
+DAY_SEC = 24 * 60 * 60
+
+
+def ago_sec(key: tuple[int, ...], wall: float) -> float:
+    """スロットの時刻（stamp_key の時・分・秒）が、時刻 wall（time.time()）の何秒前か。日付は見ず、24 時間で一周する
+    （0 以上 DAY_SEC 未満。前日 23:29 のセーブは、当日 01:01 から見て 1 時間 32 分前）。"""
+    t = time.localtime(wall)
+    now = t.tm_hour * 3600 + t.tm_min * 60 + t.tm_sec
+    return (now - (key[3] * 3600 + key[4] * 60 + key[5])) % DAY_SEC
+
+
 def older_than(key: tuple[int, ...], wall: float, slack: float) -> bool:
-    """スロットの日時（stamp_key）が、時刻 wall（time.time()）より slack 秒以上前か。日付が読めなければ時刻だけで比べる
-    （日付をまたいだときは古いと判定しない。間違えても、今までどおり見えているいちばん新しいセーブを選ぶだけ）。"""
-    t = time.localtime(wall - slack)
+    """スロットの日時（stamp_key）が、時刻 wall（time.time()）より slack 秒以上前か。日付が読めなければ、時刻が何秒前か
+    （ago_sec）で比べる。wall より少しあと（slack 秒のうち）の時刻は古いとしない。"""
     if key[:3] != (0, 0, 0):
+        t = time.localtime(wall - slack)
         return key < (t.tm_year, t.tm_mon, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec)
-    if time.localtime(wall).tm_mday != t.tm_mday:
-        return False
-    return key[3:] < (t.tm_hour, t.tm_min, t.tm_sec)
+    return slack < ago_sec(key, wall) < DAY_SEC - slack
 
 
-def newest_slots(texts: dict[str, str | None]) -> set[str]:
+def newest_slots(texts: dict[str, str | None], now: float | None = None) -> set[str]:
     """スロットの label → 文字 から、いちばん新しいセーブのスロット。日時が読めないものは除く。
 
-    日付が読めないスロットが1つでもあれば、どれも時刻だけで比べる（日付の読めたものが、読めなかったものより
-    いつも新しくなってしまうため。run 2026-11-06_1418: 「8.2026 1F06 14:51:52」より「9. 2026-1-06 12:58:58」を選び、
-    前の章に戻った）。"""
+    日付が読めないスロットが1つでもあれば、どれも時刻だけで、今（now。既定は time.time()）から何秒前か（ago_sec）で比べる
+    （日付の読めたものが、読めなかったものよりいつも新しくなってしまうため。run 2026-11-06_1418: 「8.2026 1F06 14:51:52」より
+    「9. 2026-1-06 12:58:58」を選び、前の章に戻った）。時刻の大小で比べると、日付をまたいだランで前日のセーブを選ぶ
+    （run 2026-11-09_2259: 日付が崩れた前日 23:29 のセーブを、当日 00:49〜01:00 のセーブより新しいとして 3 回ロードした）。"""
     keys = {label: k for label, text in texts.items() if (k := stamp_key(text)) is not None}
     if not keys:
         return set()
     if any(k[:3] == (0, 0, 0) for k in keys.values()):
-        keys = {label: k[3:] for label, k in keys.items()}
+        wall = time.time() if now is None else now
+        keys = {label: (-ago_sec(k, wall),) for label, k in keys.items()}
     top = max(keys.values())
     return {label for label, k in keys.items() if k == top}
 
