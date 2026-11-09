@@ -48,6 +48,8 @@ class RunSummary:
     perf: list[str] = field(default_factory=list)  # 「パフォーマンス」の節（detect/perf.py）
     stall_rows: list[tuple[str, str]] = field(default_factory=list)  # 進めなかった区間の (場所, 手がかり)（post/stalls.py）
     suspect_error_window_sec: float = 120.0  # 検出のこの秒数前までのエラーログを、手がかりとして「不具合の疑い」に並べる
+    stop_reason: str = ""  # 中断されたときの理由（手動か、外から止められたか）
+    planned_hours: float | None = None  # 予定していた時間
 
 
 @dataclass
@@ -171,6 +173,7 @@ def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
         f"| ビルド | {summary.build_name} (`{summary.build_path}`) |",
         f"| 開始 / 終了 | {summary.started} / {summary.ended} |",
         f"| 実行時間 | {_hms(summary.duration_sec)}{'（中断）' if summary.interrupted else ''} |",
+        *([f"| 終わり方 | {_stopped(summary)} |"] if summary.interrupted else []),
         *([f"| 目的 | {summary.purpose}: {summary.purpose_description} |"] if summary.purpose else []),
         *([f"| 重点的に見るルール | {', '.join(summary.focus)} |"] if summary.focus else []),
         f"| モード / シード | {summary.mode} / {summary.seed} |",
@@ -241,6 +244,14 @@ def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
         out += [f"- {n}" for n in summary.harness_notes]
     out.append("")
     return "\n".join(out)
+
+
+def _stopped(summary: RunSummary) -> str:
+    """中断されたランの終わり方。途中で止めたので、予定の時間まで見ていないことが分かるように書く。"""
+    reason = summary.stop_reason or "中断された（理由は不明）"
+    if summary.planned_hours is None:
+        return reason
+    return f"{reason}。予定の {summary.planned_hours:g} 時間より前に止めたので、ここまでの結果"
 
 
 def write_report(summary: RunSummary, issues: list[Issue], run_dir: Path) -> Path:

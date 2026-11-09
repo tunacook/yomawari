@@ -1,5 +1,7 @@
 """レポートの「不具合の疑い」（post/report.py）。"""
 
+from dataclasses import replace
+
 from yomawari.events import Issue
 from yomawari.post.report import (
     DOUBT_BUTTON,
@@ -86,3 +88,14 @@ def test_no_suspects_and_table_safe_text(tmp_path):
     long = "x" * 300 + "|y"
     sec = _section(render(_summary(), [_issue("L-01", "major", "a|b", "w"), _issue("L-01", "major", long, "w")], tmp_path))
     assert "a\\|b" in sec and "…" in sec and "x" * 121 not in sec
+
+
+def test_summary_says_how_the_run_was_stopped(tmp_path):
+    summary = replace(_summary(), interrupted=True, stop_reason="手動で中断した（Ctrl+C）", planned_hours=8.0)
+    text = render(summary, [], tmp_path)
+    assert "| 終わり方 | 手動で中断した（Ctrl+C）。予定の 8 時間より前に止めた" in text
+    assert "（中断）" in text
+
+
+def test_summary_has_no_stop_row_when_the_run_finished(tmp_path):
+    assert "終わり方" not in render(_summary(), [], tmp_path)

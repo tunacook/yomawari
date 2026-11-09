@@ -266,7 +266,7 @@ yomawari restore
 [01:23:45] mac_dev  ops 3,412  restarts 2  issues: C1 M4 m7
            last: fullscreen_toggle @ ch2_park_03
 ```
-Ctrl+C でもゲーム終了・セーブ復元・途中までのレポート出力を行ってから終わる。
+Ctrl+C でもゲーム終了・セーブ復元・途中までのレポート出力を行ってから終わる。終了処理の途中に届いた 2 回目以降の Ctrl+C と SIGTERM は受け流す（打ち切るとレポートが出ない）。待てないときは Ctrl+\ で強制終了し、セーブは `yomawari restore` で戻す。中断されたランは、レポートのサマリの「終わり方」に手動か外からの停止かを書く。
 
 ### 終了コード
 | コード | 意味 |
