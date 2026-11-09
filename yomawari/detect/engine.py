@@ -303,7 +303,10 @@ def _alive(ev: Event, limit: float) -> bool:
 
 
 class ResponseCheckDetector(Detector):
-    """S-01: イレギュラー操作の次の通常の操作（応答確認）に、画面が反応しない（ハートビートは生存）。"""
+    """S-01: イレギュラー操作の次の通常の操作（応答確認）に、画面が反応しない（ハートビートは生存）。
+
+    待っているあいだにスクリプトのコマンドが進んでいれば（commands_ran）、ゲームは止まっていないので出さない
+    （run 2026-11-09_2259: 最後の本文のあと、背景の切り替えと待ちだけが続く演出の途中で本文送りが効かず、S-01 として再起動した）。"""
 
     def __init__(self, rule: Rule) -> None:
         super().__init__(rule)
@@ -312,6 +315,8 @@ class ResponseCheckDetector(Detector):
     def on_event(self, ev: Event) -> list[Issue]:
         d = ev.data
         if ev.kind != "op_result" or not d.get("verify") or d.get("responded") or d.get("interfered"):
+            return []
+        if d.get("commands_ran"):
             return []
         if not _alive(ev, self.alive):
             return []

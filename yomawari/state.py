@@ -140,6 +140,8 @@ class GameState:
     title_returns: int = 0
     resolution_changes: int = 0  # resolution の値（w / h / mode）が変わった回数
     saves: int = 0  # セーブが始まった回数（押したボタンでセーブしたかを見るため。V-07）
+    # スクリプトのコマンドを実行した回数（応答確認のあいだにスクリプトが進んでいたかを見るため。S-01）
+    commands: int = 0
     # 画面の見た目から、後ろに下がったと判定した menu（ハーネスが画像で判定して入れる。fuzz/loop.py の _look）。
     # 押せる候補から除く。閉じたら除く
     behind: set[str] = field(default_factory=set)
@@ -263,6 +265,9 @@ class GameState:
         self.saving = d.get("phase") == "start"
         if self.saving:
             self.saves += 1
+
+    def _on_command(self, d: dict[str, Any], t: float) -> None:
+        self.commands += 1
 
     def _on_load(self, d: dict[str, Any], t: float) -> None:
         self.loading = d.get("phase") == "start"

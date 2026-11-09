@@ -1785,6 +1785,7 @@ class FuzzSession:
         screens_before = self.state.screens()
         menus_before = set(self.state.menus)
         saves_before = self.state.saves
+        commands_before = self.state.commands
         # 反応しないと見込んでいるボタンは、何も起きないことを確かめるだけなので、待つ時間を短くする
         quiet = op.target is not None and op.target.label in self._quiet()
         started = time.monotonic()
@@ -1880,6 +1881,8 @@ class FuzzSession:
                     "disabled_look": bool(op.target and op.target.label in self._disabled),
                     "screen_changed": screen_changed,
                     "saved": self.state.saves != saves_before,  # 押してセーブが始まった（空きのスロットにセーブした）
+                    # 待っているあいだに、スクリプトのコマンドが進んだ（本文のない演出の途中。S-01 はゲームが止まったとしない）
+                    "commands_ran": self.state.commands != commands_before,
                     "quiet": quiet,
                     "responded": responded,
                     "waited": round(waited, 3),

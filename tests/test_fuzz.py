@@ -356,6 +356,42 @@ def test_s01_needs_live_heartbeat():
     assert engine.feed(Event("harness", "op_result", {**base, "heartbeat_age": 30.0}, 0)) == []  # H-01 の担当
     issues = engine.feed(Event("harness", "op_result", {**base, "heartbeat_age": 0.5}, 0))
     assert [i.rule_id for i in issues] == ["S-01"] and "rapid_click 10" in issues[0].detail
+    # 待っているあいだにスクリプトのコマンドが進んでいれば、ゲームは止まっていない
+    assert engine.feed(Event("harness", "op_result", {**base, "heartbeat_age": 0.5, "commands_ran": True}, 0)) == []
+
+
+def _verify_press(feed_command: bool):
+    """応答確認のボタンを押す。押したあと画面は変わらず、feed_command ならスクリプトのコマンドだけが進む。"""
+    from .test_looks import CFG, _Mouse
+
+    st = GameState()
+    st.feed(Event("game", "resolution", {"w": 2000, "h": 1000}, 0))
+    st.feed(Event("game", "menu", {"name": "Menu", "modal": True,
+                                   "buttons": [{"name": "Button", "rect": [0.1, 0.1, 0.3, 0.25]}]}, 0))
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                  rng=random.Random(1), cfg=CFG, response_timeout=0.2)
+    events = []
+    s = FuzzSession(run, st, Pointer(windows, _Mouse(), 1, st, activate_wait=0), events.append, 0, lambda _: None)
+
+    def click(*a, **k):
+        if feed_command:
+            st.feed(Event("game", "command", {"name": "wait", "line_id": "main/x:1.0"}, 0))
+
+    s.pointer.driver.click = click
+    asyncio.run(s._normal(Op("click", st.targets()[0]), "modal:Menu", True))
+    return [e.data for e in events if e.kind == "op_result"][0]
+
+
+def test_s01_not_raised_while_script_commands_run():
+    # run 2026-11-09_2259: 最後の本文のあと、背景の切り替えと待ちだけが続く演出の途中で本文送りが効かず、S-01 として再起動した
+    engine = Engine(scaled_rules(1.0))
+    res = _verify_press(feed_command=True)
+    assert not res["responded"] and res["commands_ran"]
+    assert engine.feed(Event("harness", "op_result", {**res, "heartbeat_age": 0.5}, 0)) == []
+    res = _verify_press(feed_command=False)
+    assert not res["responded"] and not res["commands_ran"]
+    assert [i.rule_id for i in engine.feed(Event("harness", "op_result", {**res, "heartbeat_age": 0.5}, 0))] == ["S-01"]
 
 
 # --- 設定 ---
