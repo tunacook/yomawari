@@ -121,3 +121,18 @@ def test_warnings_get_one_row_per_kind_with_count_and_place(tmp_path):
 def test_other_minor_rules_still_get_one_row_per_rule(tmp_path):
     sec = _section(render(_summary(), [_issue("V-07", "minor", "a", "w"), _issue("V-07", "minor", "b", "w")], tmp_path))
     assert len([r for r in sec.splitlines() if "[V-07]" in r]) == 1
+
+
+def test_place_uses_command_line_after_last_text(tmp_path):
+    # 本文のない演出の途中で検出したら、場所はスクリプトが実際にいるコマンドの行。最後の本文の行も添える
+    state = {"scene": "main/b", "line_id": "main/a:10.0", "command_line_id": "main/b:19.0", "menus": [],
+             "top_modal": None}
+    text = render(_summary(), [_issue("S-01", "critical", "反応がありません", "w", state=state)], tmp_path)
+    row = next(r for r in _section(text).splitlines() if "[S-01]" in r)
+    assert "`main/b:19.0`" in row and "main/a:10.0" not in row
+    assert "行 `main/b:19.0`（最後の本文は `main/a:10.0`。" in text
+    # コマンドが進んでいなければ、今までどおり最後の本文の行
+    state = {**state, "command_line_id": None}
+    text = render(_summary(), [_issue("S-01", "critical", "反応がありません", "w", state=state)], tmp_path)
+    assert "`main/a:10.0`" in next(r for r in _section(text).splitlines() if "[S-01]" in r)
+    assert "行 `main/a:10.0`、" in text

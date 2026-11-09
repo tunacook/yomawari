@@ -113,3 +113,17 @@ def test_chosen_choice_survives_scene_change():
     st.feed(Event("game", "choices_done", {"id": "x", "index": 0}, 0.1, 0))
     st.feed(Event("game", "scene", {"name": "ending/bad"}, 0.2, 0))
     assert st.chosen == "x" and not st.handled_choices
+
+
+def test_snapshot_keeps_command_line_after_last_text():
+    # run 2026-11-09_2259: 最後の本文のあと、背景の切り替えと待ちのコマンドだけが進む演出の途中で S-01 を検出し、
+    # 場所が前の場面の最後の本文の行になった。本文のあとに進んだコマンドの行も残す
+    s = GameState()
+    s.feed(game("line", label="main/a", line_id="main/a:10.0", text="t"))
+    assert s.snapshot()["command_line_id"] is None
+    s.feed(game("command", name="goto", target="main/b", line_id="main/a:12.0"))
+    s.feed(game("command", name="wait", target="2.0", line_id="main/b:19.0"))
+    snap = s.snapshot()
+    assert snap["line_id"] == "main/a:10.0" and snap["command_line_id"] == "main/b:19.0"
+    s.feed(game("line", label="main/b", line_id="main/b:25.0", text="t"))
+    assert s.snapshot()["command_line_id"] is None

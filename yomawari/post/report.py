@@ -91,7 +91,8 @@ def _cell(text: str) -> str:
 
 def _place(issue: Issue) -> str:
     st = issue.evidence.get("state") or {}
-    where = issue.evidence.get("where") or st.get("line_id") or st.get("scene")
+    # 最後の本文のあとにコマンドが進んでいれば、スクリプトが実際にいるその行（本文のない演出の途中）
+    where = issue.evidence.get("where") or st.get("command_line_id") or st.get("line_id") or st.get("scene")
     return f"`{where}`" if where else "-"
 
 
@@ -236,8 +237,11 @@ def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
                 out.append(f"- 直前の操作（古い順）: {' → '.join(f'`{r}`' for r in i.evidence['recent'])}")
             st = i.evidence.get("state")
             if st:
+                line = f"行 `{st.get('line_id')}`"
+                if st.get("command_line_id"):
+                    line = f"行 `{st['command_line_id']}`（最後の本文は `{st.get('line_id')}`。そのあとはコマンドだけが進んでいた）"
                 out.append(
-                    f"- そのときの画面: scene `{st.get('scene')}`、行 `{st.get('line_id')}`、"
+                    f"- そのときの画面: scene `{st.get('scene')}`、{line}、"
                     f"menu {', '.join(f'`{m}`' for m in st.get('menus') or []) or 'なし'}、"
                     f"最前面のモーダル `{st.get('top_modal')}`"
                 )
