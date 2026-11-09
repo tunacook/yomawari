@@ -99,7 +99,7 @@ def test_relaunch_continues_from_newest_save():
     _show(st, "SaveLoadUI", LOAD, texts)
     w = _weights(s, st, now)
     assert w[f"click {_label(6)}"] == CLICK * BOOST
-    assert w[f"click {_label(4)}"] == CLICK
+    assert f"click {_label(4)}" not in w  # 古いセーブは押さない
     assert w["click SaveLoadUI/NextPageButton"] == CLICK
     # ロードしたら終える
     s.on_event(Event("game", "load", {"slot": "GameSave016", "phase": "start"}, 1))
@@ -223,7 +223,7 @@ def test_relaunch_looks_for_own_save_on_other_pages():
     _show(st, "SaveLoadUI", LOAD, page1)
     w = _weights(s, st, 0.0)
     assert w["click SaveLoadUI/NextPageButton"] == CLICK * BOOST
-    assert w[f"click {_label(4)}"] == CLICK and w[f"click {_label(7)}"] == CLICK
+    assert f"click {_label(4)}" not in w and f"click {_label(7)}" not in w  # 古いセーブは押さない
     assert any("22:44:09" in n and "ページを送って探した" in n for n in run.notes)
     # 2 ページ目に自分のセーブがある: それを先に押す
     page2 = {_label(i): f"{i + 10}. Empty" for i in range(9)}
@@ -231,7 +231,7 @@ def test_relaunch_looks_for_own_save_on_other_pages():
     page2[_label(6)] = "16.2026-11-06 22:44:09"
     _show(st, "SaveLoadUI", LOAD, page2)
     w = _weights(s, st, 0.0)
-    assert w[f"click {_label(6)}"] == CLICK * BOOST and w[f"click {_label(1)}"] == CLICK
+    assert w[f"click {_label(6)}"] == CLICK * BOOST and f"click {_label(1)}" not in w
     assert w["click SaveLoadUI/NextPageButton"] == CLICK
     # ページを送り尽くしても見つからなければ、見えているいちばん新しいものでよい
     _show(st, "SaveLoadUI", LOAD, page1)
@@ -242,3 +242,57 @@ def test_relaunch_looks_for_own_save_on_other_pages():
     s, st, run = _session(launch=1)
     _show(st, "SaveLoadUI", LOAD, page1)
     assert _weights(s, st, 0.0)[f"click {_label(4)}"] == CLICK * BOOST
+
+
+def _page(saved):
+    texts = {_label(i): f"{i + 1}. Empty" for i in range(9)}
+    texts.update(saved)
+    return texts
+
+
+def test_resume_never_presses_an_older_save_even_with_list_weight():
+    # 一覧の探索の重みが付いていても、いちばん新しいセーブ以外は候補に残さない
+    s, st, run = _session(launch=1)
+    _show(st, "SaveLoadUI", LOAD, _page({_label(1): "2. 2026-11-06 10:00:00", _label(2): "3. 2026-11-06 11:00:00"}))
+    cands = normal_candidates(st, s.run.guard, s.cfg["weights"], False)
+    cands = [op.scaled("list", 20.0) if op.target is not None and op.target.label == _label(1) else op for op in cands]
+    labels = {op.label for op in s._apply_resume(cands, 0.0)}
+    assert f"click {_label(1)}" not in labels and f"click {_label(2)}" in labels
+
+
+def test_resume_accepts_visible_save_when_there_is_no_next_page():
+    # 探すページがなければ、見えているいちばん新しいセーブでよい（はじめから遊び直すより近い）
+    s, st, run = _session(launch=1)
+    run.saved_wall = time.mktime((2026, 11, 6, 22, 44, 9, 0, 0, -1))
+    no_next = [b for b in LOAD if b["name"] != "NextPageButton"]
+    _show(st, "SaveLoadUI", no_next, _page({_label(4): "5. 2026-11-06 22:00:47"}))
+    assert _weights(s, st, 0.0)[f"click {_label(4)}"] == CLICK * BOOST
+
+
+def test_unread_slots_are_not_pressed_after_saved_ones_were_seen():
+    # 実機: ページを送った直後、文字を読む前のスロットを押して、古いセーブをロードした
+    s, st, run = _session(launch=0)
+    _show(st, "SaveLoadUI", LOAD, _page({_label(6): "7. 2026-11-06 10:46:59"}))
+    _weights(s, st, 0.0)
+    _show(st, "SaveLoadUI", LOAD, {})  # 次のページ。文字はまだ読めていない
+    w = _weights(s, st, 0.0)
+    assert not [k for k in w if "SaveLoadSlot" in k]
+    assert w["click SaveLoadUI/NextPageButton"] > 0
+    # 読めたら、空のスロットは押せる
+    _show(st, "SaveLoadUI", LOAD, _page({}))
+    assert _weights(s, st, 0.0)[f"click {_label(5)}"] > 0
+
+
+def test_unread_slots_are_pressable_before_any_saved_slot_was_seen():
+    s, st, run = _session(launch=0)
+    _show(st, "SaveLoadUI", LOAD, {})
+    assert _weights(s, st, 0.0)[f"click {_label(5)}"] > 0
+
+
+def test_enter_is_not_used_while_saved_slots_are_visible():
+    # 実機: セーブ画面でフォーカスのあるスロットを Enter で押し、古いセーブをロードした
+    s, st, run = _session(launch=0)
+    _show(st, "SaveLoadUI", LOAD, _page({_label(6): "7. 2026-11-06 10:46:59"}))
+    assert "key enter" not in _weights(s, st, 0.0)
+    _show(st, "SaveLoadUI", LOAD, _page({}))
+    assert "key enter" in _weights(s, st, 0.0)  # 空のスロットだけなら使う

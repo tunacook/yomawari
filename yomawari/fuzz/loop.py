@@ -109,6 +109,7 @@ class FuzzRun:
     saved_t: float | None = None  # 最後にセーブした時刻（流れの外。ゲームが流れの中で自分でするセーブは除く）
     saved_wall: float | None = None  # saved_t と同じときの time.time()（スロットの文字の日時と比べる。起動し直しても残す）
     resume_pages: int = 0  # 続きから遊ぶあいだに、ページを送った回数
+    slot_stems: set[str] = field(default_factory=set)  # セーブ済みと読めたスロットの名前（#N を除く）。文字を読む前の同じ名前のボタンも押さない
     save_first_until: float | None = None  # 終了ボタンを試す前にセーブしようとしているあいだ（この時刻まで）
     continue_previous: bool = False  # ランの最初の起動でも続きから遊ぶ（--continue）
     # 巻き戻しのエッジケース（fuzz/rollback.py）
@@ -282,6 +283,18 @@ class FuzzRun:
             f"終了を期待する操作 {s['expect_exit']} 回、外部を開く操作 {s['external']} 回、"
             f"押せなかった {s['error']} 回。押したボタン・選択肢 {len(self.labels)} 種類"
         )
+
+
+def _slot_stem(label: str) -> str:
+    """同じ名前のボタンの番号（#N）を除いた名前。"""
+    return re.sub(r"#\d+$", "", label)
+
+
+def _presses(op: Op, labels: set[str]) -> bool:
+    """op が labels のボタンを押すか。Enter はフォーカスのあるボタンを押すので、labels が見えている画面では押すものとする。"""
+    if not labels:
+        return False
+    return op.label == "key enter" or (op.target is not None and op.target.label in labels)
 
 
 class FuzzSession:
@@ -1006,26 +1019,37 @@ class FuzzSession:
             self._end_resume(f"{float(self.cfg['resume_sec']):g} 秒のうちにロードも本文の始まりもなかった")
         targets = [op.target for op in cands if op.target is not None and op.target.kind == "button"]
         saved = [t for t in targets if hints.saved(t)]
+        run.slot_stems.update(_slot_stem(t.label) for t in saved)
+        # 文字を読む前のスロットは、セーブ済みかどうか分からない。ページを送った直後に押して古いセーブをロードしないように、
+        # セーブ済みと同じように扱う（文字は画面が落ち着けば読める）
+        unread = {t.label for t in targets if not t.text and _slot_stem(t.label) in run.slot_stems}
         if run.resume_until is None:
             low = float(self.cfg["saved_slot_factor"])
-            if not saved or low == 1.0:
+            labels = {t.label for t in saved} | unread
+            if not labels or low == 1.0:
                 return cands
-            labels = {t.label for t in saved}
             if low <= 0:
-                return [op for op in cands if op.target is None or op.target.label not in labels]
+                return [op for op in cands if not _presses(op, labels)]
             return [op.scaled("saved_slot", low)
                     if op.target is not None and op.target.label in labels else op for op in cands]
         boost, low = float(self.cfg["resume_factor"]), float(self.cfg["resume_new_game_factor"])
         newest = newest_slots({t.label: t.text for t in saved}) or {t.label for t in saved}
         empty = inactive(targets, run.inactive_words, run.masked_chars)
         paging = not saved and bool(stuck_rows(self.state, empty))
-        if saved and self._older_than_own_save(newest, {t.label: t.text for t in saved}):
+        # 次のページがなければ探せないので、見えているものでよいとする
+        if saved and any(hints.next_page(t) for t in targets) and \
+                self._older_than_own_save(newest, {t.label: t.text for t in saved}):
             # 見えているセーブは、どれもこのランで最後にセーブしたときより古い。人は自分がどこにセーブしたかを覚えていて、
             # ほかのページを探す（run 2026-11-06_2157: 22:44 に 16 番へセーブしたのに、起動し直したあと 1 ページ目の
             # 22:00 のセーブをロードし、44 分前に戻った）
             newest, paging = set(), True
+        # いちばん新しいセーブ以外は押さない。一覧の探索（list）の重みで古いセーブを選ぶと、何章も戻る
+        # （run 2026-11-09_1358: 15:58 のセーブがあるのに 14:54 のセーブをロードし、5 章戻って 30 分やり直した）
+        stale = ({t.label for t in saved} - newest) | unread
         out = []
         for op in cands:
+            if _presses(op, stale):
+                continue
             t = op.target
             f = 1.0
             if t is not None and t.kind == "button":
