@@ -182,6 +182,7 @@ class FuzzRun:
     # 質問ごとの正解（DESIGN.md §9「答えの選び方」）。質問（流れの名前, 始めたときの行）→ プロファイルの answers のうち当たったもの
     ctx_answers: dict[Any, tuple[Answer, ...]] = field(default_factory=dict)
     wrong_left: dict[Any, int] = field(default_factory=dict)  # 質問 → この流れでまだわざと答える外れの数
+    wrong_noted: set[Any] = field(default_factory=set)  # 正解のはずが外れだった組み合わせ（「ハーネスの記録」に書いたもの）
     wrong_given: set[Any] = field(default_factory=set)  # わざと答えた外れ (質問, 選んだものの並び)
     advice_seen: set[Any] = field(default_factory=set)
     # 画面の文字を読む（fuzz/reading.py）
@@ -696,8 +697,10 @@ class FuzzSession:
         known = self._answer_options(options, texts)  # 正解が分かっている質問なら、正解に沿う候補
         wrong = run.wrong_left.get(tracker.ctx, 0) > 0  # 正解の前に、わざと外れを答える
         if known and not wrong:
-            # 正解は、このランで一度答えて試し終えた枝でも選ぶ（タイトルから遊び直して同じ質問に着いたなど）
-            fresh |= known
+            # 正解は、このランで一度答えて試し終えた枝でも選ぶ（タイトルから遊び直して同じ質問に着いたなど）。ただし、この
+            # ランでゲームが外れと判定したものは選び直さない。正解の照らし方を誤ったとき（読んだ文字の取り違え、プロファイルの
+            # 正解が古い）に、同じ外れを答え続けないため（run 2026-11-10_2135: 同じ外れを 199 回答えた）
+            fresh |= {o for o in known if (tracker.ctx, (*tracker.path, o)) not in tracker.wrong_now}
         elif known and wrong and fresh <= known and options - known:
             # わざと外れを答えるのに、まだ答えたことのない外れがない: 外れと分かっているもののうち、選んだ回数の少ないもの
             fresh = tracker.least_picked(options - known)
@@ -938,14 +941,22 @@ class FuzzSession:
         tracker.deliberate_wrong += 1
 
     def _judged(self) -> None:
-        """答えの当たり外れが分かった。わざと答えた外れなのに先へ進んだら、「ハーネスの記録」に書く。"""
+        """答えの当たり外れが分かった。わざと答えた外れなのに先へ進んだら、また正解に沿うはずの答えなのに同じ質問に
+        戻ったら、「ハーネスの記録」に書く（後者は、同じ組み合わせで1回だけ）。"""
         run, tracker = self.run, self.run.flow
         for (ctx, path), right in tracker.judged:
+            shown = " → ".join(self._text_of(p) or p for p in path)
             if right and (ctx, path) in run.wrong_given:
-                shown = " → ".join(self._text_of(p) or p for p in path)
                 tracker.events.append(
                     f"流れ「{ctx[0]}」の `{ctx[1]}` で、外れのはずの答え（{shown}）のあと、同じ質問に戻らずに先へ進んだ"
                     "（プロファイルの正解が古いか、ゲームの判定の不具合の可能性がある）")
+            elif (not right and (ctx, path) not in run.wrong_given and (ctx, path) not in run.wrong_noted
+                    and self._is_answer(ctx, path)):
+                run.wrong_noted.add((ctx, path))
+                tracker.events.append(
+                    f"流れ「{ctx[0]}」の `{ctx[1]}` で、正解のはずの答え（{shown}）のあと、同じ質問に戻った。この組み合わせは"
+                    "このランでは選び直さない（プロファイルの正解が古いか、ハーネスが選んだものの文字を読み違えたか、ゲームの判定"
+                    "の不具合の可能性がある）")
         tracker.judged.clear()
 
     def _advice(self, pick: set[str], texts: dict[str, str]) -> set[str]:
