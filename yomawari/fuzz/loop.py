@@ -111,6 +111,8 @@ class FuzzRun:
     resume_pages: int = 0  # 続きから遊ぶあいだに、ページを送った回数
     slot_stems: set[str] = field(default_factory=set)  # セーブ済みと読めたスロットの名前（#N を除く）。文字を読む前の同じ名前のボタンも押さない
     save_first_until: float | None = None  # 終了ボタンを試す前にセーブしようとしているあいだ（この時刻まで）
+    save_first_checked: float | None = None  # セーブしようとしているあいだ、最後に見た時刻（流れの途中の時間を数えないため）
+    exit_unsaved: bool = False  # セーブできないまま終了を試すことにした（流れの途中では終了を試さない）
     continue_previous: bool = False  # ランの最初の起動でも続きから遊ぶ（--continue）
     # 巻き戻しのエッジケース（fuzz/rollback.py）
     rollback: RollbackWatch = field(default_factory=RollbackWatch)
@@ -468,6 +470,7 @@ class FuzzSession:
                 and self.run.resume_until is None):
             self.run.saved_t = time.monotonic()
             self.run.saved_wall = time.time()
+            self.run.exit_unsaved = False
             if self.run.save_first_until is not None:
                 self.run.save_first_until = None
                 self.run.notes.append(f"終了ボタンを試す前にセーブした（{d.get('slot')}、起動 #{self.launch}）")
@@ -1044,6 +1047,12 @@ class FuzzSession:
             # ほかのページを探す（run 2026-11-06_2157: 22:44 に 16 番へセーブしたのに、起動し直したあと 1 ページ目の
             # 22:00 のセーブをロードし、44 分前に戻った）
             newest, paging = set(), True
+        if paging:
+            # ページを送って探すと決めたら、一覧の探索（台帳を埋める・向きを決めずに探す）はしない。起動し直した直後は
+            # 台帳が空で、空のスロットが一覧の目標（重み list_factor）になり、ページ送りより先に選ばれる
+            # （run 2026-11-10_0957: ページを送ると決めたのに、空のスロットを押す一覧の探索が 97% で選ばれ、ページを
+            # 一度も送らないまま「はじめから」を押した）
+            cands = [op for op in cands if op.by not in ("list", "blind")]
         # いちばん新しいセーブ以外は押さない。一覧の探索（list）の重みで古いセーブを選ぶと、何章も戻る
         # （run 2026-11-09_1358: 15:58 のセーブがあるのに 14:54 のセーブをロードし、5 章戻って 30 分やり直した）
         stale = ({t.label for t in saved} - newest) | unread
@@ -1087,19 +1096,31 @@ class FuzzSession:
         run, fresh = self.run, float(self.cfg["save_before_exit_sec"])
         if fresh <= 0 or run.resume_until is not None:
             return True
+        if run.exit_unsaved and run.flow.active is not None:
+            # セーブできないまま終了を試すことにしたが、流れの途中では試さない（流れが終わるのを待つ）
+            return False
         if run.saved_t is not None and now - run.saved_t <= fresh:
             return True
         if run.save_first_until is None:
             if run.flow.active is not None:
                 return False
-            run.save_first_until = now + float(self.cfg["save_first_sec"])
+            run.save_first_until, run.save_first_checked = now + float(self.cfg["save_first_sec"]), now
             return False
+        if run.flow.active is not None:
+            # 流れの途中の時間は数えない。流れの操作が先に選ばれてセーブの操作は選ばれず、流れの途中で時間切れになって
+            # 終了を試した（run 2026-11-10_0957: 流れの外にいた一瞬に数え始め、そのあとずっと流れの途中で、一度もセーブ
+            # しないまま流れの途中で終了を試し、約 2 時間前のセーブに戻った）
+            run.save_first_until += now - (now if run.save_first_checked is None else run.save_first_checked)
+            run.save_first_checked = now
+            return False
+        run.save_first_checked = now
         if now < run.save_first_until:
             return False
         run.notes.append(f"終了ボタンを試す前に {float(self.cfg['save_first_sec']):g} 秒セーブしようとしたが、セーブできなかった"
                          f"（起動 #{self.launch}。起動し直したら、はじめから遊ぶことがある）")
         run.save_first_until = None
         run.saved_t = now  # あきらめた。次の終了の間隔まで、セーブしようとしない
+        run.exit_unsaved = True
         return True
 
     def _apply_save_first(self, cands: list[Op]) -> list[Op]:

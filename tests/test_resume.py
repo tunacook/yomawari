@@ -1,5 +1,6 @@
 """続きから遊ぶ・セーブ済みのスロット（fuzz/resume.py、DESIGN.md §9「続きから遊ぶ」）。"""
 
+import dataclasses
 import random
 import time
 from pathlib import Path
@@ -12,7 +13,7 @@ from yomawari.fuzz.decider import RandomDecider
 from yomawari.fuzz.guard import Guard
 from yomawari.fuzz.loop import FuzzRun, FuzzSession
 from yomawari.fuzz.looks import load_inactive_words
-from yomawari.fuzz.ops import normal_candidates
+from yomawari.fuzz.ops import Op, normal_candidates
 from yomawari.fuzz.resume import load_save_hints, newest_slots, older_than, stamp_key
 from yomawari.fuzz.roles import RoleBook, load_role_hints
 from yomawari.input.pointer import Pointer
@@ -206,6 +207,36 @@ def test_save_first_gives_up_and_skips_inside_flow_saves():
     assert any("セーブできなかった" in n for n in run.notes)
 
 
+def test_save_first_does_not_count_time_inside_flow():
+    # run 2026-11-10_0957: 流れの外にいた一瞬にセーブしようとし始め、そのあとずっと流れの途中だった。流れの操作が先に
+    # 選ばれて一度もセーブしないまま時間切れになり、流れの途中で終了を試して、約 2 時間前のセーブに戻った
+    s, st, run = _session(launch=0)
+    limit = FUZZ_DEFAULTS["save_first_sec"]
+    assert not s._saved_for_exit(0.0) and run.save_first_until == limit
+    run.flow.active = object()
+    assert not s._saved_for_exit(10.0)
+    assert not s._saved_for_exit(limit + 100.0)  # 流れの途中は時間切れにしない
+    run.flow.active = None
+    assert not s._saved_for_exit(limit + 101.0)  # 流れの途中だった 0〜limit+100 秒は数えない
+    assert not s._saved_for_exit(limit + 100.0 + limit - 1)
+    assert s._saved_for_exit(limit + 100.0 + limit)  # 流れの外で limit 秒たったら、あきらめて終了を試す
+    assert any("セーブできなかった" in n for n in run.notes)
+
+
+def test_exit_without_save_waits_for_flow_to_end():
+    # セーブできないまま終了を試すことにしても、流れの途中では試さない。セーブしたら、流れの途中でも今までどおり試せる
+    s, st, run = _session(launch=0)
+    assert not s._saved_for_exit(0.0)
+    assert s._saved_for_exit(run.save_first_until + 1)
+    run.flow.active = object()
+    assert not s._saved_for_exit(run.saved_t + 1)
+    run.flow.active = None
+    assert s._saved_for_exit(run.saved_t + 2)
+    s.on_event(Event("game", "save", {"slot": "GameSave001", "phase": "start"}, 0))
+    run.flow.active = object()
+    assert s._saved_for_exit(time.monotonic())
+
+
 def test_stamp_key_treats_impossible_date_as_unreadable():
     # run 2026-11-06_2157: 「8.2026-14-06 22:00:43」と読めた。月が 14 では、ほかのどれより新しくなってしまう
     assert stamp_key("8.2026-14-06 22:00:43") == (0, 0, 0, 22, 0, 43)
@@ -311,6 +342,29 @@ def test_resume_never_presses_an_older_save_even_with_list_weight():
     cands = [op.scaled("list", 20.0) if op.target is not None and op.target.label == _label(1) else op for op in cands]
     labels = {op.label for op in s._apply_resume(cands, 0.0)}
     assert f"click {_label(1)}" not in labels and f"click {_label(2)}" in labels
+
+
+def test_resume_pages_instead_of_filling_list_ledger():
+    # run 2026-11-10_0957: 起動し直したあと、見えているセーブは自分の最後のセーブより古く、ページを送ると決めたのに、
+    # 一覧の探索（台帳を埋める）が空のスロットを目標にして 97% で選ばれ、ページを一度も送らないまま「はじめから」を押した
+    s, st, run = _session(launch=1)
+    run.saved_wall = time.mktime((2026, 11, 10, 12, 27, 17, 0, 0, -1))
+    _show(st, "SaveLoadUI", LOAD, _page({_label(4): "2026-115101 10:14:39"}))
+    cands = normal_candidates(st, s.run.guard, s.cfg["weights"], False)
+    empty = next(op for op in cands if op.target is not None and op.target.label == _label(1))
+    cands.append(dataclasses.replace(empty, by="list", group="list", goal=_label(1)).scaled("list", 20.0))
+    cands.append(Op("drag", arg="down", weight=CLICK, by="blind", group="search"))
+    out = s._apply_resume(cands, 0.0)
+    assert not [op for op in out if op.by in ("list", "blind")]
+    w = {op.label: op.weight for op in out}
+    assert w["click SaveLoadUI/NextPageButton"] == CLICK * BOOST
+    assert w["click SaveLoadUI/NextPageButton"] > w[f"click {_label(1)}"]
+    # ページを送らないとき（見えているセーブが新しい）は、一覧の探索をそのまま残す
+    s, st, run = _session(launch=1)
+    _show(st, "SaveLoadUI", LOAD, _page({_label(4): "5. 2026-11-10 10:14:39"}))
+    cands = normal_candidates(st, s.run.guard, s.cfg["weights"], False)
+    cands.append(Op("drag", arg="down", weight=CLICK, by="list", group="list", goal=_label(8)))
+    assert [op for op in s._apply_resume(cands, 0.0) if op.by == "list"]
 
 
 def test_resume_accepts_visible_save_when_there_is_no_next_page():
