@@ -323,6 +323,7 @@ class FlowTracker:
         # 外れと分かった組み合わせ（同じ質問にまた戻ってきた、その前の答え）。進め方の経験と共有し、ランをまたいで覚える
         self.wrong: set[tuple[Ctx, Path]] = set()
         self.wrong_loaded = 0  # 前のランまでに外れと分かっていた組み合わせの数
+        self.wrong_now: set[tuple[Ctx, Path]] = set()  # このランで外れと分かった組み合わせ（ゲームが答えを外れと判定した）
         # 正解と分かった組み合わせ（答えたあと、同じ質問に戻らずに、ゲームが出した別の質問に着いた、その前の答え）。
         # 進め方の経験と共有し、ランをまたいで覚える（DESIGN.md §9「答えの選び方」）
         self.right: set[tuple[Ctx, Path]] = set()
@@ -380,6 +381,7 @@ class FlowTracker:
                         # 同じ質問に戻ってきた: 前の答えは外れだった。ランをまたいで覚える
                         # （行き止まり（言葉がまだない思い出）は、開示の状態で変わるので覚えない）
                         self.wrong.add(self.last_leaf)
+                        self.wrong_now.add(self.last_leaf)
                         self.right.discard(self.last_leaf)
                         self.judged.append((self.last_leaf, False))
                     elif self.last_leaf is not None and (f.start.by == "game" or f.start.choices):
@@ -676,4 +678,4 @@ class FlowTracker:
             out.append(f"流れの答えで、前のランまでに正解と分かっていた組み合わせは {self.right_loaded} 通り。"
                        f"このランで新しく正解と分かったのは {max(new_right, 0)} 通り"
                        "（runs/_experience/<ゲーム>.json の flow_right に覚える）")
-        return out + [e for e in self.events if "すべて試しても" in e or "わざと外れ" in e or "外れのはず" in e]
+        return out + [e for e in self.events if "すべて試しても" in e or "わざと外れ" in e or "外れのはず" in e or "正解のはず" in e]

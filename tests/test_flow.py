@@ -1035,6 +1035,41 @@ def test_deliberate_wrong_answer_then_the_right_one():
     assert w["click choices/いいえ"] == click * k
 
 
+def test_answer_judged_wrong_is_not_picked_again_even_if_it_looks_right():
+    # 正解に沿うはずの答えのあと同じ質問に戻ったら（照らし方を誤った・プロファイルの正解が古い）、このランでは選び直さず、
+    # 「ハーネスの記録」に書く（run 2026-11-10_2135: 外れの言葉を正解とみなして 199 回答えた）
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    s, st, run = _answer_session({"wrong_answer_prob": 0.0})
+    _ask_yes_no(s, st)
+    w = _weights(s, st)
+    assert w["click choices/いいえ"] == click * k
+    _choose(s, run, "いいえ", "b")
+    _feed(st, "choices_done")
+    _line(s, st, "main/s1:11", "ちがうよ")
+    _feed(st, "choices", items=YES_NO)
+    w = _weights(s, st)
+    assert w["click choices/はい"] == click * k and w["click choices/いいえ"] < click
+    # どちらも外れなら、選んだ回数の少ないものから選び直す（記録は組み合わせごとに1回）
+    _choose(s, run, "はい", "a")
+    _feed(st, "choices_done")
+    _line(s, st, "main/s1:12", "ちがうよ")
+    _feed(st, "choices", items=YES_NO)
+    _weights(s, st)
+    _choose(s, run, "いいえ", "b")
+    _feed(st, "choices_done")
+    _line(s, st, "main/s1:13", "ちがうよ")
+    _feed(st, "choices", items=YES_NO)
+    _weights(s, st)
+    notes = [n for n in run.flow.summary() if "正解のはずの答え（いいえ）" in n]
+    assert len(notes) == 1 and "このランでは選び直さない" in notes[0]
+    # 前のランまでに外れと覚えただけ（このランでは判定されていない）なら、正解に沿うものを選ぶ
+    s, st, run = _answer_session({"wrong_answer_prob": 0.0})
+    run.flow.wrong.add((("選択肢で答える", "main/s1:10"), ("いいえ",)))
+    _ask_yes_no(s, st)
+    w = _weights(s, st)
+    assert w["click choices/いいえ"] == click * k
+
+
 def test_right_answer_is_learned_and_unexpected_progress_is_noted():
     # 答えたあと、同じ質問に戻らずに、ゲームが出した別の質問に着いたら、その答えを正解として覚える。
     # わざと答えた外れでそうなったら、「ハーネスの記録」に書く（プロファイルの正解が古いか、ゲームの判定の不具合）

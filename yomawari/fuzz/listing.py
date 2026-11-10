@@ -41,7 +41,7 @@ class Item:
     name: str
     rect: Rect  # 最後に受け取った矩形
     text: str | None = None  # 見えたときに画面から読んだ文字（最後に読んだもの）
-    readings: list[str] = field(default_factory=list)  # これまでに読んだ文字（重なりなし）。読むたびに番号だけ・題名だけと変わるため
+    readings: list[str] = field(default_factory=list)  # 画面を開いてから読んだ文字（重なりなし）。読むたびに番号だけ・題名だけと変わるため
     status: str = UNKNOWN  # 押した結果で決める（見た目では変えない）
     shown: bool = False  # 画面を開いてから、見えたことがあるか（閉じたら False に戻す）
 
@@ -133,6 +133,11 @@ class Ledger:
         for item in self.items.values():
             if item.menu in gone:
                 item.shown = False
+                # 読んだ文字の書き方の違い（番号だけ・題名だけ）を覚えるのは、開いているあいだだけ。次に開いたときは、同じ
+                # ボタンに別の項目が入っていることがある（言葉の一覧は、選んだ思い出ごとに中身が変わる）。ほかの項目で読んだ
+                # 文字が残ると、それで正解に当たってしまう（run 2026-11-10_2135: ほかの思い出で読んだ言葉が残り、外れの言葉を
+                # 正解とみなして 199 回答えた）。最後に読んだ文字（text）は、前の手順で選んだものを照らすために残す
+                item.readings.clear()
         self.goals = {k: g for k, g in self.goals.items() if k.split("/", 1)[0] not in gone}
         self.unreachable = {label for label in self.unreachable if label.split("/", 1)[0] not in gone}
         self.dead = Counter({k: n for k, n in self.dead.items() if k[0] not in gone})

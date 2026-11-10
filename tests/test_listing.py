@@ -92,6 +92,26 @@ def test_ledger_remembers_text_and_status():
     assert ledger.items["ListUI/Slot#1"].status == "masked"
 
 
+def test_readings_are_kept_only_while_the_list_is_open():
+    # 読んだ文字の書き方の違いは、開いているあいだだけ覚える。閉じて開き直すと、同じボタンに別の項目が入っていることがある
+    # （run 2026-11-10_2135: ほかの思い出の言葉の一覧で読んだ文字が残り、別の言葉を正解とみなした）
+    st = _grid()
+    ledger = Ledger()
+    st.set_read_text({"ListUI/Slot": "No.002"})
+    ledger.sync(st, "?？")
+    st.set_read_text({"ListUI/Slot": "屋上の昼"})
+    ledger.sync(st, "?？")
+    assert ledger.items["ListUI/Slot"].readings == ["No.002", "屋上の昼"]
+    st.feed(Event("game", "menu_close", {"name": "ListUI"}, 0))
+    ledger.closed(set(st.menus))
+    # 最後に読んだ文字は残す（前の手順で選んだものを照らすため）
+    assert ledger.items["ListUI/Slot"].readings == [] and ledger.items["ListUI/Slot"].text == "屋上の昼"
+    _grid(st=st)
+    st.set_read_text({"ListUI/Slot": "公園"})
+    ledger.sync(st, "?？")
+    assert ledger.items["ListUI/Slot"].readings == ["公園"]
+
+
 def test_fill_goes_to_the_nearest_unshown_and_keeps_it():
     # 台帳を埋める: まだ見えていない項目のうち、いちばん近いものを目標にして見えるところまで動かす（押さない）。
     # 動かすたびに近さが変わっても、見にいっている途中の項目を続ける（逆の向きへ動かして行き来しないように）
