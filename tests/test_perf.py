@@ -1,4 +1,4 @@
-"""パフォーマンスの判定（R-01〜R-11、detect/perf.py）を、rules.yaml の値のまま、時刻を与えて確かめる。"""
+"""パフォーマンスの判定（R-01〜R-12、detect/perf.py）を、rules.yaml の値のまま、時刻を与えて確かめる。"""
 
 from __future__ import annotations
 
@@ -244,6 +244,41 @@ def test_r01_memory_that_is_released_is_not_reported(repo_rules, repo_perf):
         for n in range(300):
             s.step(1, rss=1600 + 40 * k + (300 if n % 60 < 10 else 0))
     assert s.ids().count("R-01") == 1
+
+
+def test_r12_fps_drop_with_memory_growth_in_a_launch(repo_rules, repo_perf):
+    # 起動し始め（計り始めて 5 分後の 5 分間）より終わり（最後の 15 分）のほうが、FPS が 10% 以上落ち、メモリの下限も
+    # 200MB 以上増えていたら出す。メモリが増えただけ・FPS が落ちただけでは出さない（実害があるときだけ）。
+    # 起動直後（タイトル画面）の低いメモリとは比べない
+    def run(totals, fps_end=60.0):
+        s = Sim(repo_rules, repo_perf).step(30)
+        n_all = len(totals)
+        for n, v in enumerate(totals):
+            fps = fps_end if n >= n_all - 900 else 60.0
+            s.step(1, fps=fps, total=v + (150 if n % 60 < 10 else 0))  # 読み込みで一時的に上がる
+        return s, [i for i in s.engine.finish(s.t) if i.rule_id == "R-12"]
+
+    title, play = [200] * 290, [330] * 600
+    grow = title + play + [330 + n * 0.1 for n in range(2400)] + [580] * 1200
+    s, issues = run(grow, fps_end=50.0)
+    assert len(issues) == 1 and "60.0 → 50.0" in issues[0].detail and "330 → 580MB" in issues[0].detail
+    rows = s.engine.perf.launch_memory()
+    assert rows[0]["total"] == (330, 580) and rows[0]["fps"] == (60.0, 50.0)
+    lines = s.engine.perf.report_lines()
+    assert "### 起動ごとのメモリと FPS" in lines
+    assert any(line.startswith("| #0 | ") and "60.0 → 50.0" in line and "330 → 580（+250）" in line for line in lines)
+    # メモリが増えても、FPS が落ちていなければ出さない
+    _, issues = run(grow)
+    assert not issues
+    # FPS が落ちても、メモリが増えていなければ出さない（R-05 などで見る）
+    _, issues = run(title + [330] * 4200, fps_end=50.0)
+    assert not issues
+    # 途中で増えても、終わりの 15 分のうちに解放されて下がれば増えたとしない
+    _, issues = run(title + play + [600] * 2700 + [340] * 300 + [600] * 300, fps_end=50.0)
+    assert not issues
+    # 短い起動（30 分未満）は見ない
+    _, issues = run(title + [330] * 300 + [600] * 1100, fps_end=50.0)
+    assert not issues
 
 
 def test_r09_scene_heavier_than_the_rest_and_r10_history(repo_rules, repo_perf, tmp_path):

@@ -275,7 +275,26 @@ rules:
       gpu_max: 15
       sec: 10
 
-# パフォーマンスの判定（R-01〜R-11。R-06 は欠番）で共通の設定
+  - id: R-12
+    severity: minor
+    title: 起動しているあいだに FPS が落ち、メモリも増えた
+    description: >-
+      起動ごとに、起動し始め（計り始めて start_sec 秒たってからの bucket_sec 秒）と終わり（終わりの end_sec 秒）を比べ、
+      FPS の中央値が fps_drop_ratio 以上落ち、メモリ（metrics に書いた種類）の下限も min_rise_mb 以上増えていた。メモリの
+      終わりの値は、終わりの end_sec 秒にかかる bucket_sec 秒ごとの最小のうち、いちばん低いもの（途中で増えても、終わりまでに
+      解放されて下がっていれば増えたとしない）。メモリが増えただけでは出さない（遊ぶ人に見える影響がない。下限が下がらずに
+      増え続けるものは R-01 で見る）。FPS は遷移中・起動や scene の直後を除く。起動していた時間が min_span_sec 秒より短い
+      起動は見ない。ランの終わりに、起動ごとに1回判定する
+    params:
+      metrics: [total]
+      start_sec: 300
+      bucket_sec: 300
+      end_sec: 900
+      min_span_sec: 1800
+      fps_drop_ratio: 0.1
+      min_rise_mb: 200
+
+# パフォーマンスの判定（R-01〜R-12。R-06 は欠番）で共通の設定
 perf:
   # 起動（boot）してからこの秒数は計らない（読み込み・シェーダーのコンパイル）
   warmup_sec: 30
