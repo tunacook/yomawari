@@ -1,7 +1,8 @@
-"""パフォーマンスの判定（DESIGN.md §10「パフォーマンス」、R-01〜R-11）。
+"""パフォーマンスの判定（DESIGN.md §10「パフォーマンス」、R-01〜R-12）。
 
 GPU は、FPS が落ちていなければ使っても構わないので、GPU の上がり方は FPS も落ちたときだけ問題にする（R-08〜R-10）。
-メモリは、短いあいだの増減（読み込みで増えて、あとで解放される）は見ず、下限が下がらずに増え続けるとき（R-01）だけ問題にする。
+メモリは、短いあいだの増減（読み込みで増えて、あとで解放される）は見ず、下限が下がらずに増え続けるとき（R-01）と、
+起動しているあいだに FPS が大きく落ち、メモリも解放されないまま増えていたとき（R-12）だけ問題にする。
 逆に、GPU をほとんど使わずに CPU ばかり使っているのは、描画以外の処理が重いので問題にする（R-11）。
 
 ゲームの heartbeat（FPS・いちばん長かったフレーム・メモリ）と、ハーネスの proc_stats（ゲームの CPU・GPU・RSS・スレッド数と、
@@ -24,7 +25,7 @@ from typing import Any
 
 from ..events import Event, Issue
 
-PERF_RULES = ("R-01", "R-02", "R-03", "R-04", "R-05", "R-07", "R-08", "R-09", "R-10", "R-11")
+PERF_RULES = ("R-01", "R-02", "R-03", "R-04", "R-05", "R-07", "R-08", "R-09", "R-10", "R-11", "R-12")
 MB = 1024 * 1024
 
 # 判定から外した理由 → レポートでの名前
@@ -144,7 +145,7 @@ def load_history(runs_dir: Path, build: str, machine: str, current: Path | None,
 
 
 class PerfMonitor:
-    """R-01〜R-11 をまとめて判定する（Engine から Detector と同じように呼ぶ）。"""
+    """R-01〜R-12 をまとめて判定する（Engine から Detector と同じように呼ぶ）。"""
 
     def __init__(self, rules: dict[str, Any], perf: dict[str, Any]) -> None:
         self.rules = rules  # rule_id → Rule（PERF_RULES のうち rules.yaml にあるもの）
@@ -743,7 +744,76 @@ class PerfMonitor:
     def finish(self, now: float, wall: str = "") -> list[Issue]:
         win = float(self.p("R-08", "window_sec")) if self.has("R-08") else 3.0
         hitches = self._flush_hitches(now, final=True) if self.has("R-07") else []
-        return hitches + self._flush_r08(win, final=True) + self._by_scene(now, wall) + self._vs_history(now, wall)
+        return (hitches + self._flush_r08(win, final=True) + self._by_scene(now, wall) + self._vs_history(now, wall)
+                + self._launch_growth(now, wall))
+
+    # --- R-12: 起動しているあいだに FPS が落ち、メモリも増えた（ランの終わり） ---
+
+    def _r12(self, name: str, default: float) -> float:
+        # レポートの「起動ごとのメモリ」は、R-12 を rules.yaml から外しても出す
+        return float(self.p("R-12", name)) if self.has("R-12") else default
+
+    def launch_memory(self) -> list[dict[str, Any]]:
+        """起動ごとの、起動し始めと終わりのメモリ（MB）と FPS。メモリは bucket_sec 秒ごとの下限（最小）。
+
+        起動し始めは、計り始めて（warmup_sec のあと）start_sec 秒たってからの区切りの下限（起動の直後はタイトル画面で、
+        本編を読み込む前なので低い。そこから比べると、読み込みの分だけでどの起動も増えたことになる）。終わりは、終わりの
+        end_sec 秒にかかる区切りの下限のうち、いちばん低いもの（途中で増えても、終わりまでに解放されて下がれば、その値）。
+        FPS は、同じ始めの区切りと、終わりの end_sec 秒の中央値（遷移中・起動や scene の直後は除く）。
+        両方を取れるだけ起動していなければ、メモリと FPS の値は入れない。"""
+        start, bucket, tail = self._r12("start_sec", 300.0), self._r12("bucket_sec", 300.0), self._r12("end_sec", 900.0)
+        by: dict[int, list[Sample]] = {}
+        for s in self.samples:
+            by.setdefault(s.launch, []).append(s)
+        out: list[dict[str, Any]] = []
+        for launch, xs in sorted(by.items()):
+            t0, t1 = xs[0].t, xs[-1].t
+            row: dict[str, Any] = {"launch": launch, "sec": t1 - t0, "last": xs[-1]}
+            if t1 - t0 >= start + bucket + tail:
+                first_b, end_b = int(start // bucket), int((t1 - tail - t0) // bucket)
+                for m in MEMS:
+                    floors: dict[int, float] = {}
+                    for s in xs:
+                        if (v := s.val(m)) is not None:
+                            b = int((s.t - t0) // bucket)
+                            floors[b] = min(floors.get(b, v), v)
+                    head = [v for b, v in floors.items() if b == first_b]
+                    end = [v for b, v in floors.items() if b >= end_b]
+                    if head and end:
+                        row[m] = (head[0], min(end))
+                lo = t0 + first_b * bucket
+                fa = _median(s.val("fps") for s in xs if self._ok(s) and lo <= s.t < lo + bucket)
+                fb = _median(s.val("fps") for s in xs if self._ok(s) and s.t >= t1 - tail)
+                if fa and fb is not None:
+                    row["fps"] = (fa, fb)
+            out.append(row)
+        return out
+
+    def _launch_growth(self, now: float, wall: str) -> list[Issue]:
+        """起動し始めより終わりのほうが、FPS の中央値が fps_drop_ratio 以上落ち、メモリも min_rise_mb 以上増えていた
+        （途中で解放されて下がっていれば増えたとしない）。メモリが増えただけでは出さない（キャッシュなどで増えるのは
+        ふつうで、遊ぶ人に見える影響がない。下限が下がらずに増え続けるものは R-01 で見る）。"""
+        if not self.has("R-12"):
+            return []
+        rise, span = float(self.p("R-12", "min_rise_mb")), float(self.p("R-12", "min_span_sec"))
+        drop = float(self.p("R-12", "fps_drop_ratio"))
+        out: list[Issue] = []
+        for row in self.launch_memory():
+            if row["sec"] < span or "fps" not in row:
+                continue
+            fa, fb = row["fps"]
+            if (fa - fb) / fa < drop:
+                continue
+            grew = [f"{MEM_JA[m]} {row[m][0]:.0f} → {row[m][1]:.0f}MB（+{row[m][1] - row[m][0]:.0f}MB）"
+                    for m in self.p("R-12", "metrics") if m in row and row[m][1] - row[m][0] >= rise]
+            if not grew:
+                continue
+            out += self._issue("R-12", f"起動 #{row['launch']} で、起動し始めから終わりまでに FPS の中央値が {fa:.1f} → {fb:.1f}"
+                               f"（{(fa - fb) / fa * 100:.0f}% 低下）に落ち、メモリも解放されないまま増えていました: "
+                               f"{'、'.join(grew)}（起動していた時間 {row['sec'] / 3600:.1f} 時間）。"
+                               "解放されないものが重くしている可能性があります",
+                               key=str(row["launch"]), s=row["last"], t=now, wall=wall)
+        return out
 
     def _by_scene(self, now: float, wall: str) -> list[Issue]:
         if not self.has("R-09"):
@@ -854,6 +924,7 @@ class PerfMonitor:
                        f"{_fmt(r['cpu'])} / {_fmt(r['cpu_max'])} | {_fmt(r['gpu'])} / {_fmt(r['gpu_max'])} | "
                        f"{_fmt(r['rss_max'])} | {_fmt(r['total_max'])} | {_fmt(r['gfx_max'])} | {_fmt(past[scene], 1)} |")
         out.append("")
+        out += self._launch_memory_lines()
         cmds = self.command_stats()
         if cmds:
             lim = ({"fps": float(self.p("R-08", "fps_drop_ratio")), "cpu": float(self.p("R-08", "cpu_add")),
@@ -872,6 +943,32 @@ class PerfMonitor:
                            f"{_fmt(r.get('cpu'), 0)} | {_fmt(r.get('gpu'), 0)} |")
             out.append("")
         return out
+
+
+    def _launch_memory_lines(self) -> list[str]:
+        rows = self.launch_memory()
+        mems = [m for m in MEMS if any(m in r for r in rows)]
+        if not rows:
+            return []
+        start, tail = self._r12("start_sec", 300.0), self._r12("end_sec", 900.0)
+        rise, drop = self._r12("min_rise_mb", 200.0), self._r12("fps_drop_ratio", 0.1)
+        out = ["### 起動ごとのメモリと FPS", "",
+               f"起動し始め（計り始めて {start / 60:.0f} 分たってからの 5 分間）と、終わり（最後の {tail / 60:.0f} 分）の比較。"
+               f"メモリは下限（終わりは、5 分ごとの下限のうちいちばん低いもの。途中で増えても、終わりまでに解放されて下がって"
+               f"いれば差に入らない）、FPS は中央値。FPS が {drop * 100:.0f}% 以上落ち、メモリも {rise:.0f}MB 以上増えていたら"
+               "R-12 を出す（メモリが増えただけでは出さない）。短い起動は「-」。", "",
+               "| 起動 | 時間 | FPS 始め → 終わり | " + " | ".join(f"{MEM_JA[m]} 始め → 終わり（差）" for m in mems) + " |",
+               "|---|---|---|" + "---|" * len(mems)]
+        for r in rows:
+            cells = [f"{r['fps'][0]:.1f} → {r['fps'][1]:.1f}" if "fps" in r else "-"]
+            for m in mems:
+                if m in r:
+                    a, b = r[m]
+                    cells.append(f"{a:.0f} → {b:.0f}（{b - a:+.0f}）")
+                else:
+                    cells.append("-")
+            out.append(f"| #{r['launch']} | {r['sec'] / 3600:.1f} 時間 | " + " | ".join(cells) + " |")
+        return out + [""]
 
 
 def _num(x: Any) -> float | None:
