@@ -12,7 +12,7 @@ Unity のビルド（`.app` / `.exe`）を、人がゲームを見ていない�
 | CLI・表示 | [Typer](https://typer.tiangolo.com/)、[Rich](https://rich.readthedocs.io/) | `yomawari run` / `doctor` / `builds` などのコマンドと、ラン中の進捗表示 |
 | 設定 | TOML（[tomlkit](https://tomlkit.readthedocs.io/)、標準の `tomllib`）、YAML（[PyYAML](https://pyyaml.org/)） | `yomawari.toml`（tomlkit。対話登録で書き足してもコメントが残る）、ゲームのプロファイル（tomllib）、検出ルール `rules.yaml` と役割のキーワード（YAML） |
 | プロセス監視 | [psutil](https://psutil.readthedocs.io/) | ゲームの生存・終了コード・CPU・メモリ |
-| 入力 | [PyAutoGUI](https://pyautogui.readthedocs.io/) | OS のマウス・キーボード入力でゲームを操作する（ゲームに操作の受け口は作らない） |
+| 入力 | [PyAutoGUI](https://pyautogui.readthedocs.io/) | OS のマウス・キーボード入力でゲームを操作する（ゲーム側に操作を受け付ける仕組みは作らない） |
 | macOS の API | [PyObjC](https://pyobjc.readthedocs.io/)（Quartz・Cocoa）、ctypes | ウィンドウの位置と倍率、前面のアプリ、画面収録・アクセシビリティの権限の確認 |
 | 画像の判定 | [Ollama](https://ollama.com/)（ローカル）＋画像対応モデル `qwen2.5vl:7b`、[httpx](https://www.python-httpx.org/) | ボタンの見た目からの役割の推定などの補助。判定の主役はルール（`rules.yaml`）で、AI の答えから Critical は出さない |
 | テスト | [pytest](https://docs.pytest.org/) | 実ゲームなしで、Player.log のサンプルや模擬ゲームを流し込んで確かめる |
@@ -28,7 +28,7 @@ Unity のビルド（`.app` / `.exe`）を、人がゲームを見ていない�
 | Python | 3.11 以上（arm64）。`uv sync` で入る 3.12 で動かしている |
 | メモリ | 画像による判定（Ollama）を使うなら 16GB 以上（使わなければ、ゲームが動く分があればよい） |
 
-macOS の版ごとの確認状況:
+macOS のバージョンごとの確認状況。
 
 | macOS | 状況 |
 |---|---|
@@ -41,14 +41,14 @@ OS を上げると、ハーネスが使う OS のコマンドの出力が変わ�
 ## 環境構築（macOS / Apple Silicon）
 
 ### 1. uv を入れる
-[uv](https://docs.astral.sh/uv/) は Python のパッケージ・プロジェクト管理ツール。このリポジトリでは、Python 本体の取得、仮想環境（`.venv`）の作成、依存パッケージのインストール、`yomawari` コマンドのインストールをすべて uv で行う（pip / venv / pyenv の代わり）。
+[uv](https://docs.astral.sh/uv/) は Python のパッケージ・プロジェクト管理ツール。このリポジトリでは Python 本体の取得、仮想環境（`.venv`）の作成、依存パッケージと `yomawari` コマンドのインストールを、pip / venv / pyenv の代わりにすべて uv で行う。
 
-pip / venv / pyenv ではなく uv を使う理由:
-- **arm64 の Python を確実に使える**: Mac によっては `/usr/local/bin/python3` が x86_64（Rosetta）で、pip / venv はそれをそのまま使ってしまう。uv はマシンに合ったビルド済みの Python を自分で取得し、`pyproject.toml` の設定でシステムの Python を使わないようにしている
-- **道具が1つで済む**: pyenv・venv・pip・pipx の役割を uv だけで担えるので、手順が `uv sync` と `uv tool install` の2つで済む
-- **依存を固定できる**: `uv.lock` で依存のバージョンを固定し、別の Mac や Windows 機でも同じ環境を再現できる
+uv を使うのは次の理由から。
+- arm64 の Python を確実に使える。Mac によっては `/usr/local/bin/python3` が x86_64（Rosetta）で、pip / venv はそれをそのまま使ってしまう。uv はマシンに合ったビルド済みの Python を自分で取得し、`pyproject.toml` の設定でシステムの Python を使わないようにしている
+- pyenv・venv・pip・pipx の役割を uv だけで担えるので、手順が `uv sync` と `uv tool install` の2つで済む
+- `uv.lock` で依存のバージョンを固定し、別の Mac や Windows 機でも同じ環境を再現できる
 
-`pyproject.toml` は標準形式なので、uv がなくても、arm64 の Python で `python -m venv .venv && .venv/bin/pip install -e .` とすれば動く（ただし `uv.lock` による固定は効かない）。
+`pyproject.toml` は標準形式なので、uv がなくても arm64 の Python で `python -m venv .venv && .venv/bin/pip install -e .` とすれば動く（ただし `uv.lock` による固定は効かない）。
 
 ```zsh
 brew install uv
@@ -61,7 +61,7 @@ brew install uv
 ```zsh
 export PATH="$HOME/.local/bin:$PATH"
 ```
-足したあとは、開いているターミナルで読み込み直す（新しいタブやウィンドウを開いてもよい）。読み込み直さないと `zsh: command not found: uv` になる。
+足したら、開いているターミナルで読み込み直す（新しいタブやウィンドウを開いてもよい）。読み込み直さないと `zsh: command not found: uv` になる。
 ```zsh
 source ~/.zshrc
 which uv    # ~/.local/bin/uv と出ればよい
@@ -86,20 +86,20 @@ editable で入れているので、ブランチを切り替えたりコード�
 ### 5. 設定とビルドの登録
 ```zsh
 cp yomawari.example.toml yomawari.toml     # yomawari.toml はコミットしない
-yomawari builds add mac_dev ~/Builds/Rachel_Dev/Rachel.app
+yomawari builds add mac_dev ~/Builds/MyGame_Dev/MyGame.app
 ```
-ビルドが未登録のまま `yomawari run` を実行した場合も、対話で登録できる。
+ビルドを登録しないまま `yomawari run` を実行しても、対話で登録できる。
 
 ### 6. macOS の権限
-yomawari はゲームの画面を撮り（**画面収録**）、マウスとキーボードを操作する（**アクセシビリティ**）。権限は yomawari ではなく、それを起動した **ターミナルアプリ**（iTerm、ターミナル、VS Code など）に付ける。
+yomawari はゲームの画面を撮り（画面収録）、マウスとキーボードを操作する（アクセシビリティ）。権限は yomawari ではなく、それを起動したターミナルアプリ（iTerm、ターミナル、VS Code など）に付ける。
 
 1. `yomawari doctor` を実行する。権限が足りなければ NG と出て、その下に「権限を付ける対象」のアプリが表示される。
 2. `yomawari doctor --fix` を実行する。OS の確認ダイアログが出て、対象のアプリが設定の一覧に（オフの状態で）追加され、システム設定の該当画面が開く。
 3. 開いた画面で、対象のアプリをオンにする。
-   - **アクセシビリティ**: システム設定 → プライバシーとセキュリティ →（下にスクロール）アクセシビリティ
-   - **画面収録**: システム設定 → プライバシーとセキュリティ →（下にスクロール）画面収録とシステムオーディオ録音（上の「画面収録とシステムオーディオ録音」の一覧。下の「システムオーディオ録音のみ」ではない）
+   - アクセシビリティ: システム設定 → プライバシーとセキュリティ →（下にスクロール）アクセシビリティ
+   - 画面収録: システム設定 → プライバシーとセキュリティ →（下にスクロール）画面収録とシステムオーディオ録音（下の「システムオーディオ録音のみ」ではなく、上の「画面収録とシステムオーディオ録音」の一覧）
    - 「＋」と「−」は、各項目を開いた先の一覧の下にある。プライバシーとセキュリティの最初の画面には出てこない。
-4. 対象のアプリを **⌘Q で終了して起動し直す**。権限はアプリの起動時に読み込まれるので、ウィンドウやタブを閉じるだけでは反映されない。
+4. 対象のアプリを ⌘Q で終了して起動し直す。権限はアプリの起動時に読み込まれるので、ウィンドウやタブを閉じるだけでは反映されない。
 5. もう一度 `yomawari doctor` を実行し、2つとも OK になったことを確かめる。
 
 #### doctor で NG・注意が出たとき
@@ -120,7 +120,7 @@ yomawari はゲームの画面を撮り（**画面収録**）、マウスとキ�
 | `caffeinate が見つかりません` が注意 | 通常の macOS には入っている。PATH に `/usr/bin` があるか確かめる |
 
 ### 7. Ollama（画像による判定）を入れる
-ボタンの見た目からの役割の推定（DESIGN.md §9「画像による推定」）など、画像の判定の補助に、ローカルの [Ollama](https://ollama.com/) と画像対応モデルを使う。入れなくても動く（そのときは、ボタンの文字と名前だけで役割を推定する）。
+ボタンの見た目からの役割の推定（DESIGN.md §9「画像による推定」）など、画像の判定の補助に、ローカルの [Ollama](https://ollama.com/) と画像対応モデルを使う。入れなくても動き、そのときはボタンの文字と名前だけで役割を推定する。
 
 ```zsh
 brew install ollama
@@ -128,7 +128,7 @@ brew services start ollama        # ログイン時に自動で起動する（�
 ollama pull qwen2.5vl:7b          # 約 6GB。メモリ 16GB 以上の Mac を想定
 ollama list                       # qwen2.5vl:7b が出ればよい
 ```
-`yomawari.toml` の `[judge]` で、`kind = "local"`、`model = "qwen2.5vl:7b"` にする（`yomawari.example.toml` の既定値）。`yomawari doctor` で `Ollama: qwen2.5vl:7b は pull 済み` と出ればよい。
+`yomawari.toml` の `[judge]` を `kind = "local"`、`model = "qwen2.5vl:7b"` にする（`yomawari.example.toml` の既定値）。`yomawari doctor` で `Ollama: qwen2.5vl:7b は pull 済み` と出ればよい。
 - `brew services` を使わず、そのときだけ `ollama serve` で起動してもよい（ランのあいだは閉じない）
 - 別のモデルを使うときは、`ollama pull <モデル名:タグ>` して `[judge] model` を書き換える。画像を読めるモデル（vision 対応）を選ぶ
 
@@ -136,7 +136,7 @@ ollama list                       # qwen2.5vl:7b が出ればよい
 ゲームの `Packages/manifest.json` にパッケージ `com.tunacook.yomawari` を足してビルドする。手順と Player Settings、Naninovel のゲームで自動で出るイベントは [docs/game-integration.md](docs/game-integration.md) を参照。`yomawari builds check mac_dev` で `boot を受信しました` と出ればよい。
 
 ## 環境構築（Windows）
-> **Windows 対応はまだ実装していない（DESIGN.md フェーズ7）。** 以下は予定の手順で、作者は Windows の実機で確かめていない。今の時点では、`doctor` / `run` / `inspect` は OS の処理（`yomawari/platform/win.py`）が未実装のため「Windows 対応は未実装です」で止まる。テストも、モックゲームを `.app` に包んで macOS の処理で動かすものが多く、Windows では失敗する。
+> Windows 対応はまだ実装していない（DESIGN.md フェーズ7）。以下は予定の手順で、作者は Windows の実機で確かめていない。今は OS の処理（`yomawari/platform/win.py`）が未実装なので、`doctor` / `run` / `inspect` は「Windows 対応は未実装です」で止まる。テストも、モックゲームを `.app` に包んで macOS の処理で動かすものが多く、Windows では失敗する。
 
 ### 1. uv を入れる
 PowerShell で次のどちらかを実行する。インストール先は `%USERPROFILE%\.local\bin` で、インストーラが PATH に足す。
@@ -145,7 +145,7 @@ winget install --id=astral-sh.uv -e
 # または
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
-入れたあとは、PowerShell を開き直してから `uv --version` で確かめる。
+入れたら PowerShell を開き直し、`uv --version` で確かめる。
 
 ### 2. リポジトリの準備とテスト
 ```powershell
@@ -161,20 +161,20 @@ uv run pytest -q
 ```powershell
 uv tool install --editable .
 Copy-Item yomawari.example.toml yomawari.toml
-yomawari builds add win_dev C:\Builds\Rachel\Rachel.exe
+yomawari builds add win_dev C:\Builds\MyGame\MyGame.exe
 ```
-ビルドは、`.exe` と同じフォルダの `<名前>_Data`、`UnityPlayer.dll` などをまとめて置いたまま登録する（`.exe` だけを別の場所にコピーしない）。
+ビルドは `.exe` と同じフォルダの `<名前>_Data`、`UnityPlayer.dll` などをまとめて置いたまま登録する（`.exe` だけを別の場所にコピーしない）。
 
 ### 4. 権限と実行環境
 macOS の「画面収録」「アクセシビリティ」に当たる許可は Windows にはないが、次の点に注意する。
-- **管理者権限をそろえる**: ゲームを管理者として起動し、yomawari を通常の権限で起動すると、Windows がマウスとキーボードの入力を止める（UIPI）。両方とも通常の権限で動かす。
-- **画面の拡大率**: 「設定 → システム → ディスプレイ → 拡大縮小」が 100% 以外だと、座標の計算がずれやすい。Windows 対応では、ハーネスを Per-Monitor DPI Aware にして、macOS の Retina と同じく倍率を求める予定。確かめるまでは 100% にしておくのが無難。
-- **画面をロックしない・リモートデスクトップを切らない**: ロック中や、リモートデスクトップを最小化・切断した状態では、入力が届かず、スクリーンショットも真っ黒になる。リモートで見る場合は、セッションを切らずに残すか、別の方法（VNC など）を使う。
-- **スリープと更新を止める**: 「電源とバッテリー」でスリープと画面オフを「なし」にする。Windows Update のアクティブ時間に夜間を含めるか、更新を一時停止する。
-- **通知を止める**: 「応答不可」（集中モード）をオンにして、通知がゲームの前に出ないようにする。
+- 管理者権限をそろえる。ゲームを管理者として起動し、yomawari を通常の権限で起動すると、Windows がマウスとキーボードの入力を止める（UIPI）。両方とも通常の権限で動かす。
+- 画面の拡大率（「設定 → システム → ディスプレイ → 拡大縮小」）が 100% 以外だと、座標の計算がずれやすい。Windows 対応ではハーネスを Per-Monitor DPI Aware にして、macOS の Retina と同じく倍率を求める予定。確かめるまでは 100% にしておくのが無難。
+- 画面をロックしない・リモートデスクトップを切らない。ロック中や、リモートデスクトップを最小化・切断した状態では、入力が届かず、スクリーンショットも真っ黒になる。リモートで見る場合は、セッションを切らずに残すか、別の方法（VNC など）を使う。
+- スリープと更新を止める。「電源とバッテリー」でスリープと画面オフを「なし」にし、Windows Update のアクティブ時間に夜間を含めるか、更新を一時停止する。
+- 「応答不可」（集中モード）をオンにして、通知がゲームの前に出ないようにする。
 
 ### 5. ゲーム側の準備
-macOS と同じく、ゲームの `Packages/manifest.json` にパッケージ `com.tunacook.yomawari` を足し、Windows（x86_64）向けにビルドする。手順は [docs/game-integration.md](docs/game-integration.md) を参照。セーブ・PlayerPrefs・クラッシュダンプの場所は [DESIGN.md §7](DESIGN.md#7-ラン・ライフサイクルとウォッチドッグ) に書いてある。
+macOS と同じく、ゲームの `Packages/manifest.json` にパッケージ `com.tunacook.yomawari` を足し、Windows（x86_64）向けにビルドする。手順は [docs/game-integration.md](docs/game-integration.md)、セーブ・PlayerPrefs・クラッシュダンプの場所は [DESIGN.md §7](DESIGN.md#7-ラン・ライフサイクルとウォッチドッグ) を参照。
 
 ### 6. Ollama（画像による判定）を入れる
 入れなくても動く（macOS の 7 と同じ）。Ollama 自体は Windows 版があり、yomawari とは HTTP（`http://localhost:11434`）でやり取りするので、OS による違いはない見込み（作者は Windows で確かめていない）。
@@ -186,19 +186,19 @@ ollama list                            # qwen2.5vl:7b が出ればよい
 `yomawari.toml` の `[judge]` は macOS と同じ（`kind = "local"`、`model = "qwen2.5vl:7b"`）。GPU のメモリが足りない PC では遅くなるので、そのときは `[judge] kind = "none"` にする。
 
 ### 7. ランを回す（予定）
-Windows 対応のあとは、macOS と同じコマンドを PowerShell で実行する予定（オプションは下の「使い方」と同じ）。
+Windows 対応のあとは macOS と同じコマンドを PowerShell で実行する予定（オプションは下の「使い方」と同じ）。
 ```powershell
 yomawari doctor                  # 準備ができているか確かめる
 yomawari run --hours 0.5         # 既定の目的（play）で 30 分
 yomawari run -p stuck --hours 8  # 夜間に 8 時間
 ```
-- 終わると `runs\<日時>_<ビルド>\report.md` が、`.md` に関連付けたアプリで開く（関連付けがなければ、開くアプリを選ぶ画面が出る。`--no-open` で開かない）
-- ラン中はその PC に触らない。ゲームのウィンドウを最前面に置いたまま、ほかのウィンドウで隠さない（ハーネスが OS のマウス・キーボードで操作し、画面を撮るため）
-- macOS の `caffeinate`（ランのあいだスリープを止める）と `--display-off`（画面を消す）に当たる処理は、Windows 対応のときに決める。それまでは、4 の電源の設定でスリープを止めておく。画面を消すなら、「設定 → アカウント → サインイン オプション」で、スリープから戻ったときにサインインを求めないようにする（ロックされると入力が届かない）
-- 決まった時刻に始める `yomawari schedule install` は、どの OS でもまだ実装していない（DESIGN.md フェーズ6）。それまでは手で始める
+- 終わると `runs\<日時>_<ビルド>\report.md` が `.md` に関連付けたアプリで開く（関連付けがなければ、開くアプリを選ぶ画面が出る。`--no-open` で開かない）
+- ハーネスが OS のマウス・キーボードで操作し、画面を撮るので、ラン中はその PC に触らない。ゲームのウィンドウを最前面に置いたまま、ほかのウィンドウで隠さない
+- macOS の `caffeinate`（ランのあいだスリープを止める）と `--display-off`（画面を消す）に当たる処理は、Windows 対応のときに決める。それまでは 4 の電源の設定でスリープを止めておく。画面を消すなら、「設定 → アカウント → サインイン オプション」で、スリープから戻ったときにサインインを求めないようにする（ロックされると入力が届かない）
+- 決まった時刻に始める `yomawari schedule install` はどの OS でもまだ実装していない（DESIGN.md フェーズ6）。それまでは手で始める
 
 #### セーブを手で退避しておく
-ランのあいだ、ハーネスはゲームのセーブを書き換える（ロード・セーブを試すため）。macOS では、ランの前にセーブと PlayerPrefs を退避し、終わったら戻す（途中で止まったら `yomawari restore`）。Windows では、この退避と復元もまだ実装していないので、大事なセーブがある PC では、ランの前に手で控えておく。`<Company>` と `<Product>` は、Unity の Player Settings の Company Name と Product Name。
+ハーネスはロード・セーブを試すため、ランのあいだにゲームのセーブを書き換える。macOS ではランの前にセーブと PlayerPrefs を退避し、終わったら戻す（途中で止まったら `yomawari restore`）。Windows ではこの退避と復元もまだ実装していないので、大事なセーブがある PC では、ランの前に手で控えておく。`<Company>` と `<Product>` は、Unity の Player Settings の Company Name と Product Name。
 ```powershell
 $save = "$env:USERPROFILE\AppData\LocalLow\<Company>\<Product>"
 $prefs = "HKCU\Software\<Company>\<Product>"
@@ -206,7 +206,7 @@ New-Item -ItemType Directory -Force "$HOME\yomawari-backup" | Out-Null
 Copy-Item -Recurse $save "$HOME\yomawari-backup\save"            # セーブ
 reg export $prefs "$HOME\yomawari-backup\prefs.reg" /y           # PlayerPrefs（レジストリ）
 ```
-戻すときは、ランのあいだに増えたセーブや設定が残らないよう、消してから戻す（ゲームを終了してから実行する）。
+戻すときは、ランのあいだに増えたセーブや設定が残らないよう、ゲームを終了してから、消して戻す。
 ```powershell
 Remove-Item -Recurse -Force $save
 Copy-Item -Recurse "$HOME\yomawari-backup\save" $save
@@ -223,11 +223,11 @@ yomawari run --hours 0.5                    # 既定の目的（play: 通常の�
 yomawari run --purpose buttons --hours 1    # 目的を選ぶ
 yomawari run -p gacha --seed 42             # 乱数シードを固定して再現する
 ```
-終わると `runs/<日時>_<ビルド>/report.md` が開く。ラン中は Mac に触らない（ハーネスが OS のマウス・キーボードで操作するため）。
+終わると `runs/<日時>_<ビルド>/report.md` が開く。ハーネスが OS のマウス・キーボードで操作するので、ラン中は Mac に触らない。
 
-画面をロックしない。macOS は、ロック中はほかのアプリを前面に出すことも、マウス・キーボードの入力を送ることもできない。ハーネスはランのあいだ `caffeinate` で自動のスリープを止めるが、手でロックする・蓋を閉じるのは防げない。
+画面をロックしない。macOS はロック中、ほかのアプリを前面に出すことも、マウス・キーボードの入力を送ることもできない。ハーネスはランのあいだ `caffeinate` で自動のスリープを止めるが、手でロックする・蓋を閉じるのは防げない。画面の自動ロックとスクリーンセーバーも止めておく。ほかの注意点は [DESIGN.md §13](DESIGN.md#13-macos実行時の注意) を参照。
 
-夜に画面を消して回すときは `--display-off` を付ける（ゲームが起動して `run.display_off_delay_sec` 秒後に `pmset displaysleepnow` で画面を消す）。その前に、システム設定の「ロック画面」で、ディスプレイがオフのときにパスワードを求めるのを「しない」か長い時間にしておく（すぐロックする設定なら、開始時に注意を出す）。ロックなどで操作できなかった時間は、レポートの「ハーネスの記録」に出る。画面を消しているあいだは、FPS・CPU・GPU・メモリの判定（R 系）をしない（macOS が描画を間引くため。外した時間は「ハーネスの記録」に出る）。
+夜に画面を消して回すときは `--display-off` を付ける（ゲームが起動して `run.display_off_delay_sec` 秒後に `pmset displaysleepnow` で画面を消す）。その前に、システム設定の「ロック画面」で、ディスプレイがオフのときにパスワードを求めるのを「しない」か長い時間にしておく（すぐロックする設定なら、開始時に注意を出す）。ロックなどで操作できなかった時間は、レポートの「ハーネスの記録」に出る。画面を消しているあいだは macOS が描画を間引くので、FPS・CPU・GPU・メモリの判定（R 系）をしない（外した時間は「ハーネスの記録」に出る）。
 
 | オプション | 内容 | 既定 |
 |---|---|---|
@@ -253,10 +253,13 @@ yomawari run -p gacha --seed 42             # 乱数シードを固定して再�
 | `rta` | 最短で進めたときの不具合 | 進行につながった操作を強く優先し、寄り道と巻き戻しを避ける。エッジケースは差し込まない | random | S-02, S-03 |
 | `aging` | 放置したときの不具合 | 操作せずに起動したままにする | aging | H-01, L-01, C-01, R-01, R-03 |
 
-ルールの ID は `rules.yaml` を参照。`buttons` と `gacha` は、ゲームのプロファイルに書いたゲームの流れ（`[[flow]]`。[DESIGN.md §9「ゲームの流れ」](DESIGN.md)）を使わず、それ以外は流れに沿って進める。目的は `yomawari.toml` の `[purpose.<名前>]` で上書きしたり、新しく足したりできる（書き方は `yomawari.example.toml` のコメント）。`[purpose.<名前>.fuzz]` は `[fuzz]` の設定の上書きで、どの項目があるかも `yomawari.example.toml` に書いてある。目的ごとの動き方の考え方は [DESIGN.md §9「ランの目的」](DESIGN.md) を参照。
+- ルールの ID は `rules.yaml` を参照。
+- `buttons` と `gacha` は、ゲームのプロファイルに書いたゲームの流れ（`[[flow]]`。[DESIGN.md §9「ゲームの流れ」](DESIGN.md)）を使わない。それ以外は流れに沿って進める。
+- 目的は `yomawari.toml` の `[purpose.<名前>]` で上書きしたり、新しく足したりできる。書き方と、`[purpose.<名前>.fuzz]`（`[fuzz]` の設定の上書き）に書ける項目は `yomawari.example.toml` のコメントにある。
+- 目的ごとの動き方の考え方は [DESIGN.md §9「ランの目的」](DESIGN.md) を参照。
 
 ### 質問の正解をプロファイルに書く
-選択肢や、推理パートで証拠を選ぶ画面のように、答えを選んで進むゲームでは、質問ごとの正解をゲームのプロファイル（`yomawari.profile.toml`）の `[[flow]]` に `answers` として書ける。書いておくと、組み合わせを総当たりせずに先へ進める。下の画面・ボタン・scene の名前は例（[examples/profiles/unity-naninovel.profile.toml](examples/profiles/unity-naninovel.profile.toml)）。
+選択肢や、推理パートで証拠を選ぶ画面のように答えを選んで進むゲームでは、質問ごとの正解をゲームのプロファイル（`yomawari.profile.toml`）の `[[flow]]` に `answers` として書ける。書いておくと、組み合わせを総当たりせずに先へ進める。下の画面・ボタン・scene の名前は例（[examples/profiles/unity-naninovel.profile.toml](examples/profiles/unity-naninovel.profile.toml)）。
 
 ```toml
 # 本編の選択肢。正解は選択肢の本文で書く
@@ -306,10 +309,9 @@ note = "ここでは何も突きつけない"
 - 正解を使うかはランの目的で決まる。`play` は書いた正解で答えるが、正解どおりの最短ばかりにならないよう、ときどき（30%）先にわざと外れを答えて、バッドエンドや外れの返事も確かめる。`rta` は外れを答えない。`stuck` は書いた正解を使わず、AI に順位を付けさせて答えを探す（[DESIGN.md §9「答えの選び方」](DESIGN.md)）
 - 書いていない質問は、AI に候補の順位を付けさせて試し、見つけた正解をハーネスが覚える（`runs/_experience/<ゲーム>.json`）
 - 選ぶ手順の数より多く `pick` を書くと、読み込むときにエラーになる
-- いまの実装は、書式の読み込みと確認まで。答えに使うのは、DESIGN.md §9「答えの選び方」の実装のあと
 
 ### そのほかのコマンド
-`yomawari --help` で一覧が出る。主なもの:
+`yomawari --help` で一覧が出る。主なものは次のとおり。
 
 | コマンド | 内容 |
 |---|---|
@@ -317,7 +319,3 @@ note = "ここでは何も突きつけない"
 | `yomawari builds` | 登録済みのビルドを一覧する（`builds add` で登録） |
 | `yomawari restore` | ランが途中で止まったときに、退避したセーブ・設定を戻す |
 | `yomawari experience forget` | ランをまたいで覚えたこと（`runs/_experience/<ゲーム>.json`）を消す。ハーネスの仕様が大きく変わったときなどに使う。`yomawari run --forget` でも、ランの前にすべて消せる |
-
-## 補足
-- Ollama（画像の判定）は入れなくても動く（環境構築の 7）。
-- 夜間に回すときは、画面の自動ロックとスクリーンセーバーを止めておく。ほかの注意点は [DESIGN.md §13](DESIGN.md#13-macos実行時の注意) を参照。
