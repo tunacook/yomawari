@@ -108,6 +108,26 @@ def test_relaunch_continues_from_newest_save():
     assert any("セーブ（GameSave016）をロードした" in n for n in run.notes)
 
 
+def test_relaunch_pages_even_when_empty_is_misread():
+    # run 2026-11-11_1007: 空のスロット 9 個のうち 2 個を「Emply」と読み、どれも空と分からずにページを送らなかった。
+    # 文字を読めたのに日時がないスロットは、ロードするセーブではないので、ページを送る
+    s, st, run = _session(launch=1)
+    _show(st, "TitleUI", TITLE, TITLE_TEXT)
+    w = _weights(s, st, 0.0)
+    assert w["click TitleUI/NewGameButton"] == 0  # 続きから遊ぶあいだは、はじめからを押さない
+    texts = {_label(i): f"{i + 1}. Empty" for i in range(9)}
+    texts[_label(6)], texts[_label(7)] = "7. Emply", "8. Emply"
+    _show(st, "SaveLoadUI", LOAD, texts)
+    w = _weights(s, st, 0.0)
+    assert w["click SaveLoadUI/NextPageButton"] == CLICK * BOOST
+    # 日時のあるスロットが見えていれば、ページを送らずにそれを押す
+    texts[_label(7)] = "8. 2026-11-11 14:37:55"
+    _show(st, "SaveLoadUI", LOAD, texts)
+    w = _weights(s, st, 0.0)
+    assert w[f"click {_label(7)}"] == CLICK * BOOST
+    assert w["click SaveLoadUI/NextPageButton"] == CLICK
+
+
 def test_first_launch_and_timeout_do_not_resume():
     s, st, run = _session(launch=0)
     assert run.resume_until is None
