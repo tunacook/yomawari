@@ -32,7 +32,7 @@ def test_sample_log_records(sample_log: Path):
     by_msg = {e.message: e for e in entries}
     exc = by_msg["NullReferenceException: Object reference not set to an instance of an object"]
     assert exc.has_stack
-    assert exc.stack[0] == "Rachel.Scenario.Runner:Step () (at Assets/Scripts/Runner.cs:42)"
+    assert exc.stack[0] == "MyGame.Scenario.Runner:Step () (at Assets/Scripts/Runner.cs:42)"
     assert exc.stack[-1].startswith("(Filename:")
     assert by_msg["Save slot 1 not found"].has_stack
     assert not by_msg["Loading scene Title"].has_stack

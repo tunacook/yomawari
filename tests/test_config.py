@@ -26,8 +26,8 @@ def test_roundtrip_keeps_comments_and_sets_default(tmp_path):
     p = tmp_path / "yomawari.toml"
     p.write_text('# 手書きのコメント\n[run]\nhours = 2  # 短め\n')
     cfg = Config(p)
-    cfg.set_build("mac_dev", Path("/b/Rachel.app"), ["-screen-width", "1280"])
-    cfg.set_build("mac_rel", Path("/b/Rachel2.app"))
+    cfg.set_build("mac_dev", Path("/b/MyGame.app"), ["-screen-width", "1280"])
+    cfg.set_build("mac_rel", Path("/b/MyGame2.app"))
     cfg.save()
     text = p.read_text()
     assert "# 手書きのコメント" in text and "# 短め" in text

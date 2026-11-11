@@ -6,14 +6,14 @@ default_build = "mac_dev"
 # rules = "rules.yaml"
 
 [builds.mac_dev]
-path = "~/Builds/Rachel_Dev/Rachel.app"
+path = "~/Builds/MyGame_Dev/MyGame.app"
 args = ["-screen-fullscreen", "0", "-screen-width", "1280", "-screen-height", "720"]
 watermark_mask = { anchor = "bottom-right", w = 220, h = 40 }   # Development Build の透かし（フェーズ3〜）
 # セーブと PlayerPrefs の場所は Info.plist の CFBundleIdentifier（バンドルID）から決める。外れる場合は明示する
-# save_dir = "~/Library/Application Support/com.MyCompany.Rachel"
-# prefs_domain = "com.MyCompany.Rachel"
+# save_dir = "~/Library/Application Support/com.MyCompany.MyGame"
+# prefs_domain = "com.MyCompany.MyGame"
 # initial_save = "fixtures/saves/start"        # テスト用初期セーブ（ラン前に配置）
-# profile = "~/work/Rachel/yomawari.profile.toml"  # ゲームのプロファイル（ゲームのリポジトリでコミットするもの）
+# profile = "~/work/MyGame/yomawari.profile.toml"  # ゲームのプロファイル（ゲームのリポジトリでコミットするもの）
 
 [run]
 hours = 8
