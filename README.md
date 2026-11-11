@@ -176,6 +176,45 @@ macOS の「画面収録」「アクセシビリティ」に当たる許可は W
 ### 5. ゲーム側の準備
 macOS と同じく、ゲームの `Packages/manifest.json` にパッケージ `com.tunacook.yomawari` を足し、Windows（x86_64）向けにビルドする。手順は [docs/game-integration.md](docs/game-integration.md) を参照。セーブ・PlayerPrefs・クラッシュダンプの場所は [DESIGN.md §7](DESIGN.md#7-ラン・ライフサイクルとウォッチドッグ) に書いてある。
 
+### 6. Ollama（画像による判定）を入れる
+入れなくても動く（macOS の 7 と同じ）。Ollama 自体は Windows 版があり、yomawari とは HTTP（`http://localhost:11434`）でやり取りするので、OS による違いはない見込み（作者は Windows で確かめていない）。
+```powershell
+winget install --id=Ollama.Ollama -e   # 入れるとログイン時に自動で起動する（タスクトレイに常駐）
+ollama pull qwen2.5vl:7b               # 約 6GB
+ollama list                            # qwen2.5vl:7b が出ればよい
+```
+`yomawari.toml` の `[judge]` は macOS と同じ（`kind = "local"`、`model = "qwen2.5vl:7b"`）。GPU のメモリが足りない PC では遅くなるので、そのときは `[judge] kind = "none"` にする。
+
+### 7. ランを回す（予定）
+Windows 対応のあとは、macOS と同じコマンドを PowerShell で実行する予定（オプションは下の「使い方」と同じ）。
+```powershell
+yomawari doctor                  # 準備ができているか確かめる
+yomawari run --hours 0.5         # 既定の目的（play）で 30 分
+yomawari run -p stuck --hours 8  # 夜間に 8 時間
+```
+- 終わると `runs\<日時>_<ビルド>\report.md` が、`.md` に関連付けたアプリで開く（関連付けがなければ、開くアプリを選ぶ画面が出る。`--no-open` で開かない）
+- ラン中はその PC に触らない。ゲームのウィンドウを最前面に置いたまま、ほかのウィンドウで隠さない（ハーネスが OS のマウス・キーボードで操作し、画面を撮るため）
+- macOS の `caffeinate`（ランのあいだスリープを止める）と `--display-off`（画面を消す）に当たる処理は、Windows 対応のときに決める。それまでは、4 の電源の設定でスリープを止めておく。画面を消すなら、「設定 → アカウント → サインイン オプション」で、スリープから戻ったときにサインインを求めないようにする（ロックされると入力が届かない）
+- 決まった時刻に始める `yomawari schedule install` は、どの OS でもまだ実装していない（DESIGN.md フェーズ6）。それまでは手で始める
+
+#### セーブを手で退避しておく
+ランのあいだ、ハーネスはゲームのセーブを書き換える（ロード・セーブを試すため）。macOS では、ランの前にセーブと PlayerPrefs を退避し、終わったら戻す（途中で止まったら `yomawari restore`）。Windows では、この退避と復元もまだ実装していないので、大事なセーブがある PC では、ランの前に手で控えておく。`<Company>` と `<Product>` は、Unity の Player Settings の Company Name と Product Name。
+```powershell
+$save = "$env:USERPROFILE\AppData\LocalLow\<Company>\<Product>"
+$prefs = "HKCU\Software\<Company>\<Product>"
+New-Item -ItemType Directory -Force "$HOME\yomawari-backup" | Out-Null
+Copy-Item -Recurse $save "$HOME\yomawari-backup\save"            # セーブ
+reg export $prefs "$HOME\yomawari-backup\prefs.reg" /y           # PlayerPrefs（レジストリ）
+```
+戻すときは、ランのあいだに増えたセーブや設定が残らないよう、消してから戻す（ゲームを終了してから実行する）。
+```powershell
+Remove-Item -Recurse -Force $save
+Copy-Item -Recurse "$HOME\yomawari-backup\save" $save
+reg delete $prefs /f
+reg import "$HOME\yomawari-backup\prefs.reg"
+```
+クラッシュしたときのダンプは `%TEMP%\<Company>\<Product>\Crashes\` に出る。
+
 ## 使い方
 
 ### ランを回す
