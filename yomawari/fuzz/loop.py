@@ -467,6 +467,8 @@ class FuzzSession:
         if ev.kind == "load" and d.get("phase") == "start" and self.run.flow.active is None:
             # 流れの外でセーブをロードした（続きから遊ぶ・ロードの行き来）。流れの中のロード（思い出から本編に戻る）は除く
             self._forget_progress(f"セーブ（{d.get('slot')}）をロードした")
+            # 答えたあとにロードしたなら、また同じ質問に着いても、ゲームが外れと判定したのではない
+            self.run.flow.rewound(f"セーブ（{d.get('slot')}）をロードした")
         if (ev.kind == "save" and d.get("phase") == "start" and self.run.flow.active is None
                 and self.run.resume_until is None):
             self.run.saved_t = time.monotonic()
@@ -499,7 +501,10 @@ class FuzzSession:
                 self._spot(ev)
             if ev.kind == "line" and ev.launch == self.launch:
                 self._remember_line(ev.data)
-                self.run.flow.line_seen()
+                line_id = ev.data.get("line_id")
+                self.run.flow.line_seen(str(line_id) if line_id is not None else None)
+            elif ev.kind == "scene" and ev.launch == self.launch:
+                self.run.flow.scene_changed()
         if ev.source != "game" or ev.launch != self.launch:
             return
         timing = edge_timing(ev.kind, ev.data)
@@ -1050,6 +1055,10 @@ class FuzzSession:
         boost, low = float(self.cfg["resume_factor"]), float(self.cfg["resume_new_game_factor"])
         newest = newest_slots({t.label: t.text for t in saved}, time.time()) or {t.label for t in saved}
         empty = inactive(targets, run.inactive_words, run.masked_chars)
+        # 文字を読めたのに日時がないスロットも、ロードするセーブではない。空を表す語（Empty）の読み違いで空と分からない
+        # スロットが1つでもあると、ページを送らずに「はじめから」を押す（run 2026-11-11_1007: 9 個のうち 2 個を
+        # 「Emply」と読み、セーブのある 3 ページ目以降を探さなかった）
+        empty |= {t.label for t in targets if t.text and not hints.saved(t)}
         paging = not saved and bool(stuck_rows(self.state, empty))
         # 次のページがなければ探せないので、見えているものでよいとする
         if saved and any(hints.next_page(t) for t in targets) and \

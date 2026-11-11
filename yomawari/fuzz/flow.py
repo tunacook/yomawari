@@ -333,6 +333,9 @@ class FlowTracker:
         self._loaded_leaves: set[tuple[Ctx, Path]] = set()
         self.dead: set[tuple[Ctx, Path]] = set()  # 行き止まり（言葉がまだない思い出）。開示の状態で変わる
         self.lines_after = 0  # 最後まで進めてから届いた本文の行の数
+        self.line_order: dict[str, int] = {}  # 本文の行 → 初めて読んだ順番（答えたあとの巻き戻しを見分ける）
+        self.scene_after = False  # 答えて本文を読んだあとに scene が変わった
+        self.question_at: int | None = None  # 答えた質問の始まりの行の、初めて読んだ順番
         self.exhausted_noted: set[Ctx] = set()
         self.picked: Counter[tuple[Ctx, Path]] = Counter()  # このランで、その組み合わせを選んだ回数
 
@@ -355,9 +358,50 @@ class FlowTracker:
         ctx = ctx if ctx is not None else self.ctx
         return [p for c, p in self.right if c == ctx]
 
-    def line_seen(self) -> None:
-        """本文の行が届いた。"""
+    def line_seen(self, line_id: str | None = None) -> None:
+        """本文の行が届いた。答えたあと、scene が変わらないまま質問の行より前の行に戻ったら、ハーネスが巻き戻した
+        （バックログの巻き戻しなど）。ゲームが答えを判定して質問に戻したのではないので、当たり外れを数えない
+        （run 2026-11-11_1007: 正解を答えて先へ進んだあとに巻き戻し、同じ質問に着いたので正解を外れと覚え、
+        ランの最後の 37 分、外れ（バッドエンド）を答え続けた）。行の前後は、初めて読んだ順で比べる
+        （外れへの返事の行は、質問の行より後に初めて読む）。"""
         self.lines_after += 1
+        if line_id is None:
+            return
+        idx = self.line_order.setdefault(line_id, len(self.line_order))
+        if self.last_leaf is None or self.scene_after:
+            return
+        if self.question_at is not None and idx < self.question_at:
+            self.rewound("scene が変わらないまま質問より前の本文に戻った（巻き戻し）")
+
+    def scene_changed(self) -> None:
+        """scene が変わった。答えてから本文を読んだあとに scene が変わったなら、そのあと前の行に戻っても、ゲームが戻した
+        （バッドエンドから質問の前へ戻すなど）とみなす。答えた直後の scene の切り替え（思い出から本編へ戻る、
+        バッドエンドへ進む）は数えない。"""
+        if self.last_leaf is not None and self.lines_after > 0:
+            self.scene_after = True
+
+    def rewound(self, why: str) -> None:
+        """答えたあと、ハーネスが前に戻した（巻き戻し・セーブのロード）。その答えの当たり外れは分からないので数えない。
+        また同じ質問に着いても、外れへの返事のあとに戻ったのではないので、前の答えの続きとはみなさない。"""
+        if self.last_leaf is None:
+            return
+        ctx = self.last_leaf[0]
+        self.events.append(f"流れ「{ctx[0]}」の `{ctx[1]}` で答えたあと、{why}。この答えの当たり外れは数えない")
+        self.last_leaf = None
+        self.last_done = None
+
+    def _question_start(self, flow: Flow, line: str) -> int | None:
+        """質問の始まりの行を、初めて読んだ順番で。プロファイルの正解の at に同じ質問の行が並んでいれば、そのうち
+        いちばん先に読んだ行（出し直しの行で答えたとき、外れへの返事の行は出し直しの行より先に読んでいることがある）。"""
+        ats = [p for a in flow.answers if any(fnmatchcase(line, q) for q in a.at) for p in a.at]
+        found = [i for seen, i in self.line_order.items() if seen == line or any(fnmatchcase(seen, p) for p in ats)]
+        return min(found) if found else None
+
+    @staticmethod
+    def _other_question(flow: Flow, before: str, line: str) -> bool:
+        """プロファイルの正解の at で、line が before とは別の質問の行と分かる。"""
+        here = [a.at for a in flow.answers if any(fnmatchcase(line, p) for p in a.at)]
+        return bool(here) and not any(fnmatchcase(before, p) for at in here for p in at)
 
     def update(self, state: GameState, opened_by: dict[str, str], now: float, idle_sec: float,
                retry_lines: int = 0) -> Step | None:
@@ -369,10 +413,13 @@ class FlowTracker:
                     self.stats[f.name].started += 1
                     self.ctx = (f.name, (state.line or {}).get("line_id") or state.scene or "")
                     if (self.last_done is not None and self.last_done[0] == f.name
-                            and self.lines_after <= retry_lines):
+                            and self.lines_after <= retry_lines
+                            and not self._other_question(f, self.last_done[1], self.ctx[1])):
                         # 答えてから数行で同じ流れがまた始まった: 外れへの返事を読んで、同じ質問に戻った。
                         # 返事の行は外れ方ごとに違うので、行で見ると同じ質問が別々になり、外れを何度も試す
-                        # （run 2026-11-06_1012: 外れ方で 318 行目と 323 行目に分かれた）
+                        # （run 2026-11-06_1012: 外れ方で 318 行目と 323 行目に分かれた）。
+                        # ただし、プロファイルの正解の at で別の質問の行と分かれば、正解して次の質問に着いた
+                        # （run 2026-11-11_1007: 正解のあと 2〜4 行で次の質問が出て、正解を外れと覚えた）
                         self.ctx = self.last_done
                     self.path = []
                     if self.ctx in self.ctx_seen:
@@ -624,6 +671,8 @@ class FlowTracker:
                 self.leaves.add((self.ctx, tuple(self.path)))
                 self.last_done, self.lines_after = self.ctx, 0
                 self.last_leaf = (self.ctx, tuple(self.path))
+                self.scene_after = False
+                self.question_at = self._question_start(flow, self.ctx[1])
             self._complete(f"`{label}`")
 
     def _complete(self, how: str) -> None:
@@ -678,4 +727,5 @@ class FlowTracker:
             out.append(f"流れの答えで、前のランまでに正解と分かっていた組み合わせは {self.right_loaded} 通り。"
                        f"このランで新しく正解と分かったのは {max(new_right, 0)} 通り"
                        "（runs/_experience/<ゲーム>.json の flow_right に覚える）")
-        return out + [e for e in self.events if "すべて試しても" in e or "わざと外れ" in e or "外れのはず" in e or "正解のはず" in e]
+        keep = ("すべて試しても", "わざと外れ", "外れのはず", "正解のはず", "当たり外れは数えない")
+        return out + [e for e in self.events if any(k in e for k in keep)]

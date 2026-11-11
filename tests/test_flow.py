@@ -1104,6 +1104,129 @@ def test_answer_is_not_judged_after_returning_to_title():
     assert not run.flow.right
 
 
+TWO_QUESTIONS = """
+[[flow]]
+name = "選択肢で答える"
+start = { choices = true }
+steps = [{ choose = [], note = "選択肢で答える" }]
+answers = [
+  { at = ["main/s1:10", "main/s1:11"], pick = ["いいえ"] },
+  { at = "main/s1:20", pick = ["はい"] },
+]
+"""
+
+
+def _scene(s, st, name):
+    ev = Event("game", "scene", {"name": name}, 0)
+    st.feed(ev)
+    s.on_event(ev)
+
+
+def test_next_question_right_after_an_answer_is_another_question():
+    # 正解のあと数行（flow_retry_lines 以内）で次の質問が出ても、プロファイルの at で別の質問と分かれば、同じ質問に
+    # 戻ったとはみなさない（run 2026-11-11_1007: 正解のあと 2〜4 行で次の質問が出て、正解を外れと覚えた）
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    s, st, run, _ = _session({"ai_context_lines": 3, "wrong_answer_prob": 0.0})
+    run.flow = FlowTracker(parse_flows(tomllib.loads(TWO_QUESTIONS)["flow"]))
+    _ask_yes_no(s, st)
+    _weights(s, st)
+    _choose(s, run, "いいえ", "b")
+    _feed(st, "choices_done")
+    _line(s, st, "main/s1:19", "では次")
+    _line(s, st, "main/s1:20", "これは？")
+    _feed(st, "choices", items=YES_NO)
+    w = _weights(s, st)
+    assert run.flow.ctx == ("選択肢で答える", "main/s1:20")
+    assert (("選択肢で答える", "main/s1:10"), ("いいえ",)) in run.flow.right
+    assert not run.flow.wrong
+    assert w["click choices/はい"] == click * k  # 次の質問の正解
+    assert not any("正解のはずの答え" in n for n in run.flow.summary())
+    # 外れへの返事の行（同じ質問の at）や、at に書いていない行なら、今までどおり同じ質問に戻ったとみなす
+    for line in ("main/s1:11", "main/s1:15"):
+        s, st, run, _ = _session({"ai_context_lines": 3, "wrong_answer_prob": 0.0})
+        run.flow = FlowTracker(parse_flows(tomllib.loads(TWO_QUESTIONS)["flow"]))
+        _ask_yes_no(s, st)
+        _weights(s, st)
+        _choose(s, run, "はい", "a")
+        _ask_yes_no(s, st, line)
+        _weights(s, st)
+        assert run.flow.ctx == ("選択肢で答える", "main/s1:10")
+        assert (("選択肢で答える", "main/s1:10"), ("はい",)) in run.flow.wrong
+
+
+def test_answer_is_not_judged_after_harness_rewinds_before_the_question():
+    # 答えたあと、scene が変わらないまま質問より前の行に戻った（巻き戻し）・流れの外でセーブをロードしたなら、
+    # また同じ質問に着いても外れとしない（run 2026-11-11_1007: 正解を答えて先へ進んでから巻き戻し、正解を外れと覚えた）
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    s, st, run = _answer_session({"wrong_answer_prob": 0.0})
+    _line(s, st, "main/s1:8", "まえ")
+    _line(s, st, "main/s1:9", "まえ")
+    _ask_yes_no(s, st)
+    _weights(s, st)
+    _choose(s, run, "いいえ", "b")
+    _feed(st, "choices_done")
+    _line(s, st, "main/s1:30", "正解のつづき")
+    _line(s, st, "main/s1:8", "まえ")  # 巻き戻し
+    _ask_yes_no(s, st)
+    w = _weights(s, st)
+    assert not run.flow.wrong and not run.flow.right
+    assert w["click choices/いいえ"] == click * k
+    assert any("巻き戻し" in n and "当たり外れは数えない" in n for n in run.flow.summary())
+    # 流れの外でセーブをロードした
+    _choose(s, run, "いいえ", "b")
+    _feed(st, "choices_done")
+    ev = Event("game", "load", {"slot": "GameSave001", "phase": "start"}, 0)
+    st.feed(ev)
+    s.on_event(ev)
+    _ask_yes_no(s, st)
+    _weights(s, st)
+    assert not run.flow.wrong
+    assert any("セーブ（GameSave001）をロードした" in n for n in run.flow.summary())
+    # 出し直しの行（at の2つ目）で始めた質問で、外れへの返事に、出し直しの行より先に読んだ行が出ても、巻き戻しではない
+    # （質問の始まりは、at の行のうちいちばん先に読んだもの）
+    s, st, run, _ = _session({"ai_context_lines": 3, "wrong_answer_prob": 0.0})
+    run.flow = FlowTracker(parse_flows(tomllib.loads(TWO_QUESTIONS)["flow"]))
+    _line(s, st, "main/s1:10", "どうする？")
+    _line(s, st, "main/s1:12", "ちがうよ")
+    _ask_yes_no(s, st, "main/s1:11")
+    _weights(s, st)
+    _choose(s, run, "はい", "a")
+    _ask_yes_no(s, st, "main/s1:12")  # 返事（出し直しの行より先に読んだ行）のあと、同じ質問に戻った
+    _weights(s, st)
+    assert (("選択肢で答える", "main/s1:11"), ("はい",)) in run.flow.wrong
+
+
+def test_game_sending_back_before_the_question_is_still_a_wrong_answer():
+    # 答えて本文を読んだあとに scene が変わって質問の前に戻った（バッドエンドからゲームのボタンで戻す）なら、
+    # ゲームが外れと判定したので、今までどおり外れと覚える
+    s, st, run = _answer_session({"wrong_answer_prob": 0.0})
+    _line(s, st, "main/s1:9", "まえ")
+    _ask_yes_no(s, st)
+    _weights(s, st)
+    _choose(s, run, "はい", "a")
+    _feed(st, "choices_done")
+    _scene(s, st, "ending/bad")  # 答えた直後の切り替えは数えない
+    _line(s, st, "ending/bad:1", "おしまい")
+    _scene(s, st, "main/s1")
+    _line(s, st, "main/s1:9", "まえ")
+    _ask_yes_no(s, st)
+    _weights(s, st)
+    assert (("選択肢で答える", "main/s1:10"), ("はい",)) in run.flow.wrong
+    # 答えた直後に scene が変わっただけ（思い出から本編へ戻る）なら、そのあとの巻き戻しは数えない
+    s, st, run = _answer_session({"wrong_answer_prob": 0.0})
+    _line(s, st, "main/s1:9", "まえ")
+    _ask_yes_no(s, st)
+    _weights(s, st)
+    _choose(s, run, "いいえ", "b")
+    _feed(st, "choices_done")
+    _scene(s, st, "main/s1")
+    _line(s, st, "main/s1:30", "正解のつづき")
+    _line(s, st, "main/s1:9", "まえ")  # 巻き戻し
+    _ask_yes_no(s, st)
+    _weights(s, st)
+    assert not run.flow.wrong
+
+
 def test_learned_answer_is_used_when_source_is_learn():
     # answer_source が learn なら、覚えた正解（flow_right）だけを使う
     k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]

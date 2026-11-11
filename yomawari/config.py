@@ -141,10 +141,11 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "wrong_answers_per_question": 1,  # わざと外れを答えるとき、1つの質問で答える外れの数（そのあと正解を答える）
     # 続きから遊ぶ（fuzz/resume.py）。ラン中にゲームを起動し直したら、この秒数のあいだ「続きから」のボタン・いちばん新しい
     # セーブ済みのスロット・（見えているスロットがどれも空なら）ページを送るボタンの重みに resume_factor を、「はじめから」に
-    # resume_new_game_factor を掛ける。0 にすると使わない
+    # resume_new_game_factor を掛ける。0 にすると使わない。「はじめから」は、そのあいだ押さない（resume_sec たてば押せる。
+    # run 2026-11-11_1007: 0.05 のとき、タイトルで 1.7% の「はじめから」を引き、1.3 時間ぶんの進みを最初からやり直した）
     "resume_sec": 180.0,
     "resume_factor": 20.0,
-    "resume_new_game_factor": 0.05,
+    "resume_new_game_factor": 0.0,
     # 続きから遊ぶとき、見えているいちばん新しいセーブが、このランで最後にセーブした時刻よりこの秒数以上前なら、
     # ほかのページに自分のセーブがあるとして、ページを送って探す。resume_page_limit 回送っても見つからなければ、見えているものでよい
     "resume_stamp_slack_sec": 60.0,
