@@ -49,7 +49,7 @@ emit("scene", name="Title")
 if a.mock_mode == "exception":
     out.write(
         "NullReferenceException: Object reference not set to an instance of an object\n"
-        "Rachel.Scenario.Runner:Step () (at Assets/Scripts/Runner.cs:42)\n"
+        "MyGame.Scenario.Runner:Step () (at Assets/Scripts/Runner.cs:42)\n"
         "UnityEngine.EventSystems.ExecuteEvents:Execute (UnityEngine.EventSystems.IPointerClickHandler,UnityEngine.EventSystems.BaseEventData)\n"
         "\n"
         "(Filename: Assets/Scripts/Runner.cs Line: 42)\n"
@@ -61,7 +61,7 @@ if a.mock_mode == "exception":
         "log_error",
         type="Exception",
         message="NullReferenceException: Object reference not set to an instance of an object",
-        stack="Rachel.Scenario.Runner:Step () (at Assets/Scripts/Runner.cs:42)\n",
+        stack="MyGame.Scenario.Runner:Step () (at Assets/Scripts/Runner.cs:42)\n",
     )
 if a.mock_mode == "menus":
     emit("resolution", w=2560, h=1440, mode="Windowed")
