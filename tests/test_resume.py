@@ -396,6 +396,64 @@ def test_resume_accepts_visible_save_when_there_is_no_next_page():
     assert _weights(s, st, 0.0)[f"click {_label(4)}"] == CLICK * BOOST
 
 
+STUCK_PAGE = {_label(4): "5. 2026-11-11 22:00:00", _label(8): "9. 2026-11-11 23:32:38"}
+
+
+def _resume_load(s, run, label, launch):
+    """続きから遊ぶあいだに label のスロットを押して、ロードが始まった。"""
+    run.last_press = (label, time.monotonic())
+    s.on_event(Event("game", "load", {"slot": "GameSave", "phase": "start"}, launch))
+
+
+def test_relaunch_skips_save_that_stalled_after_loading():
+    # run 2026-11-11_2135: 止まった状態でセーブしたスロットを、起動し直すたびにいちばん新しいセーブとしてロードし、
+    # 本文が出ないまま S-02 で再起動するのを 14 回くり返して、再起動の上限で打ち切った
+    s, st, run = _session(launch=1)
+    _show(st, "SaveLoadUI", LOAD, _page(STUCK_PAGE))
+    assert _weights(s, st, 0.0)[f"click {_label(8)}"] == CLICK * BOOST
+    _resume_load(s, run, _label(8), 1)
+    assert run.resume_load == (_label(8), STUCK_PAGE[_label(8)])
+    restarted = []
+    assert s.recover("S-02", lambda: restarted.append(1))
+    s._recovery["on_fail"]()  # 抜け出せずに再起動する
+    assert restarted == [1] and run.bad_saves == {_label(8): STUCK_PAGE[_label(8)]}
+    assert any("このセーブを選ばない" in n for n in run.notes)
+    # 次の起動では、そのセーブを選ばず、次に新しいセーブを選ぶ
+    s = FuzzSession(run, st, s.pointer, lambda _: None, 2, lambda _: None)
+    w = _weights(s, st, 0.0)
+    assert f"click {_label(8)}" not in w and w[f"click {_label(4)}"] == CLICK * BOOST
+    # 同じスロットにセーブし直されたら（文字が変わったら）、また選べる
+    _show(st, "SaveLoadUI", LOAD, _page({**STUCK_PAGE, _label(8): "9. 2026-11-11 23:50:00"}))
+    assert _weights(s, st, 0.0)[f"click {_label(8)}"] == CLICK * BOOST
+
+
+def test_save_with_lines_after_loading_is_not_blamed():
+    # ロードしたあと本文が出たなら、そのあとで止まっても、セーブのせいではない
+    s, st, run = _session(launch=1)
+    s.cfg["recover_ops"] = 0
+    _show(st, "SaveLoadUI", LOAD, _page(STUCK_PAGE))
+    _weights(s, st, 0.0)
+    _resume_load(s, run, _label(8), 1)
+    s.on_event(Event("game", "line", {"line_id": "x:1.0", "text": "a"}, 1))
+    assert not s.recover("S-02", lambda: None)
+    assert run.bad_saves == {}
+
+
+def test_blamed_own_save_does_not_send_resume_to_other_pages():
+    # 止まったセーブが、このランで最後にセーブしたものなら、それより新しい自分のセーブを探してページを送らない
+    s, st, run = _session(launch=1)
+    s.cfg["recover_ops"] = 0
+    run.saved_wall = time.mktime((2026, 11, 11, 23, 32, 38, 0, 0, -1))
+    _show(st, "SaveLoadUI", LOAD, _page(STUCK_PAGE))
+    _weights(s, st, 0.0)
+    _resume_load(s, run, _label(8), 1)
+    assert not s.recover("S-02", lambda: None)
+    assert run.saved_wall is None
+    s = FuzzSession(run, st, s.pointer, lambda _: None, 2, lambda _: None)
+    w = _weights(s, st, 0.0)
+    assert w[f"click {_label(4)}"] == CLICK * BOOST and w["click SaveLoadUI/NextPageButton"] == CLICK
+
+
 def test_unread_slots_are_not_pressed_after_saved_ones_were_seen():
     # 実機: ページを送った直後、文字を読む前のスロットを押して、古いセーブをロードした
     s, st, run = _session(launch=0)

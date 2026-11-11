@@ -110,6 +110,9 @@ class FuzzRun:
     saved_wall: float | None = None  # saved_t と同じときの time.time()（スロットの文字の日時と比べる。起動し直しても残す）
     resume_pages: int = 0  # 続きから遊ぶあいだに、ページを送った回数
     slot_stems: set[str] = field(default_factory=set)  # セーブ済みと読めたスロットの名前（#N を除く）。文字を読む前の同じ名前のボタンも押さない
+    resume_texts: dict[str, str | None] = field(default_factory=dict)  # 続きから遊ぶあいだに見えていたセーブ済みのスロットの文字
+    resume_load: tuple[str, str | None] | None = None  # 続きから遊ぶためにロードしたスロットと文字（本文が出たら消す）
+    bad_saves: dict[str, str | None] = field(default_factory=dict)  # ロードしても進めなかったスロットと文字。続きから遊ぶときに選ばない
     save_first_until: float | None = None  # 終了ボタンを試す前にセーブしようとしているあいだ（この時刻まで）
     save_first_checked: float | None = None  # セーブしようとしているあいだ、最後に見た時刻（流れの途中の時間を数えないため）
     exit_unsaved: bool = False  # セーブできないまま終了を試すことにした（流れの途中では終了を試さない）
@@ -461,9 +464,15 @@ class FuzzSession:
             place = "choices:" + "|".join(str(c.get("text")) for c in d["items"] if isinstance(c, dict))
         if self.run.resume_until is not None:
             if ev.kind == "load" and d.get("phase") == "start":
+                label = self.recent_press()
+                if label is not None and label in self.run.resume_texts:
+                    self.run.resume_load = (label, self.run.resume_texts[label])
                 self._end_resume(f"セーブ（{d.get('slot')}）をロードした")
             elif ev.kind == "line":
                 self._end_resume("本文が始まった（ロードせずに始めた）")
+        if ev.kind == "line":
+            # ロードしたセーブから本文が出た。このセーブからは進める
+            self.run.resume_load = None
         if ev.kind == "load" and d.get("phase") == "start" and self.run.flow.active is None:
             # 流れの外でセーブをロードした（続きから遊ぶ・ロードの行き来）。流れの中のロード（思い出から本編に戻る）は除く
             self._forget_progress(f"セーブ（{d.get('slot')}）をロードした")
@@ -1019,10 +1028,12 @@ class FuzzSession:
         ロードするか本文が始まるか、resume_sec たったら終える。ランの最初の起動では、はじめから遊ぶ
         （--continue なら、最初の起動でも前のランのセーブの続きを遊ぶ）。"""
         run = self.run
+        run.resume_load = None
         if (self.launch == 0 and not run.continue_previous) or float(self.cfg["resume_sec"]) <= 0:
             return
         run.resume_until = time.monotonic() + float(self.cfg["resume_sec"])
         run.resume_pages = 0
+        run.resume_texts = {}
 
     def _end_resume(self, how: str) -> None:
         self.run.resume_until = None
@@ -1053,8 +1064,14 @@ class FuzzSession:
             return [op.scaled("saved_slot", low)
                     if op.target is not None and op.target.label in labels else op for op in cands]
         boost, low = float(self.cfg["resume_factor"]), float(self.cfg["resume_new_game_factor"])
+        # ロードしても進めなかったセーブ（同じスロットに同じ文字）は選ばない。選ぶと、起動し直すたびに同じところで止まる
+        # （run 2026-11-11_2135: 止まった状態でセーブしたスロットを 14 回ロードし、再起動の上限で打ち切った）
+        bad = {t.label for t in saved if t.label in run.bad_saves and run.bad_saves[t.label] == t.text}
+        saved = [t for t in saved if t.label not in bad]
+        run.resume_texts = {t.label: t.text for t in saved}
         newest = newest_slots({t.label: t.text for t in saved}, time.time()) or {t.label for t in saved}
-        empty = inactive(targets, run.inactive_words, run.masked_chars)
+        # 選ばないセーブは、ページを送るかを決めるときは空のスロットと同じに扱う
+        empty = inactive(targets, run.inactive_words, run.masked_chars) | bad
         # 文字を読めたのに日時がないスロットも、ロードするセーブではない。空を表す語（Empty）の読み違いで空と分からない
         # スロットが1つでもあると、ページを送らずに「はじめから」を押す（run 2026-11-11_1007: 9 個のうち 2 個を
         # 「Emply」と読み、セーブのある 3 ページ目以降を探さなかった）
@@ -1075,7 +1092,7 @@ class FuzzSession:
             cands = [op for op in cands if op.by not in ("list", "blind")]
         # いちばん新しいセーブ以外は押さない。一覧の探索（list）の重みで古いセーブを選ぶと、何章も戻る
         # （run 2026-11-09_1358: 15:58 のセーブがあるのに 14:54 のセーブをロードし、5 章戻って 30 分やり直した）
-        stale = ({t.label for t in saved} - newest) | unread
+        stale = ({t.label for t in saved} - newest) | unread | bad
         out = []
         for op in cands:
             if _presses(op, stale):
@@ -1235,14 +1252,40 @@ class FuzzSession:
 
     def recover(self, rule: str, on_fail: Callable[[], None]) -> bool:
         """S-02 / S-03 のとき、再起動する前に、抜け出す操作を recover_ops 回まで試す。試せないときは False。"""
-        if rule not in RECOVERABLE or int(self.cfg["recover_ops"]) <= 0 or self._exiting:
+        if rule not in RECOVERABLE:
             return False
+        if int(self.cfg["recover_ops"]) <= 0 or self._exiting:
+            self._blame_resume_save(rule)
+            return False
+
+        def fail() -> None:
+            self._blame_resume_save(rule)
+            on_fail()
+
         if self._recovery is None:
             self._recovery = {
                 "rule": rule, "left": int(self.cfg["recover_ops"]), "since": self.state.last_progress_t,
-                "ops": [], "on_fail": on_fail,
+                "ops": [], "on_fail": fail,
             }
         return True
+
+    def _blame_resume_save(self, rule: str) -> None:
+        """続きから遊ぶためにロードしたあと、本文が1行も出ないまま進めなくなって再起動するなら、そのセーブを覚えて、
+        このランで続きから遊ぶときに選ばない。"""
+        run = self.run
+        if run.resume_load is None:
+            return
+        label, text = run.resume_load
+        run.resume_load = None
+        run.bad_saves[label] = text
+        # このランで最後にセーブしたのがこのセーブなら、ほかのページに自分のセーブを探しに行かない
+        key = stamp_key(text)
+        if run.saved_wall is not None and key is not None and \
+                not older_than(key, run.saved_wall, float(self.cfg["resume_stamp_slack_sec"])):
+            run.saved_wall = None
+        run.notes.append(f"続きから遊ぶためにロードしたセーブ（{label}「{text}」）のあと、本文が出ないまま {rule} で"
+                         f"再起動するので、このランでは続きから遊ぶときにこのセーブを選ばない（起動 #{self.launch}）")
+        self.publish(Event("harness", "bad_save", {"label": label, "text": text, "rule": rule}, self.launch))
 
     async def _recover_step(self) -> None:
         r = self._recovery
