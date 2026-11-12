@@ -130,6 +130,8 @@ class GameState:
     chosen: str | None = None
     transitions: set[str] = field(default_factory=set)
     resolution: dict[str, Any] | None = None
+    # ゲームの設定（settings: locale・reveal_speed・音量など）。パッケージ 0.10.0 から
+    settings: dict[str, Any] | None = None
     saving: bool = False
     loading: bool = False
     last_game_t: float | None = None
@@ -139,6 +141,7 @@ class GameState:
     title_menu: str | None = None
     title_returns: int = 0
     resolution_changes: int = 0  # resolution の値（w / h / mode）が変わった回数
+    settings_changes: int = 0  # settings の値が変わった回数（押したボタンで設定が変わったかを見るため）
     saves: int = 0  # セーブが始まった回数（押したボタンでセーブしたかを見るため。V-07）
     # スクリプトのコマンドを実行した回数（応答確認のあいだにスクリプトが進んでいたかを見るため。S-01）
     commands: int = 0
@@ -178,6 +181,12 @@ class GameState:
         if self.resolution is not None and res != self.resolution:
             self.resolution_changes += 1
         self.resolution = res
+
+    def _on_settings(self, d: dict[str, Any], t: float) -> None:
+        values = {k: v for k, v in d.items() if k not in ("seq", "t", "f", "ev")}
+        if self.settings is not None and values != self.settings:
+            self.settings_changes += 1
+        self.settings = values
 
     def _on_scene(self, d: dict[str, Any], t: float) -> None:
         self.scene = d.get("name")
@@ -354,7 +363,8 @@ class GameState:
         """画面の状態の要約。操作のあとにこれが変われば「反応があった」とみなす。
 
         ボタンの矩形は含めない（マウスを載せただけで変わることがあるため）。見えているボタンの並びは含める
-        （スクロールすると変わる）。
+        （スクロールすると変わる）。ゲームの設定（settings）も含める。設定画面の選択肢・スライダーは、押しても
+        画面の並びは変わらず、設定の値だけが変わる（run 2026-11-12_2156: 選択肢を「一度も反応しなかったボタン」とした）。
         """
         return (
             self.scene,
@@ -363,6 +373,7 @@ class GameState:
             tuple(sorted((m.name, m.modal, tuple(b.label for b in m.visible_buttons)) for m in self.menus.values())),
             tuple(c.key for c in self.choices),
             self.busy,
+            self.settings_changes,
         )
 
     def screens(self) -> tuple[str | None, frozenset[str]]:

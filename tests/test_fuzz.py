@@ -435,6 +435,42 @@ def test_s01_rechecks_with_another_op_before_raising():
     assert "「rapid_click 10」のあと" in issues[0].detail and f"click {tab.label} にも反応がありませんでした" in issues[0].detail
 
 
+def test_settings_change_counts_as_response():
+    # run 2026-11-12_2156: 設定画面の選択肢（言語・ウィンドウサイズ・テキスト速度）は、押しても画面の並びが変わらず、
+    # 設定の値だけが変わる。「一度も反応しなかったボタン」とせず、settings の値が変われば反応ありとする
+    from .test_looks import CFG, _Mouse
+
+    st = GameState()
+    st.feed(Event("game", "resolution", {"w": 2000, "h": 1000}, 0))
+    base = {"locale": "ja-JP", "reveal_speed": 0.5, "auto_delay": 0.5, "master_volume": 1, "bgm_volume": 1,
+            "sfx_volume": 1, "voice_volume": 1}
+    st.feed(Event("game", "settings", {"seq": 3, "t": 1.0, "f": 10, "ev": "settings", **base}, 0))
+    assert st.settings == base and st.settings_changes == 0
+    st.feed(Event("game", "menu", {"name": "SettingsUI", "modal": True, "buttons": [
+        {"name": "Option_en", "rect": [0.1, 0.1, 0.3, 0.25], "type": "other"}]}, 0))
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                  rng=random.Random(1), cfg=CFG, response_timeout=0.2)
+    events = []
+    s = FuzzSession(run, st, Pointer(windows, _Mouse(), 1, st, activate_wait=0), events.append, 0, lambda _: None)
+    locale = {"value": "ja-JP"}
+
+    def click(*a, **k):
+        # 押すと言語が English になる。すでに English なら値は変わらない（ゲームは同じ値を出し直さない）
+        if locale["value"] != "en-US":
+            locale["value"] = "en-US"
+            st.feed(Event("game", "settings", {**base, "locale": "en-US"}, 0))
+
+    s.pointer.driver.click = click
+    target = st.targets()[0]
+    for _ in range(2):
+        asyncio.run(s._normal(Op("click", target), "modal:SettingsUI", False))
+    first, second = [e.data for e in events if e.kind == "op_result"]
+    assert first["responded"] and first["settings_changed"] and first["settings"]["locale"] == "en-US"
+    assert not first["screen_changed"]
+    assert not second["responded"] and not second["settings_changed"] and second["settings"] is None
+
+
 # --- 設定 ---
 
 
