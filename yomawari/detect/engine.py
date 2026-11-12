@@ -305,6 +305,8 @@ def _alive(ev: Event, limit: float) -> bool:
 class ResponseCheckDetector(Detector):
     """S-01: イレギュラー操作の次の通常の操作（応答確認）に、画面が反応しない（ハートビートは生存）。
 
+    反応がなく、前に反応した別の操作でもう一度確かめるとき（recheck）は出さず、そちらの結果で判定する。
+
     待っているあいだにスクリプトのコマンドが進んでいれば（commands_ran）、ゲームは止まっていないので出さない
     （run 2026-11-09_2259: 最後の本文のあと、背景の切り替えと待ちだけが続く演出の途中で本文送りが効かず、S-01 として再起動した）。"""
 
@@ -316,16 +318,19 @@ class ResponseCheckDetector(Detector):
         d = ev.data
         if ev.kind != "op_result" or not d.get("verify") or d.get("responded") or d.get("interfered"):
             return []
-        if d.get("commands_ran"):
+        if d.get("commands_ran") or d.get("recheck"):
             return []
         if not _alive(ev, self.alive):
             return []
         recent = list(d.get("recent") or [])
-        cause = recent[-2] if len(recent) >= 2 else "（不明）"
+        tried = [str(x) for x in d.get("verify_tried") or []]
+        back = 2 + len(tried)  # 先に押して反応がなかった応答確認の操作の、さらに前がイレギュラー操作
+        cause = recent[-back] if len(recent) >= back else "（不明）"
         where = (d.get("state") or {}).get("top_modal") or (d.get("state") or {}).get("scene")
+        also = f"（その前に {'、'.join(tried)} にも反応がありませんでした）" if tried else ""
         return [
             self.issue(
-                f"イレギュラー操作「{cause}」のあと、{d.get('label')} に {d.get('waited')} 秒反応がありません",
+                f"イレギュラー操作「{cause}」のあと、{d.get('label')} に {d.get('waited')} 秒反応がありません{also}",
                 key=f"{cause}|{d.get('label')}|{where}", launch=ev.launch, t=ev.t, wall=ev.wall,
                 recent=recent, state=d.get("state"),
             )
