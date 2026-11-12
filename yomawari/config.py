@@ -134,6 +134,8 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "flow_avoid_factor": 0.02,  # 流れの途中で押すと流れから外れるボタン（avoid）の重みに掛ける
     "flow_idle_sec": 10.0,  # 流れのどの画面・scene でもない状態がこれだけ続いたら、流れが途切れたとする
     "flow_retry_lines": 6,  # 流れを最後まで進めて（答えて）からこの行数以内に同じ流れが始まったら、同じ質問に戻ったとする
+    # 試せる組み合わせをすべて試した質問で、選ぶ手順のボタンをこの回数押しても進めなければ、その質問では流れに沿うのをやめる
+    "flow_exhausted_picks": 20,
     # 質問の正解をどこから得るか（DESIGN.md §9「答えの選び方」）。profile: プロファイルの answers と覚えた正解 /
     # learn: 覚えた正解だけ。目的（purpose）で変える
     "answer_source": "profile",

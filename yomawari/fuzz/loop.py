@@ -677,6 +677,8 @@ class FuzzSession:
         step = tracker.update(self.state, run.opened_by, now, float(cfg["flow_idle_sec"]),
                               int(cfg["flow_retry_lines"]))
         after = (tracker.active.name if tracker.active else None, tracker.index)
+        if tracker.abandon(int(cfg["flow_exhausted_picks"])):
+            step, after = None, (None, tracker.index)
         if after != before:
             self._note_flow(before, after)
         self._judged()
@@ -728,7 +730,11 @@ class FuzzSession:
         # その先の決まったボタン（言葉を選ぶ）の手順か、選べるものが1つもない手順の画面にいる。人が一覧に戻って選び直すように、
         # 手順の操作は優先せず、流れから外れるボタン（要約を閉じる・一覧に戻る）を優先して前の手順へ戻る
         # （run 2026-11-06_1646: 言葉のない思い出で、「言葉を選ぶ」と空の言葉の一覧を閉じるのを繰り返した）
-        spent = step is not None and tracker.spent() and (not step.picks or not options)
+        # ただし、質問の組み合わせをすべて試し終えていて、ほかに選び直す道がないときは戻らずに答え直す（上の least_picked）。
+        # 戻ると、選ぶ手順でまた選び直し、その先でまた戻る、をくり返す
+        # （run 2026-11-12_0959: 言葉を選ぶ → 「この言葉で答える」の画面から一覧へ戻る、を 3 時間 15 分くり返した）
+        spent = (step is not None and tracker.spent() and not tracker.all_spent()
+                 and (not step.picks or not options))
         goal = None if spent or press_ans else self._flow_goal(row, fresh, quiet, texts, known, wrong)
         out = []
         for op in cands:

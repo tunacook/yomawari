@@ -338,6 +338,10 @@ class FlowTracker:
         self.question_at: int | None = None  # 答えた質問の始まりの行の、初めて読んだ順番
         self.exhausted_noted: set[Ctx] = set()
         self.picked: Counter[tuple[Ctx, Path]] = Counter()  # このランで、その組み合わせを選んだ回数
+        # すべて試し終えた質問で、選ぶ手順のボタンを押した回数。多すぎたら、その質問をあきらめる（abandoned）
+        # （run 2026-11-12_0959: 試し終えた質問で、言葉を選ぶ → 一覧へ戻るを 3 時間 15 分くり返した）
+        self.exhausted_picks: Counter[Ctx] = Counter()
+        self.abandoned: set[Ctx] = set()
 
     @property
     def step(self) -> Step | None:
@@ -409,18 +413,21 @@ class FlowTracker:
         if self.active is None:
             for f in self.flows:
                 if f.start.match(state, opened_by):
-                    self.active, self.index, self.idle_since = f, 0, None
-                    self.stats[f.name].started += 1
-                    self.ctx = (f.name, (state.line or {}).get("line_id") or state.scene or "")
+                    ctx = (f.name, (state.line or {}).get("line_id") or state.scene or "")
                     if (self.last_done is not None and self.last_done[0] == f.name
                             and self.lines_after <= retry_lines
-                            and not self._other_question(f, self.last_done[1], self.ctx[1])):
+                            and not self._other_question(f, self.last_done[1], ctx[1])):
                         # 答えてから数行で同じ流れがまた始まった: 外れへの返事を読んで、同じ質問に戻った。
                         # 返事の行は外れ方ごとに違うので、行で見ると同じ質問が別々になり、外れを何度も試す
                         # （run 2026-11-06_1012: 外れ方で 318 行目と 323 行目に分かれた）。
                         # ただし、プロファイルの正解の at で別の質問の行と分かれば、正解して次の質問に着いた
                         # （run 2026-11-11_1007: 正解のあと 2〜4 行で次の質問が出て、正解を外れと覚えた）
-                        self.ctx = self.last_done
+                        ctx = self.last_done
+                    if ctx in self.abandoned:
+                        continue  # 試し終えても進めず、あきらめた質問。流れに沿わず、ふだんの操作にする
+                    self.active, self.index, self.idle_since = f, 0, None
+                    self.stats[f.name].started += 1
+                    self.ctx = ctx
                     self.path = []
                     if self.ctx in self.ctx_seen:
                         self.stats[f.name].retried += 1
@@ -534,6 +541,24 @@ class FlowTracker:
         """いままで選んだものの枝（いま選んでいる思い出）を、すべて試し終えたか（言葉をすべて試した、言葉が1つもない）。"""
         return self.ctx is not None and bool(self.path) and self._exhausted(self.ctx, tuple(self.path), 0)
 
+    def all_spent(self) -> bool:
+        """いまの質問で、試せる組み合わせをすべて試し終えたか（ほかに選び直す道がない）。"""
+        return self.ctx is not None and self._exhausted(self.ctx, (), 0)
+
+    def abandon(self, limit: int) -> bool:
+        """すべて試し終えた質問で、選ぶ手順のボタンを limit 回押しても進めなければ、その質問をあきらめる
+        （開示の状態が変わるまで、その質問では流れに沿わない）。あきらめたら True。"""
+        ctx = self.ctx
+        if ctx is None or self.active is None or ctx not in self.exhausted_noted or self.exhausted_picks[ctx] < limit:
+            return False
+        self.abandoned.add(ctx)
+        self.events.append(
+            f"流れ「{ctx[0]}」の `{ctx[1]}` で、試せる組み合わせをすべて試したあと、選び直して {limit} 回押しても"
+            "先に進めなかったので、この質問では流れに沿うのをやめた（開示の状態が変わるまで）"
+        )
+        self._break("試し終えた質問をあきらめた")
+        return True
+
     def _exhausted(self, ctx: Ctx, path: Path, depth: int) -> bool:
         if (ctx, path) in self.leaves:
             return True
@@ -563,12 +588,17 @@ class FlowTracker:
         run 2026-11-06_1646: 思い出を読んだあと起動し直して、はじめから遊んだ（開示が消えた）のに、読んだと覚えていたので
         読み直さず、言葉のない思い出で「言葉を選ぶ」と空の言葉の一覧を閉じるのを繰り返した。"""
         if not self.done_once and not self.dead:
+            self.abandoned.clear()
+            self.exhausted_picks.clear()
             return
         self.events.append(f"{why}ので、読んだ思い出など一度済ませた手順（{len(self.done_once)} 件）と行き止まり"
                            f"（{len(self.dead)} 件）を忘れた（開示の状態が変わるため）")
         self.leaves -= self.dead - self.wrong
         self.dead.clear()
         self.done_once.clear()
+        # 開示が変われば、あきらめた質問にも新しい選び方があるかもしれない
+        self.abandoned.clear()
+        self.exhausted_picks.clear()
 
     def note_exhausted(self) -> None:
         """いまの手順で選べるものの枝を、すべて試し終えた（同じ質問で、試せる組み合わせがもうない）。"""
@@ -666,6 +696,8 @@ class FlowTracker:
             self.path = [*self.path[:self._picks_before(self.index)], picked]
             if self.ctx is not None:
                 self.picked[(self.ctx, tuple(self.path))] += 1
+                if self.ctx in self.exhausted_noted:
+                    self.exhausted_picks[self.ctx] += 1
         if self.index == len(flow.steps) - 1:
             if self.ctx is not None:
                 self.leaves.add((self.ctx, tuple(self.path)))
