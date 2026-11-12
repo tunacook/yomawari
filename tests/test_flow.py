@@ -1389,3 +1389,75 @@ def test_answers_of_earlier_questions_are_not_used():
     assert ask("main/chapter3:10.0", "main/chapter3:15.0", "main/chapter3:20.0") == {f"{SLOT}#1"}
     # 質問の行のあとに本文が少し続いても（外れへの返事など）、その質問の正解のまま
     assert ask("main/chapter3:10.0", "main/chapter3:11.0") == {SLOT, f"{SLOT}#2"}
+
+
+EXHAUST = """
+[[flow]]
+name = "質問に言葉で答える"
+start = { screen = "AlbumUI", by = "game" }
+avoid = ["WordUI/ReturnButton"]
+steps = [
+  { screen = "AlbumUI", press = "AlbumSlot*", note = "思い出を選ぶ" },
+  { screen = "EpisodeUI", press = "ShowWordsButton", note = "言葉を選ぶ" },
+  { screen = "WordListUI", press = "WordSlot*", note = "言葉を選ぶ" },
+  { screen = "WordUI", press = "AnswerButton", note = "この言葉で答える" },
+  { screen = "AnswerDialogUI", press = "Accept", note = "答えを決める" },
+]
+"""
+
+
+def test_exhausted_question_answers_again_then_gives_up():
+    # run 2026-11-12_0959: 試せる組み合わせ（思い出 1 つ・言葉 1 つ）をすべて試した質問で、言葉を選ぶ → 「この言葉で答える」の
+    # 画面で、選んでいる思い出の枝を試し終えたとして一覧へ戻るボタンを優先し、言葉を選び直す、を 3 時間 15 分くり返した。
+    # ほかに道がなければ戻らずに答え直し、選び直しが flow_exhausted_picks 回に届いたら、その質問をあきらめる
+    s, st, run, _ = _session({"flow_exhausted_picks": 4})
+    run.flow = FlowTracker(parse_flows(tomllib.loads(EXHAUST)["flow"]))
+    tr = run.flow
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    slot, frag = "AlbumUI/AlbumSlot (Clone)", "WordListUI/WordSlot(Clone)"
+    word_ui = [{"name": "AnswerButton", "rect": [0.5, 0.6, 0.7, 0.7]}, {"name": "ReturnButton", "rect": [0.1, 0.9, 0.2, 0.95]}]
+
+    def ask():
+        _feed(st, "line", line_id="main/s3:40.0", text="どこだって？")
+        _only(st, "AlbumUI", [LIST[0]])
+
+    def to_word_ui():
+        _press(s, st, run, slot)
+        _only(st, "EpisodeUI", SUMMARY)
+        _press(s, st, run, "EpisodeUI/ShowWordsButton")
+        _only(st, "WordListUI", [FRAGS[0]])
+        _press(s, st, run, frag)
+        _only(st, "WordUI", word_ui)
+        return _weights(s, st)
+
+    ask()
+    _weights(s, st)
+    to_word_ui()
+    _press(s, st, run, "WordUI/AnswerButton")
+    _only(st, "AnswerDialogUI", [{"name": "Accept", "rect": [0.5, 0.6, 0.7, 0.7]}])
+    _press(s, st, run, "AnswerDialogUI/Accept")
+    ask()  # 外れて同じ質問に戻った: 組み合わせはもうない
+    _weights(s, st)
+    assert tr.all_spent()
+    w = to_word_ui()
+    assert any("試せる組み合わせ（1 通り）をすべて試しても" in e for e in tr.events)
+    # 戻らずに答える（前は一覧へ戻るボタンを優先していた）
+    assert w["click WordUI/AnswerButton"] == click * k
+    assert w["click WordUI/ReturnButton"] < click
+    # 一覧へ戻って選び直すのが続いても、上限であきらめる
+    while tr.active is not None and tr.exhausted_picks[tr.ctx] < 4:
+        _only(st, "WordListUI", [FRAGS[0]])
+        _press(s, st, run, frag)
+        _only(st, "WordUI", word_ui)
+    w = _weights(s, st)
+    assert tr.active is None and tr.ctx in tr.abandoned
+    assert w["click WordUI/AnswerButton"] == click and w["click WordUI/ReturnButton"] == click
+    assert any("流れに沿うのをやめた" in e for e in tr.events)
+    # 同じ質問に戻っても、流れは始めない
+    ask()
+    _weights(s, st)
+    assert tr.active is None
+    # 開示の状態が変わったら（流れの外でセーブをロードした）、もう一度流れに沿う
+    s.on_event(Event("game", "load", {"slot": "GameSave004", "phase": "start"}, 0))
+    _weights(s, st)
+    assert tr.active is not None and not tr.abandoned
