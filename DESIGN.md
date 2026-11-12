@@ -127,6 +127,7 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 | `menu_close` | `name` | 応答確認 |
 | `transition` | `phase: start/end`, `name` | 操作待ち、進行不能判定 |
 | `resolution` | `w`, `h`, `mode` | 起動直後と変化時（`Update` で監視）。描画領域の位置と Retina 倍率の計算（§8）、解像度テスト |
+| `settings` | `locale`, `reveal_speed`, `auto_delay`, `master_volume`, `bgm_volume`, `sfx_volume`, `voice_volume` | 起動直後と変化時（0.2 秒ごとに監視、値は小数第 3 位まで）。ゲームの設定。Naninovel では `ILocalizationManager.SelectedLocale`、`ITextPrinterManager.BaseRevealSpeed` / `BaseAutoDelay`、`IAudioManager` の各音量（0〜1）。設定画面がゲーム独自の部品でも、値はエンジンの標準のサービスから読める。ハーネスは、押して値が変われば反応ありとする（設定画面の選択肢・スライダーは、押しても画面の並びが変わらない）。ウィンドウの大きさは `resolution`。パッケージ 0.10.0 から |
 | `save` / `load` | `slot`, `type`, `phase: start/end` | セーブ検証、分岐の巻き戻し |
 | `bgm_play` / `bgm_stop` / `voice` | `id` | 音声の整合性 |
 | `error_shown` | `kind` | ゲームがエラー表示を出した（セーブ失敗等） |
@@ -488,7 +489,7 @@ role_min_confidence = 0.7    # ボタンの見た目からの役割の推定（�
 | それ以外（本文を読んでいる） | 本文送り（`advance_point` をクリック）、右クリック、ホイール上 |
 
 - 画面の状態が変わったら `settle_sec` 待ってから操作する
-- 操作のあとは、画面の状態（`GameState.signature()`: scene、行ID、本文の表示が終わったか、menu とボタンの並び、選択肢、暗転中か）が変わるまで、S-01 の `timeout_sec` まで待つ。変われば「反応あり」。ボタンの矩形はマウスを載せただけで変わるので比べない
+- 操作のあとは、画面の状態（`GameState.signature()`: scene、行ID、本文の表示が終わったか、menu とボタンの並び、選択肢、暗転中か、ゲームの設定の値）が変わるまで、S-01 の `timeout_sec` まで待つ。変われば「反応あり」。ボタンの矩形はマウスを載せただけで変わるので比べない
 - 同じ名前のボタンが複数あるとき（セーブスロットなど）は、出てきた順に `#1`、`#2` … を付けて区別する（`[guard.buttons]` は名前だけで書く）
 - ボタンのあるモーダルの操作は、押す（`click`）・動かす（`move`）・抜ける（`leave`）の3グループに分け、Decider はグループを `[fuzz.weights]` で選んでから、その中の操作を選ぶ。スロットが何十個もある画面でも、スクロールやキー操作、閉じる操作が埋もれないようにするため。グループの重みには、中でいちばん試す価値の残っている操作の倍率（試行回数・反応のなさで下がる）を掛ける。ボタンを押し尽くすと、動かす・抜ける操作が選ばれやすくなる
 - 画面の状態には、menu ごとの「見えている（中心が描画領域の中にある）ボタン」の並びを含める。スクロールして見えるボタンが変われば「反応あり」になる

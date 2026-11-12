@@ -43,6 +43,7 @@ namespace Yomawari
         readonly List<RaycastResult> hits = new();
         PointerEventData pointer;
         string choicesSignature = ""; // 空 = 選択肢なし。起動直後に空の choices を出さない
+        string settingsSignature; // 最後に出した settings。null = まだ出していない
         float elapsed;
 
         // choices_done の index（直近に出した choices の中での順番）。見つからなければ -1
@@ -65,6 +66,27 @@ namespace Yomawari
             if (!Engine.Initialized || !Engine.TryGetService<IUIManager>(out var manager)) return;
             ScanUIs(manager);
             ScanChoices();
+            ScanSettings();
+        }
+
+        // ゲームの設定（言語・本文の出る速さ・音量）を、最初と変わったときだけ出す（settings）。どれも Naninovel の
+        // 標準のサービスの値なので、設定画面がゲーム独自の部品でも読める。ウィンドウの大きさは resolution で出す。
+        // 値は小数第 3 位まで（YomawariFormat.Num）で比べるので、スライダーの細かな揺れでは出し直さない
+        void ScanSettings()
+        {
+            if (!Engine.TryGetService<ILocalizationManager>(out var locale) ||
+                !Engine.TryGetService<ITextPrinterManager>(out var printers) ||
+                !Engine.TryGetService<IAudioManager>(out var audio)) return;
+            var body = "\"locale\":" + YomawariFormat.Str(locale.SelectedLocale) +
+                       ",\"reveal_speed\":" + YomawariFormat.Num(printers.BaseRevealSpeed) +
+                       ",\"auto_delay\":" + YomawariFormat.Num(printers.BaseAutoDelay) +
+                       ",\"master_volume\":" + YomawariFormat.Num(audio.MasterVolume) +
+                       ",\"bgm_volume\":" + YomawariFormat.Num(audio.BgmVolume) +
+                       ",\"sfx_volume\":" + YomawariFormat.Num(audio.SfxVolume) +
+                       ",\"voice_volume\":" + YomawariFormat.Num(audio.VoiceVolume);
+            if (body == settingsSignature) return;
+            settingsSignature = body;
+            YomawariLog.Emit("settings", body);
         }
 
         void ScanUIs(IUIManager manager)
