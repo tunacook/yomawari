@@ -91,6 +91,8 @@ class FuzzRun:
     rng: random.Random
     cfg: dict[str, Any]
     response_timeout: float
+    # 応答確認に使う操作の数（rules.yaml の S-01 の checks）。反応がなければ、前に反応した別の操作でもう一度確かめる
+    response_checks: int = 1
     started: float = field(default_factory=time.monotonic)
     last_exit_t: float | None = None
     run_sec: float = 0.0  # ランの長さ（--hours）。長いランで expect_exit の間隔を延ばすのに使う
@@ -323,6 +325,7 @@ class FuzzSession:
         self.on_expect_exit = on_expect_exit
         self._lock = asyncio.Lock()
         self._verify_next = False
+        self._verify_tried: list[str] = []  # いまの応答確認で、押しても反応がなかった操作
         self._irregular_t = -1.0
         self._sig: Any = None
         self._sig_t = 0.0
@@ -614,9 +617,7 @@ class FuzzSession:
         key = state_key(self.state)
         verify = False
         if self._verify_next:
-            # 画面を動かす操作（方向キー・Enter・ドラッグ・ホイール。一覧を探す操作も）は、フォーカスやスクロール位置で
-            # 結果が変わるので使わない
-            known = [op for op in cands if op.group not in ("move", "list", "search") and (key, op.label) in self.run.responsive]
+            known = self._verify_candidates(cands, key)
             if known:
                 cands, verify = known, True
         op = self.run.decider.choose(key, cands)
@@ -1864,6 +1865,39 @@ class FuzzSession:
                                  f"{', '.join(f'`{k}` 「{v}」' for k, v in list(texts.items())[:3])}）（起動 #{self.launch}）")
         self.publish(Event("harness", "read_text", {"tried": len(todo), "texts": texts}, self.launch))
 
+    def _verify_candidates(self, cands: list[Op], key: str) -> list[Op]:
+        """応答確認に使える操作: 同じ状態で前に反応があったもの。
+
+        画面を動かす操作（方向キー・Enter・ドラッグ・ホイール。一覧を探す操作も）は、フォーカスやスクロール位置で
+        結果が変わるので使わない。いま押しても反応しないと見込んでいるボタン（暗い、文字で空と分かる）と、
+        この応答確認ですでに反応がなかった操作も使わない（run 2026-11-12_0959: セーブで反応したスロットを、
+        ロードの画面で空きのスロットとして押して S-01 にした）。"""
+        quiet = self._quiet()
+        return [op for op in cands
+                if op.group not in ("move", "list", "search") and (key, op.label) in self.run.responsive
+                and op.label not in self._verify_tried and not (op.target is not None and op.target.label in quiet)]
+
+    def _recheck(self, op: Op, key: str, verify: bool, responded: bool, commands_ran: bool, interfered: bool) -> bool:
+        """応答確認の操作に反応がなかったら、前に反応があった別の操作で、もう一度確かめるか（そのときは S-01 を出さない）。
+
+        同じ画面でも、モード・スクロール位置・スロットの中身で、前に反応した操作が今は何も起こさないことがある
+        （run 2026-11-12_0959: すでに選ばれているタブ、端までスクロールした一覧のスクロールバー、空きのスロット）。
+        反応がなかった操作は、この状態では応答確認に使わない。"""
+        if not verify:
+            return False
+        if responded:
+            self._verify_tried = []
+            return False
+        self.run.responsive.discard((key, op.label))
+        self._verify_tried.append(op.label)
+        if commands_ran or interfered or len(self._verify_tried) >= self.run.response_checks:
+            return False
+        cands = normal_candidates(self.state, self.run.guard, self.cfg["weights"], False)
+        if not self._verify_candidates(cands, state_key(self.state)):
+            return False
+        self._verify_next = True
+        return True
+
     async def _normal(self, op: Op, key: str, verify: bool) -> None:
         before = self.state.signature()
         screens_before = self.state.screens()
@@ -1954,6 +1988,10 @@ class FuzzSession:
             if row is not None and item is not None:
                 self._moving = (key, op.goal, op.label, distance(item.rect, row.view))
         hb_age = time.monotonic() - self.state.last_game_t if self.state.last_game_t is not None else None
+        commands_ran = self.state.commands != commands_before
+        interfered = self._irregular_t >= started
+        recheck = self._recheck(op, key, verify, responded, commands_ran, interfered)
+        tried_before = self._verify_tried[:-1] if verify and not responded else []
         self.publish(
             Event(
                 "harness", "op_result",
@@ -1966,12 +2004,16 @@ class FuzzSession:
                     "screen_changed": screen_changed,
                     "saved": self.state.saves != saves_before,  # 押してセーブが始まった（空きのスロットにセーブした）
                     # 待っているあいだに、スクリプトのコマンドが進んだ（本文のない演出の途中。S-01 はゲームが止まったとしない）
-                    "commands_ran": self.state.commands != commands_before,
+                    "commands_ran": commands_ran,
                     "quiet": quiet,
                     "responded": responded,
                     "waited": round(waited, 3),
                     "verify": verify,
-                    "interfered": self._irregular_t >= started,
+                    # 反応がなかったので、別の操作でもう一度確かめる（S-01 はそちらで判定する）
+                    "recheck": recheck,
+                    # この応答確認で、先に押して反応がなかった操作
+                    "verify_tried": tried_before,
+                    "interfered": interfered,
                     "heartbeat_age": hb_age,
                     "recent": list(self.run.recent),
                     "state": self.state.snapshot(),
@@ -2006,6 +2048,7 @@ class FuzzSession:
             run.stats["irregular"] += 1
             run.edge_sent[(trigger, op.kind)] += 1
             self._verify_next = True
+            self._verify_tried = []
 
     async def _check_front(self, key: str) -> None:
         """押しても画面が変わらなかったボタン。ゲームの外のアプリが前面に出ていたら external と確定し、ゲームを前面に戻す。"""
@@ -2023,6 +2066,7 @@ class FuzzSession:
             self.run.notes.append(f"`{key}` を押したとき、ほかのアプリが前面に出ていた（前にゲームの中で反応したボタンなので"
                                   f" external とはせず、ゲームを前面に戻した。起動 #{self.launch}）")
             self._verify_next = True
+            self._verify_tried = []
             return
         self.run.guard.book.confirm(key, "external", "前面のアプリがゲーム以外に切り替わった")
         self.run.guard.use_external(key)
@@ -2033,6 +2077,7 @@ class FuzzSession:
             back = False
         self.publish(Event("harness", "external", {"target": key, "front_changed": True, "back": back}, self.launch))
         self._verify_next = True
+        self._verify_tried = []
 
     async def _expect_exit(self, op: Op) -> None:
         assert op.target is not None
@@ -2085,6 +2130,7 @@ class FuzzSession:
             Event("harness", "external", {"target": op.target.label, "front_changed": changed, "back": back}, self.launch)
         )
         self._verify_next = True
+        self._verify_tried = []
 
     async def _do(self, op: Op, trigger: str | None = None) -> bool:
         """op を実行して op イベントを出す。押せなければ op_error を出して False。"""

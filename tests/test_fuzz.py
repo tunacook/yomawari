@@ -394,6 +394,47 @@ def test_s01_not_raised_while_script_commands_run():
     assert [i.rule_id for i in engine.feed(Event("harness", "op_result", {**res, "heartbeat_age": 0.5}, 0))] == ["S-01"]
 
 
+def test_s01_rechecks_with_another_op_before_raising():
+    # run 2026-11-12_0959: 応答確認に選んだ操作が、前に反応した画面と同じ名前の画面でも、いまは何も起こさないもの
+    # （すでに選ばれているタブ、端までスクロールした一覧のスクロールバー、空きのスロット）で、S-01 の 4 件がすべて誤検知だった。
+    # 反応がなければ、前に反応した別の操作でもう一度確かめ、どれにも反応がないときだけ S-01 にする
+    from .test_looks import CFG, _Mouse
+
+    st = GameState()
+    st.feed(Event("game", "resolution", {"w": 2000, "h": 1000}, 0))
+    st.feed(Event("game", "menu", {"name": "Menu", "modal": True, "buttons": [
+        {"name": "Tab", "rect": [0.1, 0.1, 0.3, 0.25]}, {"name": "Close", "rect": [0.5, 0.1, 0.7, 0.25]},
+        {"name": "Slot", "rect": [0.1, 0.5, 0.3, 0.65]}]}, 0))
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                  rng=random.Random(1), cfg=CFG, response_timeout=0.2, response_checks=2)
+    events = []
+    s = FuzzSession(run, st, Pointer(windows, _Mouse(), 1, st, activate_wait=0), events.append, 0, lambda _: None)
+    s.pointer.driver.click = lambda *a, **k: None  # 押しても画面は変わらない
+    key = "modal:Menu"
+    tab, close, slot = st.targets()
+    run.responsive |= {(key, f"click {t.label}") for t in (tab, close, slot)}
+    s._dim = {slot.label}  # 空きと見込んでいるスロットは、前に反応していても使わない
+    engine = Engine(scaled_rules(1.0))
+
+    def press(t):
+        asyncio.run(s._normal(Op("click", t), key, True))
+        res = [e.data for e in events if e.kind == "op_result"][-1]
+        return res, engine.feed(Event("harness", "op_result", {**res, "heartbeat_age": 0.5}, 0))
+
+    cands = normal_candidates(st, Guard({}), CFG["weights"], False)
+    assert {op.label for op in s._verify_candidates(cands, key)} == {f"click {tab.label}", f"click {close.label}"}
+    run.recent.append("rapid_click 10")
+    res, issues = press(tab)
+    assert res["recheck"] and issues == [] and s._verify_next
+    assert (key, f"click {tab.label}") not in run.responsive  # 反応がなかった操作は、この状態では応答確認に使わない
+    assert [op.label for op in s._verify_candidates(cands, key)] == [f"click {close.label}"]
+    res, issues = press(close)
+    assert not res["recheck"] and res["verify_tried"] == [f"click {tab.label}"]
+    assert [i.rule_id for i in issues] == ["S-01"]
+    assert "「rapid_click 10」のあと" in issues[0].detail and f"click {tab.label} にも反応がありませんでした" in issues[0].detail
+
+
 # --- 設定 ---
 
 
