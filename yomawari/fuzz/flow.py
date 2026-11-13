@@ -394,6 +394,12 @@ class FlowTracker:
         self.last_leaf = None
         self.last_done = None
 
+    def forget_answer(self) -> None:
+        """いま答えたものの当たり外れを数えない（プロファイルと違う言語で答えたなど）。同じ質問にまた着いても、
+        前の答えの続き（外れへの返事のあとに戻った）とはみなさない。"""
+        self.last_leaf = None
+        self.last_done = None
+
     def _question_start(self, flow: Flow, line: str) -> int | None:
         """質問の始まりの行を、初めて読んだ順番で。プロファイルの正解の at に同じ質問の行が並んでいれば、そのうち
         いちばん先に読んだ行（出し直しの行で答えたとき、外れへの返事の行は出し直しの行より先に読んでいることがある）。"""

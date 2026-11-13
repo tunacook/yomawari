@@ -14,6 +14,9 @@ runs/_experience/<ゲーム>.json の "progress" に足し合わせる。random 
 
 どちらも、起きる前 progress_window_sec のうちに押した最後の操作と、いま開いている寄り道の画面を開いた操作
 （右クリックメニューの「ロード」など）のものとして数える。
+
+ゲームの言語を切り替えたボタン（押して settings の locale が変わった）と、その画面までの開き方も "locale" に覚え、
+次のランでゲームの言語をプロファイルの言語に戻すのに使う（DESIGN.md §9「プロファイルの言語」）。
 """
 
 from __future__ import annotations
@@ -46,6 +49,10 @@ class Experience:
         # ゲームの流れで外れと分かった組み合わせ ((流れの名前, 質問の本文の行), 選んだものの並び)。FlowTracker と共有する
         self.flow_wrong: set[tuple[tuple[str, str], tuple[str, ...]]] = set()
         self.flow_right: set[tuple[tuple[str, str], tuple[str, ...]]] = set()
+        # 言語を切り替えたボタンの label → 押して切り替わった言語
+        self.locale_buttons: dict[str, str] = {}
+        # 言語を切り替えたボタンのある画面（menu）→ その画面を開いたボタンの label の並び（外側の画面から順に）
+        self.locale_routes: dict[str, list[str]] = {}
         if path is not None and path.exists():
             self._load(path)
 
@@ -62,6 +69,14 @@ class Experience:
                     for path in paths if isinstance(paths, list) else []:
                         if isinstance(path, list) and path and all(isinstance(x, str) for x in path):
                             out.add(((str(name), str(line)), tuple(path)))
+        loc = doc.get("locale") or {}
+        if isinstance(loc, dict):
+            for label, tag in (loc.get("buttons") or {}).items():
+                if isinstance(tag, str):
+                    self.locale_buttons[str(label)] = tag
+            for menu, route in (loc.get("routes") or {}).items():
+                if isinstance(route, list) and all(isinstance(x, str) for x in route):
+                    self.locale_routes[str(menu)] = list(route)
         for key, ops in (doc.get("progress") or {}).items():
             if not isinstance(ops, dict):
                 continue
@@ -72,7 +87,7 @@ class Experience:
                         self._loaded.add((key, label))
 
     def save(self) -> None:
-        """ほかの記録（roles など）は残して、"progress" と "flow_wrong"・"flow_right" だけを書き換える。"""
+        """ほかの記録（roles など）は残して、"progress" と "flow_wrong"・"flow_right"・"locale" だけを書き換える。"""
         if self.path is None:
             return
         doc: dict[str, Any] = {}
@@ -87,6 +102,9 @@ class Experience:
             for (name, line), path in sorted(combos):
                 out.setdefault(name, {}).setdefault(line, []).append(list(path))
             doc[key] = out
+        if self.locale_buttons or self.locale_routes:
+            doc["locale"] = {"buttons": dict(sorted(self.locale_buttons.items())),
+                             "routes": dict(sorted(self.locale_routes.items()))}
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -96,6 +114,14 @@ class Experience:
 
     def pressed(self, key: str, label: str) -> None:
         self._count(key, label, "tries")
+
+    def locale_switched(self, label: str, locale: str, route: list[str]) -> None:
+        """ボタン（label）を押して、ゲームの言語が locale に切り替わった。route はその画面を開いたボタンの並び。
+        開き方が分からない（ゲームが開いた画面）ときは、前に覚えた開き方を残す。"""
+        self.locale_buttons[label] = locale
+        menu = label.split("/", 1)[0]
+        if route or menu not in self.locale_routes:
+            self.locale_routes[menu] = list(route)
 
     def reach(self, place: str) -> bool:
         """本文の行・scene・選択肢に届いた。このランで初めてなら True（進行）。"""

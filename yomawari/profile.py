@@ -2,7 +2,8 @@
 
 ゲームのリポジトリに置く yomawari.profile.toml と、yomawari.toml の同じ節を、
 コードの既定値 → プロファイル → yomawari.toml の順に重ねる（あとのものが上書き。配列は足し合わせる）。
-扱う節は [guard.roles]、[guard.buttons]、[screens.<menu>]、[rules.<ID>]、[[flow]]（ゲームの流れ。fuzz/flow.py）。
+扱う節は [guard.roles]、[guard.buttons]、[screens.<menu>]、[rules.<ID>]、[[flow]]（ゲームの流れ。fuzz/flow.py）と、
+プロファイルの言語（locale。正解の文字などを書いた言語）。
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from .detect.engine import Rule
 from .fuzz.flow import Flow, parse_flows
 
 SCREEN_KEYS = ("weight",)
-PROFILE_SECTIONS = ("guard", "screens", "rules", "flow")
+PROFILE_SECTIONS = ("guard", "screens", "rules", "flow", "locale")
 
 
 @dataclass
@@ -27,6 +28,9 @@ class GameSpec:
     screen_weights: dict[str, float] = field(default_factory=dict)
     rules: dict[str, dict[str, Any]] = field(default_factory=dict)  # ルールID → params の上書き
     flows: list[Flow] = field(default_factory=list)  # ゲームの流れ（[[flow]]）
+    # プロファイルの言語（ゲームの言語のタグ。例: ja-JP）。正解の文字などを書いた言語。ハーネスはゲームの言語をこれに合わせ、
+    # 違う言語のあいだは正解と照らし合わせない（DESIGN.md §9「プロファイルの言語」）
+    locale: str | None = None
     profile_path: Path | None = None
 
 
@@ -93,6 +97,11 @@ def build_spec(profile: dict[str, Any], local: dict[str, Any], profile_path: Pat
             raise ConfigError(f"rules.{rid} は表にしてください")
         spec.rules[rid] = dict(params)
     spec.flows = parse_flows(doc.get("flow"))
+    if "locale" in doc:
+        loc = doc["locale"]
+        if not isinstance(loc, str) or not loc.strip():
+            raise ConfigError("locale はゲームの言語のタグ（例: \"ja-JP\"）の文字列にしてください")
+        spec.locale = loc.strip()
     return spec
 
 

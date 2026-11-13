@@ -471,7 +471,118 @@ def test_settings_change_counts_as_response():
     assert not second["responded"] and not second["settings_changed"] and second["settings"] is None
 
 
+_SETTINGS = {"locale": "ja-JP", "locales": ["ja-JP", "en-US"], "reveal_speed": 0.5, "auto_delay": 0.5,
+             "master_volume": 1, "bgm_volume": 1, "sfx_volume": 1, "voice_volume": 1}
+_PAUSE = {"name": "PauseUI", "modal": True, "buttons": [{"name": "SettingsButton", "rect": [0.1, 0.1, 0.3, 0.2]},
+                                                        {"name": "CloseButton", "rect": [0.5, 0.1, 0.7, 0.2]}]}
+_LANG = {"name": "SettingsUI", "modal": True, "buttons": [
+    {"name": "Option_a", "rect": [0.1, 0.5, 0.3, 0.6], "type": "other"},
+    {"name": "Option_b", "rect": [0.5, 0.5, 0.7, 0.6], "type": "other"},
+    {"name": "BackButton", "rect": [0.1, 0.8, 0.3, 0.9]}]}
+
+
+def _locale_session(locale: str, *menus: dict, run: FuzzRun | None = None):
+    from .test_looks import CFG, _Mouse
+
+    st = GameState()
+    st.feed(Event("game", "resolution", {"w": 2000, "h": 1000}, 0))
+    st.feed(Event("game", "settings", {**_SETTINGS, "locale": locale}, 0))
+    for m in menus:
+        st.feed(Event("game", "menu", m, 0))
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
+    run = run or FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                         rng=random.Random(1), cfg=CFG, response_timeout=0.2, locale="ja-JP")
+    events: list[Event] = []
+    s = FuzzSession(run, st, Pointer(windows, _Mouse(), 1, st, activate_wait=0), events.append, 0, lambda _: None)
+    return st, run, s
+
+
+def test_locale_button_is_learned_and_used_to_switch_back(tmp_path):
+    # run 2026-11-12_2156: 設定画面で言語を English にしたまま、プロファイルの正解（日本語の文字）と照らし合わせていた。
+    # 押して言語が切り替わったボタンと、その画面を開いたボタンを覚え、違う言語のあいだはそれを押しにいく
+    from yomawari.fuzz.experience import Experience
+
+    st, run, s = _locale_session("ja-JP", _PAUSE, _LANG)
+    run.experience = Experience(tmp_path / "exp.json")
+    run.opened_by.update({"PauseUI": "MainUI/MenuButton", "SettingsUI": "PauseUI/SettingsButton"})
+    by_name = {t.name: t for t in st.targets() if t.menu == "SettingsUI"}
+    switch = {"Option_a": "en-US", "Option_b": "ja-JP"}
+
+    for name in ("Option_a", "Option_b"):
+        def click(*a, _to=switch[name], **k):
+            st.feed(Event("game", "settings", {**_SETTINGS, "locale": _to}, 0))
+
+        s.pointer.driver.click = click
+        asyncio.run(s._normal(Op("click", by_name[name]), "modal:SettingsUI", False))
+    exp = run.experience
+    assert exp.locale_buttons == {"SettingsUI/Option_a": "en-US", "SettingsUI/Option_b": "ja-JP"}
+    assert exp.locale_routes == {"SettingsUI": ["MainUI/MenuButton", "PauseUI/SettingsButton"]}
+    assert any("`SettingsUI/Option_b`" in n and "ja-JP" in n for n in run.notes)
+    exp.save()
+    again = Experience(tmp_path / "exp.json")
+    assert again.locale_buttons == exp.locale_buttons and again.locale_routes == exp.locale_routes
+
+    def weights(st, s):
+        return {op.target.label: op.weight for op in s._apply_locale([Op("click", t) for t in st.targets()])}
+
+    # プロファイルと同じ言語なら、何も変えない
+    assert set(weights(st, s).values()) == {1.0}
+    # 違う言語で、言語の画面が出ている: プロファイルの言語に切り替えたボタンだけを優先する
+    st2, _, s2 = _locale_session("en-US", _PAUSE, _LANG, run=run)
+    w = weights(st2, s2)
+    assert w["SettingsUI/Option_b"] == 20.0 and w["SettingsUI/Option_a"] == 1.0 and w["SettingsUI/BackButton"] == 1.0
+    # 言語の画面が出ていない: その画面を開くボタンを優先する
+    st3, _, s3 = _locale_session("en-US", _PAUSE, run=run)
+    w = weights(st3, s3)
+    assert w["PauseUI/SettingsButton"] == 20.0 and w["PauseUI/CloseButton"] == 1.0
+    # 区間（ガチャプレイなど）のあいだは戻しに行かない
+    run.burst = ("spot", 0.0, 1e12, 0)
+    assert set(weights(st3, s3).values()) == {1.0}
+
+
+def test_answer_in_other_locale_is_not_judged():
+    # プロファイルと違う言語のあいだは、プロファイルの正解を使わず、答えの当たり外れも数えない
+    from yomawari.fuzz.flow import Answer
+
+    st, run, s = _locale_session("en-US")
+    ctx = ("質問", "main/s1:5")
+    run.flow.ctx = ctx
+    run.ctx_answers[ctx] = (Answer(at=("main/s1:5",), pick=("はい",)),)
+    assert s._profile_answers() == ()
+    run.flow.last_leaf = (ctx, ("Yes",))
+    run.flow.last_done = ctx
+    run.wrong_left[ctx] = 1
+    s._answered()
+    assert run.flow.last_leaf is None and run.flow.last_done is None
+    assert run.locale_unjudged == 1 and run.wrong_left[ctx] == 1
+    s._track_locale(100.0)
+    notes = run.locale_notes(160.0)
+    assert len(notes) == 1 and "ランを始めたときの言語は en-US" in notes[0]
+    assert "答えた 1 回は、当たり外れを数えなかった" in notes[0] and "戻せなかった" in notes[0]
+    # プロファイルの言語に戻ったら、プロファイルの正解を使う
+    st.feed(Event("game", "settings", _SETTINGS, 0))
+    s._track_locale(200.0)
+    assert s._profile_answers() == run.ctx_answers[ctx]
+    assert run.locale_off is None and run.locale_spans == [("en-US", 100.0, 200.0)]
+    assert "戻せなかった" not in run.locale_notes(300.0)[0]
+
+
+def test_profile_locale_missing_from_game():
+    st, run, s = _locale_session("en-US")
+    run.locale = "fr-FR"
+    s._track_locale(0.0)
+    assert run.locale_missing
+    assert any("ゲームの使える言語にない" in n for n in run.locale_notes(1.0))
+
+
 # --- 設定 ---
+
+
+def test_profile_locale():
+    assert build_spec({"locale": "ja-JP"}, {}).locale == "ja-JP"
+    assert build_spec({}, {}).locale is None
+    with pytest.raises(ConfigError):
+        build_spec({"locale": 1}, {})
 
 
 def test_guard_config(tmp_path):
