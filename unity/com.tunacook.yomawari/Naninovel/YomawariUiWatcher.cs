@@ -77,7 +77,16 @@ namespace Yomawari
             if (!Engine.TryGetService<ILocalizationManager>(out var locale) ||
                 !Engine.TryGetService<ITextPrinterManager>(out var printers) ||
                 !Engine.TryGetService<IAudioManager>(out var audio)) return;
+            // 使える言語の一覧も出す（プロファイルの言語がゲームにあるかを、ハーネスが確かめる）
+            var locales = new StringBuilder("[");
+            foreach (var tag in locale.AvailableLocales)
+            {
+                if (locales.Length > 1) locales.Append(',');
+                locales.Append(YomawariFormat.Str(tag));
+            }
+            locales.Append(']');
             var body = "\"locale\":" + YomawariFormat.Str(locale.SelectedLocale) +
+                       ",\"locales\":" + locales +
                        ",\"reveal_speed\":" + YomawariFormat.Num(printers.BaseRevealSpeed) +
                        ",\"auto_delay\":" + YomawariFormat.Num(printers.BaseAutoDelay) +
                        ",\"master_volume\":" + YomawariFormat.Num(audio.MasterVolume) +

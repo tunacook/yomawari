@@ -190,6 +190,13 @@ class FuzzRun:
     wrong_noted: set[Any] = field(default_factory=set)  # 正解のはずが外れだった組み合わせ（「ハーネスの記録」に書いたもの）
     wrong_given: set[Any] = field(default_factory=set)  # わざと答えた外れ (質問, 選んだものの並び)
     advice_seen: set[Any] = field(default_factory=set)
+    # プロファイルの言語（DESIGN.md §9「プロファイルの言語」）。None なら合わせない
+    locale: str | None = None
+    locale_first: str | None = None  # ランで最初に見たゲームの言語
+    locale_off: tuple[str, float] | None = None  # いまプロファイルと違う言語 (言語, 始まりの time.monotonic())
+    locale_spans: list[tuple[str, float, float]] = field(default_factory=list)  # 終わったもの (言語, 始まり, 終わり)
+    locale_unjudged: int = 0  # 違う言語のあいだに答えて、当たり外れを数えなかった回数
+    locale_missing: bool = False  # プロファイルの言語が、ゲームの使える言語（settings の locales）になかった
     # 画面の文字を読む（fuzz/reading.py）
     read_done: set[str] = field(default_factory=set)  # 画面から文字を読んだボタン（見た目が変わったら読み直す）
     read_look: dict[str, tuple[float, float]] = field(default_factory=dict)  # 読んだときのボタンの明るさ
@@ -283,6 +290,30 @@ class FuzzRun:
         more = f" ほか {len(self.bursts) - 10} か所" if len(self.bursts) > 10 else ""
         return [f"通常のプレイの途中で、初めて来た {len(self.burst_seen)} か所のうち {len(self.bursts)} か所で、区間"
                 f"（{self.burst_plan.mode}）に切り替えた（計 {total:.0f} 秒）: {spots}{more}"]
+
+    def locale_notes(self, now: float) -> list[str]:
+        """ゲームの言語がプロファイルの言語と違ったあいだの記録。"""
+        if self.locale is None or self.locale_first is None:
+            return []
+        out = []
+        if self.locale_missing:
+            out.append(f"プロファイルの言語（{self.locale}）が、ゲームの使える言語にない。プロファイルの locale を確かめる")
+        spans = self.locale_spans + ([(*self.locale_off, now)] if self.locale_off else [])
+        if not spans:
+            return out
+        total = sum(e - s for _l, s, e in spans)
+        langs = "、".join(sorted({lang for lang, _s, _e in spans}))
+        text = (f"ゲームの言語がプロファイルの言語（{self.locale}）と違ったのは計 {_duration(total)}（{langs}、{len(spans)} 回）。"
+                "そのあいだはプロファイルの正解と照らし合わせなかった")
+        if self.locale_first != self.locale:
+            text += f"。ランを始めたときの言語は {self.locale_first} だった"
+        if self.locale_unjudged:
+            text += f"。そのあいだに答えた {self.locale_unjudged} 回は、当たり外れを数えなかった"
+        if self.locale_off is not None:
+            text += ("。ランの終わりまでプロファイルの言語に戻せなかった（その言語に切り替えるボタンを、まだ押して確かめて"
+                     "いないか、その画面へ行けなかった）")
+        out.append(text)
+        return out
 
     def summary(self) -> str:
         s = self.stats
@@ -574,6 +605,7 @@ class FuzzSession:
         if not self._ready():
             return
         now = time.monotonic()
+        self._track_locale(now)
         if self.run.burst is not None and now >= self.run.burst[2]:
             self._end_burst("時間になった")
         sig = self.state.signature()
@@ -606,6 +638,7 @@ class FuzzSession:
         cands = self._apply_resume(cands, now)
         cands = self._apply_save_first(cands)
         cands = self._apply_flow(cands, now)
+        cands = self._apply_locale(cands)
         cands = self._one_mover(cands)
         top = self.state.top_modal()
         if top is not None and not top.buttons and not self.state.busy:
@@ -784,6 +817,74 @@ class FuzzSession:
                 out += self._toward(row, keep or run.ledger.nearest(row, unshown), "flow", "fill")
         return out
 
+    # --- プロファイルの言語（DESIGN.md §9「プロファイルの言語」） ---
+
+    def _locale_off(self) -> bool:
+        """ゲームの言語が、プロファイルの言語と違う（正解の文字と照らし合わせられない）。"""
+        have = (self.state.settings or {}).get("locale")
+        return self.run.locale is not None and isinstance(have, str) and have != self.run.locale
+
+    def _track_locale(self, now: float) -> None:
+        """プロファイルの言語と違う言語だったあいだを数える（「ハーネスの記録」に書く）。"""
+        run = self.run
+        settings = self.state.settings or {}
+        have = settings.get("locale")
+        if run.locale is None or not isinstance(have, str):
+            return
+        if run.locale_first is None:
+            run.locale_first = have
+            locales = settings.get("locales")
+            if isinstance(locales, list) and locales and run.locale not in locales:
+                run.locale_missing = True
+        if run.locale_off is not None and run.locale_off[0] != have:
+            lang, since = run.locale_off
+            run.locale_spans.append((lang, since, now))
+            run.locale_off = None
+        if have != run.locale and run.locale_off is None:
+            run.locale_off = (have, now)
+
+    def _locale_switched(self, t: Target, locale: str) -> None:
+        """ボタンを押して、ゲームの言語が切り替わった。そのボタンと、その画面を開いたボタンの並びを覚える
+        （ランをまたいで、経験に覚える）。"""
+        run = self.run
+        route: list[str] = []
+        menu, seen = t.menu, set()
+        while menu in run.opened_by and menu not in seen:
+            seen.add(menu)
+            opener = run.opened_by[menu]
+            route.insert(0, opener)
+            menu = opener.split("/", 1)[0]
+        known = run.experience.locale_buttons.get(t.label)
+        run.experience.locale_switched(t.label, locale, route)
+        if known != locale:
+            run.notes.append(f"`{t.label}` を押すとゲームの言語が {locale} に切り替わったので、言語を戻すのに使う"
+                             + (f"（この画面は {' → '.join(f'`{r}`' for r in route)} で開いた）" if route else ""))
+
+    def _apply_locale(self, cands: list[Op]) -> list[Op]:
+        """ゲームの言語がプロファイルの言語と違うあいだ、その言語に切り替えたことのあるボタンと、その画面を開くボタンを
+        優先する（区間のあいだは戻さない。区間の中で言語を変えるのも、ガチャプレイで試したいことなので）。"""
+        run = self.run
+        f = float(self.cfg["locale_factor"])
+        if f <= 1.0 or run.burst is not None or run.locale_missing or not self._locale_off():
+            return cands
+        exp = run.experience
+        buttons = {label for label, tag in exp.locale_buttons.items() if tag == run.locale}
+        if not buttons:
+            return cands
+        menus = {label.split("/", 1)[0] for label in buttons}
+        route: set[str] = set()
+        if not any(m in self.state.menus for m in menus):
+            # 言語を切り替える画面が出ていない: その画面を開くボタン（開くまでの画面のボタンも）を押しにいく
+            for m in menus:
+                route |= set(exp.locale_routes.get(m, ()))
+        out = []
+        for op in cands:
+            t = op.target
+            if t is not None and t.kind == "button" and (t.label in buttons or t.label in route):
+                op = dataclasses.replace(op, novelty=False, by="locale").scaled("locale", f)
+            out.append(op)
+        return out
+
     def _read_before(self, t: Target | None) -> bool:
         return t is not None and t.kind == "button" and self.run.flow.read_before(t.label, t.name, t.text)
 
@@ -881,14 +982,14 @@ class FuzzSession:
             if hit:
                 # 外れへの返事のあとに同じ質問に戻ったときは、質問の行が直近にないことがあるので、前に当たったものを使う
                 run.ctx_answers[ctx] = hit
-        if ctx not in run.wrong_left and (self._profile_answers() or run.flow.known_right()):
+        if ctx not in run.wrong_left and not self._locale_off() and (self._profile_answers() or run.flow.known_right()):
             prob = float(cfg["wrong_answer_prob"])
             run.wrong_left[ctx] = int(cfg["wrong_answers_per_question"]) if prob > 0 and run.rng.random() < prob else 0
 
     def _profile_answers(self) -> tuple[Answer, ...]:
         """いまの質問の、プロファイルの正解（answer_source が profile のときだけ）。"""
-        if self.cfg["answer_source"] != "profile":
-            return ()
+        if self.cfg["answer_source"] != "profile" or self._locale_off():
+            return ()  # 違う言語のあいだは、プロファイルの文字と照らし合わせられない
         return self.run.ctx_answers.get(self.run.flow.ctx, ())
 
     def _text_of(self, o: str) -> str | None:
@@ -955,6 +1056,12 @@ class FuzzSession:
         """流れを最後まで進めた（答えた）。わざと外れを答えるつもりで、正解でないものを答えたら、外れの残りを減らす。"""
         run, tracker = self.run, self.run.flow
         leaf = tracker.last_leaf
+        if leaf is not None and self._locale_off():
+            # プロファイルと違う言語で答えた: 選んだものの文字が正解の文字と比べられないので、当たり外れを数えない
+            # （run 2026-11-12_2156: 英語で答えた外れのはずの答えを、外れと照らし合わせられずに「先へ進んだ」と記録した）
+            run.locale_unjudged += 1
+            tracker.forget_answer()
+            return
         if leaf is None or run.wrong_left.get(leaf[0], 0) <= 0 or self._is_answer(*leaf):
             return
         run.wrong_left[leaf[0]] -= 1
@@ -1911,6 +2018,7 @@ class FuzzSession:
         saves_before = self.state.saves
         commands_before = self.state.commands
         settings_before = self.state.settings_changes
+        locale_before = (self.state.settings or {}).get("locale")
         # 反応しないと見込んでいるボタンは、何も起きないことを確かめるだけなので、待つ時間を短くする
         quiet = op.target is not None and op.target.label in self._quiet()
         started = time.monotonic()
@@ -1994,6 +2102,10 @@ class FuzzSession:
             row, item = self._rows.get(key), self.run.ledger.items.get(op.goal)
             if row is not None and item is not None:
                 self._moving = (key, op.goal, op.label, distance(item.rect, row.view))
+        locale_now = (self.state.settings or {}).get("locale")
+        if (op.target is not None and op.target.kind == "button" and isinstance(locale_now, str)
+                and locale_before is not None and locale_now != locale_before):
+            self._locale_switched(op.target, locale_now)
         hb_age = time.monotonic() - self.state.last_game_t if self.state.last_game_t is not None else None
         commands_ran = self.state.commands != commands_before
         interfered = self._irregular_t >= started

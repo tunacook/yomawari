@@ -430,6 +430,7 @@ class Harness:
                 run_sec=opts.hours * 3600,
                 screen_weights=self.spec.screen_weights,
                 flow=FlowTracker(self.spec.flows),
+                locale=self.spec.locale,
                 inactive_words=load_inactive_words(self.rules_path),
                 masked_chars=load_masked_chars(self.rules_path),
                 save_hints=load_save_hints(self.rules_path),
@@ -562,6 +563,7 @@ class Harness:
                 self.notes += self._fuzz.burst_notes()
                 self.notes += self._fuzz.edge_notes()
                 self.notes += self._fuzz.looks_notes()
+                self.notes += self._fuzz.locale_notes(time.monotonic())
                 if self._fuzz.advisor is not None:
                     self.notes += self._fuzz.advisor.summary()
                     self._fuzz.advisor.close()
