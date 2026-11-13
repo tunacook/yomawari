@@ -771,6 +771,57 @@ def test_flow_goal_keeps_one_direction_and_gives_up():
     assert not run.ledger.unreachable and not run.ledger.goals
 
 
+def test_flow_goal_remembers_quiet_look_offscreen():
+    # run 2026-11-13_0959: 押しても反応しなかった思い出と同じ見た目のもの（quiet）は、見えているあいだしか分からない。
+    # 目標が見えて quiet になると、画面の外の quiet でないものに目標が移り、そこへ動かすと前の目標は画面の外へ出て
+    # quiet でなくなる。上下の 2 つを目標にし直し続け、100 分スクロールだけを続けた。最後に見えていたときの判定を使う
+    s, st, run, _ = _session()
+    run.flow = FlowTracker(parse_flows(tomllib.loads(ONCE_PROFILE)["flow"]))
+    group = "AlbumUI/AlbumSlot (Clone)"
+    view, view2 = [0.1, 0.3, 0.25, 0.5], [0.3, 0.3, 0.45, 0.5]
+    above, below, right = [0.1, -0.5, 0.25, -0.3], [0.1, 1.1, 0.25, 1.3], [1.25, 0.3, 1.4, 0.5]
+
+    def menu(rects: list[list[float]]) -> None:
+        _feed(st, "menu", name="AlbumUI", modal=True, buttons=[
+            {"name": "AlbumSlot (Clone)", "rect": r, **({} if r in (view, view2) else {"hidden": True})}
+            for r in rects])
+
+    def goal(visible: str, quiet: set[str]) -> str:
+        s._values = {group: {visible: (0.1, 0.2)}}
+        s._quiet = lambda: set(quiet)
+        s._apply_flow(normal_candidates(st, Guard({}), s.cfg["weights"], False), 0.0)
+        return run.ledger.goals[group].label
+
+    _feed(st, "line", line_id="main/chapter2_04:323.0", text="アカウント名を選ぼう。")
+    menu([view, view2, above, below, right])
+    _weights(s, st)
+    for item in run.ledger.items.values():
+        item.shown = True
+    ctx = run.flow.ctx
+    run.flow.leaves |= {(ctx, (SLOT,)), (ctx, (f"{SLOT}#1",))}
+    assert goal(SLOT, set()) == f"{SLOT}#3"  # いちばん近い下
+    # 下へ動かして #3 が見えた: 反応しなかったものと同じ見た目（quiet）なので、ほかの目標にする
+    menu([above, above, above, view, right])
+    first = goal(f"{SLOT}#3", {f"{SLOT}#3"})
+    assert first != f"{SLOT}#3"
+    # その目標へ動かして見えた: それも quiet。#3 は画面の外へ出たが、最後に見たとき quiet だったので戻らず、
+    # まだ見ていない残りの 1 つへ向かう
+    rects = [above, above, above, below, right]
+    rects[int(first.rsplit("#", 1)[1])] = view
+    menu(rects)
+    rest = ({f"{SLOT}#2", f"{SLOT}#4"} - {first}).pop()
+    assert goal(first, {first}) == rest
+    # 残りも見えて quiet: どれも quiet なので、いまの目標を変えない（見えなくなったものへ戻らない）
+    rects = [above, above, above, below, right]
+    rects[int(rest.rsplit("#", 1)[1])] = view
+    menu(rects)
+    assert goal(rest, {rest}) == rest
+    # 一覧を閉じたら、覚えた見た目も忘れる
+    _feed(st, "menu_close", name="AlbumUI")
+    s._sync_lists()
+    assert not run.quiet_seen
+
+
 def test_wrong_answers_are_remembered_across_runs(tmp_path):
     # 外れと分かった組み合わせ（同じ質問にまた戻ってきた、その前の答え）を runs/_experience に覚え、次のランで避ける。
     # 最後の答え（そのあと同じ質問に戻らなかった）は正解かもしれないので覚えない

@@ -157,6 +157,9 @@ class FuzzRun:
     behind_miss: int = 0  # 後ろに下がったとみなした画面があるあいだに、手前のものを押して続けて反応がなかった回数
     behind_refuted: set[str] = field(default_factory=set)  # 押した結果で、後ろに下がっていないと分かった menu（閉じるまで）
     behind_noted: set[str] = field(default_factory=set)  # 「後ろに下がった」と記録に書いた menu
+    # ボタン → 最後に見えていたときに、見た目で押せなさそう（quiet）と見たか。見た目は見えているボタンしか測れないので、
+    # 一覧の目標の順番では、画面の外へ出たボタンにこれを使う（閉じた画面のものは忘れる）
+    quiet_seen: dict[str, bool] = field(default_factory=dict)
     blind_tries: Counter[str] = field(default_factory=Counter)  # menu → 向きを決めずに探した回数（開き直すと 0 に戻す）
     search_noted: set[str] = field(default_factory=set)  # 「ハーネスの記録」に書いた一覧の扱い（menu ごと）
     # 流れの手順で選ぶ候補の、同じ順位どうしの並べ方（ランの間は変えない。ランごとに変えて、いつも同じものから試さない）
@@ -957,11 +960,21 @@ class FuzzSession:
         favored = self._advice(going or fresh, texts)
         for o in fresh:
             run.tie.setdefault(o, run.rng.random())
+        # 見た目で押せなさそうか（quiet）は、見えているボタンしか測れない（暗い、押しても反応しなかったものと同じ見た目）。
+        # 画面の外へ出たボタンは、最後に見えていたときの判定を使う。いまの判定だけで並べると、目標が見えて quiet になる
+        # たびに、画面の外の quiet でないものに目標が移り、逆の向きへ動かして行き来し続ける
+        # （run 2026-11-13_0959: 一覧の上下にある 2 つを目標にし直し続け、100 分スクロールだけを続けた）
+        measured = {label for values in self._values.values() for label in values}
+        for o in fresh & measured:
+            run.quiet_seen[o] = o in quiet
+
+        def is_quiet(o: str) -> bool:
+            return o in quiet if o in measured else run.quiet_seen.get(o, o in quiet)
 
         def rank(o: str) -> tuple:
             near = distance(run.ledger.items[o].rect, row.view) if row is not None and o in run.ledger.items else 0.0
             answer = (o in known) == wrong if known is not None else False
-            return (answer, o not in going if going else False, o not in favored, o in quiet, near, run.tie[o])
+            return (answer, o not in going if going else False, o not in favored, is_quiet(o), near, run.tie[o])
         best = min(fresh, key=rank)
         # いまの目標が、順番の先頭と同じ順位（近さより前の項目）のままなら、目標を変えない。動かすたびに近さが変わって
         # 目標が入れ替わると、逆の向きへ動かして行き来するため
@@ -1448,6 +1461,8 @@ class FuzzSession:
             del run.opened_by[name]  # 閉じた
             run.opened_press.pop(name, None)
         for menu in run.ledger.closed(set(self.state.menus)):
+            for label in [k for k in run.quiet_seen if k.split("/", 1)[0] == menu]:
+                del run.quiet_seen[label]
             records = run.ledger.records(menu)
             if records:
                 self.publish(Event("harness", "listing", {"menu": menu, "items": records}, self.launch))
