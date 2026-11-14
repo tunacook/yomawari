@@ -28,7 +28,7 @@ def _summary(**kw):
     base = dict(run_id="r", build_name="dev", build_path="/path/game.app", started="2026-01-01T00:00:00+09:00",
                 ended="2026-01-01T01:00:00+09:00", duration_sec=3600.0, mode="random", seed="7", launches=2, restarts=0,
                 interrupted=False, rules_path=str(RULES_PATH), harness_notes=["記録"], silent_buttons={"A/B": 3},
-                stall_rows=[("`s:1`", "手がかり")], planned_hours=1.0)
+                report_cfg={"report_timeline_lines": 10}, planned_hours=1.0)
     return RunSummary(**{**base, **kw})
 
 

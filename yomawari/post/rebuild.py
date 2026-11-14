@@ -14,16 +14,14 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from ..config import FUZZ_DEFAULTS
 from ..detect.engine import Engine, RuleError, load_rules
 from ..detect.perf import load_perf
 from ..events import Event, Issue
 from .report import RunSummary, write_report
-from .stalls import find_stalls, load_events, render_stalls, stall_rows
+from .stalls import load_events
 
 SUMMARY_FILE = "run.json"
 UNKNOWN = "不明"
-STALL_SEC = float(FUZZ_DEFAULTS["stall_report_sec"])  # 終了処理まで進まなかったランの、進めなかった区間の秒数
 
 
 def save_summary(summary: RunSummary, run_dir: Path) -> None:
@@ -41,7 +39,6 @@ def load_summary(run_dir: Path) -> RunSummary | None:
         return None
     names = {f.name for f in dataclasses.fields(RunSummary)}
     known = {k: v for k, v in doc.items() if k in names}
-    known["stall_rows"] = [tuple(r) for r in known.get("stall_rows", [])]
     try:
         return RunSummary(**known)
     except TypeError:
@@ -83,14 +80,13 @@ def _estimated(run_dir: Path, events: list[dict], partial: RunSummary | None, ru
         ended="", duration_sec=0.0, mode=UNKNOWN, seed=UNKNOWN, launches=0, restarts=0, interrupted=True,
         rules_path=str(rules_path),
     )
-    stalls = find_stalls(events, STALL_SEC)
     perf, why = _perf_lines(events, Path(summary.rules_path) if partial else rules_path)
     notes = ["終了処理まで進まなかったランを、記録から作り直した。起動のやり直しの回数と、終了処理で書くハーネスの記録"
              "（一度も反応しなかったボタンを含む）は残っていない"]
     return dataclasses.replace(
         summary, ended=walls[-1] if walls else UNKNOWN, duration_sec=duration, launches=len(launches), interrupted=True,
-        stop_reason="ハーネスが終了処理まで進まなかった", stalls=render_stalls(stalls, STALL_SEC),
-        stall_rows=stall_rows(stalls), perf=perf, harness_notes=[*summary.harness_notes, *notes, *([why] if why else [])],
+        stop_reason="ハーネスが終了処理まで進まなかった", perf=perf,
+        harness_notes=[*summary.harness_notes, *notes, *([why] if why else [])],
     )
 
 

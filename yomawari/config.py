@@ -158,9 +158,21 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     # 続きから遊ぶとき以外に、セーブ済みのスロット（文字に日時がある）の重みに掛ける。0 なら押さない（自分のセーブのロードは
     # 目的があるときだけにする）。ロードとの行き来を試す目的（stuck）や、画面のボタンを網羅的に押す区間では 1 にする
     "saved_slot_factor": 0.0,
-    # レポートの「進めなかったところ」: 新しい本文・scene・選択肢にこの秒数以上届かなかった区間を載せる。0 で載せない
+    # レポートの「やること」: 新しい本文・scene・選択肢にこの秒数以上届かなかった区間を載せる。0 で載せない
     "stall_report_sec": 300.0,
-    "suspect_error_window_sec": 120.0,  # レポートの「不具合の疑い」: 検出のこの秒数前までのエラーログを、手がかりとして並べる
+    "suspect_error_window_sec": 120.0,  # レポートの項目: 検出のこの秒数前までのエラーログを、手がかりとして並べる
+    # レポートの項目の「経過」: 検出の前後この秒数の記録（押した操作・本文・開いた画面など）を抜き出す。1 項目でこの行数まで
+    "report_timeline_before_sec": 30.0,
+    "report_timeline_after_sec": 5.0,
+    "report_timeline_lines": 40,
+    # 「経過」に載せるスクリプトのコマンド。ほかに、ゲームが足したコマンド（大文字で始まる名前）も載せる
+    # （Naninovel の標準のコマンドは小文字で始まり、背景・立ち絵などの演出が多いため）
+    "report_timeline_commands": ["stop", "goto", "gosub", "return"],
+    # 進めなかった区間のうち、この秒数以上のものは 1 つずつ項目にする。短いものはまとめて 1 項目にする
+    "report_stall_item_sec": 900.0,
+    # ボタンを押しても反応しないと検出したとき、押す前と後で読めた同じ画面のボタンのうち、この割合（0〜1）以上の文字が
+    # 変わっていれば、「画面の文字が変わっていた（ハーネスの誤検知の見込み）」とする。時計など 1 つだけ変わるものは数えない
+    "report_text_change_ratio": 0.5,
     "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")

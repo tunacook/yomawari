@@ -1,6 +1,6 @@
-"""進めなかったところ（post/stalls.py）。"""
+"""進めなかった区間（post/stalls.py）。"""
 
-from yomawari.post.stalls import find_stalls, render_stalls
+from yomawari.post.stalls import find_stalls
 
 
 def _ev(t, ev_kind, source="game", **data):
@@ -31,8 +31,6 @@ def test_stall_ignores_new_lines_inside_flow_and_counts_rereads():
     assert st.flow_new == 1 and st.reread == 1 and st.loads == 1
     assert st.ops == 2 and st.no_response == 1 and st.flows["質問に答える"] == 1
     assert st.ended == "`advance` のあと、新しいところへ進んだ"
-    text = "\n".join(render_stalls(stalls, 300))
-    assert "## 進めなかったところ" in text and "7 分" in text and "思い出など" in text
 
 
 def test_stall_until_run_end_and_none():
@@ -41,4 +39,3 @@ def test_stall_until_run_end_and_none():
     stalls = find_stalls(ev, 300)
     assert stalls[0].ended == "ランが終わるまで進まなかった"
     assert find_stalls(ev, 0) == []
-    assert render_stalls([], 300)[-2] == "なし"

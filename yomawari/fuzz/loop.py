@@ -1069,6 +1069,8 @@ class FuzzSession:
         """流れを最後まで進めた（答えた）。わざと外れを答えるつもりで、正解でないものを答えたら、外れの残りを減らす。"""
         run, tracker = self.run, self.run.flow
         leaf = tracker.last_leaf
+        if leaf is not None:
+            self._note_answer(*leaf)
         if leaf is not None and self._locale_off():
             # プロファイルと違う言語で答えた: 選んだものの文字が正解の文字と比べられないので、当たり外れを数えない
             # （run 2026-11-12_2156: 英語で答えた外れのはずの答えを、外れと照らし合わせられずに「先へ進んだ」と記録した）
@@ -1081,12 +1083,30 @@ class FuzzSession:
         run.wrong_given.add(leaf)
         tracker.deliberate_wrong += 1
 
+    def _note_answer(self, ctx: Any, path: tuple[str, ...]) -> None:
+        """答えたことを events.jsonl に残す。レポートで、質問ごとに何を答えたか・プロファイルの正解が分かっていたかを
+        数えるため（DESIGN.md §12「レポート構成」）。"""
+        run = self.run
+        answers = run.ctx_answers.get(ctx, ()) if self.cfg["answer_source"] == "profile" else ()
+        known = [a.note or " → ".join(p if isinstance(p, str) else " / ".join(p) for p in a.pick) or a.press
+                 for a in answers]
+        self.publish(Event("harness", "answer", {
+            "flow": ctx[0], "question": ctx[1], "picked": [self._text_of(p) or p for p in path],
+            "known": known,  # プロファイルに書いた、この質問の正解（なければ空）
+            "follows": self._is_answer(ctx, path) if answers else None,  # 選んだものがプロファイルの正解に沿うか
+            "deliberate": run.wrong_left.get(ctx, 0) > 0,  # わざと外れを答えるつもりだった
+            "locale_off": self._locale_off(),
+        }, self.launch))
+
     def _judged(self) -> None:
         """答えの当たり外れが分かった。わざと答えた外れなのに先へ進んだら、また正解に沿うはずの答えなのに同じ質問に
         戻ったら、「ハーネスの記録」に書く（後者は、同じ組み合わせで1回だけ）。"""
         run, tracker = self.run, self.run.flow
         for (ctx, path), right in tracker.judged:
             shown = " → ".join(self._text_of(p) or p for p in path)
+            self.publish(Event("harness", "judged", {
+                "flow": ctx[0], "question": ctx[1], "picked": [self._text_of(p) or p for p in path], "right": right,
+            }, self.launch))
             if right and (ctx, path) in run.wrong_given:
                 tracker.events.append(
                     f"流れ「{ctx[0]}」の `{ctx[1]}` で、外れのはずの答え（{shown}）のあと、同じ質問に戻らずに先へ進んだ"
