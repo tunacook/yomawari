@@ -161,7 +161,7 @@ def test_long_stall_is_an_item_with_answers_and_short_ones_are_merged(tmp_path):
     assert "答えた: カード #2" in sec  # 経過にも出る
     assert "- いちばん長く進めなかった区間: 33 分（ランの 56%）、`s:5` から" in text
     # 操作しないモードでは、進まないのが正常
-    assert "進めなかった" not in _table(render(_summary(mode="aging", report_cfg={"stall_report_sec": 300}), [], tmp_path))
+    assert "分進めなかった" not in _table(render(_summary(mode="aging", report_cfg={"stall_report_sec": 300}), [], tmp_path))
 
 
 def test_error_log_just_before_is_shown_as_the_clue(tmp_path):
@@ -190,7 +190,10 @@ def test_notes_and_silent_buttons_are_gathered(tmp_path):
 
 def test_no_items_and_table_safe_text(tmp_path):
     text = render(_summary(), [], tmp_path)
-    assert "- やること: なし" in text
+    assert "- 問題は見つからなかった。やることはない\n" in text
+    assert "## やること\n\nなし。検出・進めなかった区間" in text and "| # |" not in text
+    stopped = render(_summary(interrupted=True, stop_reason="手動で中断した"), [], tmp_path)
+    assert "- 問題は見つからなかった。やることはない（途中で止めたので、止めるまでの範囲）" in stopped
     issues = [_issue("V-07", "minor", "a|b", 0), _issue("V-08", "minor", "x" * 300, 0)]
     issues[0].title = "題|縦線"
     text = render(_summary(), issues, tmp_path)

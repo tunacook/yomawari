@@ -85,7 +85,7 @@ def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
     items = build_items(issues, events, cfg, summary.harness_notes, summary.silent_buttons, focus)
     stopped = _stopped(summary) if summary.interrupted else "予定どおり終わった"
     out += render_top(items, events, summary.duration_sec, summary.launches, summary.restarts, stopped, cfg,
-                      lambda i: _error_before(i, issues, window))
+                      lambda i: _error_before(i, issues, window), summary.interrupted)
 
     out += ["## ランの情報", "", "| 項目 | 値 |", "|---|---|"]
     out += [

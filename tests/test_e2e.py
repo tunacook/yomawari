@@ -49,7 +49,7 @@ def test_normal_run_has_no_issues(tmp_path, mock_app, fake_platform):
     assert evs[-1]["kind"] == "proc_exit" and evs[-1]["data"]["by_harness"] is True
     assert "-yomawari" in evs[0]["data"]["cmd"]
     report = r.report_path.read_text()
-    assert "## やること" in report and "- やること: なし" in report and "起動回数 / 再起動回数 | 1 / 0" in report
+    assert "## やること" in report and "- 問題は見つからなかった。やることはない\n" in report and "起動回数 / 再起動回数 | 1 / 0" in report
     assert_restored(fake_platform, tmp_path)
 
 

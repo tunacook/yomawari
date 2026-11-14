@@ -30,6 +30,9 @@ RANK = {s: n for n, s in enumerate((*SEVERITIES[:2], "check", *SEVERITIES[2:]))}
 LOG_RULES = ("L-01", "L-06")
 BUTTON_RULES = ("S-01", "S-05")  # ボタンを押しても反応しない検出。押したボタンの並びごとにまとめる
 SUSPECT_NOTE_WORDS = ("不具合の可能性", "進めない可能性")
+NOTHING_TO_DO = "問題は見つからなかった。やることはない"
+NOTHING_FOUND = ("検出・進めなかった区間・ハーネスが不具合の可能性を書いた記録・一度も反応しなかったボタンの、"
+                 "どれもなかった")
 SHOWN_ISSUES = 5  # 項目の「検出」に並べる数（同じ項目の検出がもっとあれば、数だけ書く）
 
 
@@ -432,8 +435,8 @@ def last_progress(events: list[dict]) -> dict | None:
 
 
 def render_top(items: list[Item], events: list[dict], duration_sec: float, launches: int, restarts: int,
-               stopped: str, cfg: dict[str, Any], error_before: Any) -> list[str]:
-    """「まとめ」「やること」と項目ごとの節。"""
+               stopped: str, cfg: dict[str, Any], error_before: Any, interrupted: bool = False) -> list[str]:
+    """「まとめ」「やること」と項目ごとの節。項目がなければ、問題が見つからず、やることがないとはっきり書く。"""
     out = ["## まとめ", ""]
     hours = duration_sec / 3600
     out.append(f"- {hours:.1f} 時間、起動 {launches} 回（再起動 {restarts} 回）。{stopped}")
@@ -447,14 +450,17 @@ def render_top(items: list[Item], events: list[dict], duration_sec: float, launc
         share = f"（ランの {st.sec / duration_sec:.0%}）" if duration_sec > 0 else ""
         out.append(f"- いちばん長く進めなかった区間: {_minutes(st.sec)}{share}、`{st.line_id or st.scene}` から。{st.ended}")
     who = Counter(it.who for it in items)
-    out.append(f"- やること {len(items)} 件（" + "、".join(f"{w} {who[w]}" for w in (WHO_GAME, WHO_UNKNOWN, WHO_HARNESS) if who[w])
-               + "）" if items else "- やること: なし")
+    if items:
+        out.append(f"- やること {len(items)} 件（"
+                   + "、".join(f"{w} {who[w]}" for w in (WHO_GAME, WHO_UNKNOWN, WHO_HARNESS) if who[w]) + "）")
+    else:
+        out.append(f"- {NOTHING_TO_DO}" + ("（途中で止めたので、止めるまでの範囲）" if interrupted else ""))
     out.append("")
-    out += ["## やること", "",
-            ("同じ種類の検出・区間を 1 項目にまとめ、重い順に並べた。「誰が直す」は、決まった根拠で判断できたときだけ書く"
-             "（ほかは未確定。下の節の数字と経過から切り分ける）"), ""]
+    out += ["## やること", ""]
     if not items:
-        return out + ["なし", ""]
+        return out + [f"なし。{NOTHING_FOUND}", ""]
+    out += [("同じ種類の検出・区間を 1 項目にまとめ、重い順に並べた。「誰が直す」は、決まった根拠で判断できたときだけ書く"
+             "（ほかは未確定。下の節の数字と経過から切り分ける）"), ""]
     out += ["| # | 起きたこと | 重さ | 誰が直す | 回数 | 場所 |", "|---|---|---|---|---|---|"]
     for n, it in enumerate(items, 1):
         out.append(f"| {n} | {_cell(it.title)} | {SEVERITY_LABEL.get(it.severity, it.severity)} | {it.who} | {it.count} | "
