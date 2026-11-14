@@ -151,8 +151,14 @@ resume_stamp_slack_sec = 60   # 見えているいちばん新しいセーブが
 resume_page_limit = 10        # そのとき、この回数ページを送っても見つからなければ、見えているいちばん新しいセーブでよいとする
 resume_new_game_factor = 0    # そのあいだ「はじめから」（new_game）の重みに掛ける（0 は押さない。resume_sec たてば押せる）
 saved_slot_factor = 0         # 続きから遊ぶとき以外に、セーブ済みのスロット（文字に日時がある）の重みに掛ける（0 は押さない）
-stall_report_sec = 300       # レポートの「進めなかったところ」: 新しい本文・scene・選択肢にこの秒数以上届かなかった区間を載せる（0 で載せない）
-suspect_error_window_sec = 120  # レポートの「不具合の疑い」: 検出のこの秒数前までのエラーログを、手がかりとして並べる
+stall_report_sec = 300       # レポートの「やること」: 新しい本文・scene・選択肢にこの秒数以上届かなかった区間を載せる（0 で載せない）
+suspect_error_window_sec = 120  # レポートの項目: 検出のこの秒数前までのエラーログを、手がかりとして並べる
+report_timeline_before_sec = 30  # レポートの項目の「経過」: 検出のこの秒数前から
+report_timeline_after_sec = 5    # 検出のこの秒数後までの記録を抜き出す
+report_timeline_lines = 40       # 1 項目の「経過」の行数の上限
+report_timeline_commands = ["stop", "goto", "gosub", "return"]  # 「経過」に載せるコマンド（ほかに大文字で始まる名前も載せる）
+report_stall_item_sec = 900      # 進めなかった区間のうち、この秒数以上のものは 1 つずつ項目にする（短いものはまとめる）
+report_text_change_ratio = 0.5   # 反応しないと検出したボタンで、押したあと同じ画面のボタンのこの割合以上の文字が変われば誤検知の見込みとする
 
 [fuzz.weights]                # 通常の操作の重み
 advance = 20

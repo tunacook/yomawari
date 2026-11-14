@@ -37,7 +37,6 @@ from .fuzz.loop import FuzzRun, FuzzSession
 from .fuzz.looks import load_inactive_words, load_masked_chars
 from .fuzz.resume import load_save_hints
 from .post.rebuild import save_summary
-from .post.stalls import find_stalls, load_events, render_stalls, stall_rows
 from .fuzz.roles import RoleBook
 from .input.base import InputDriver
 from .input.pointer import Pointer
@@ -240,15 +239,13 @@ class Harness:
         except OSError as e:
             self.notes.append(f"ランの情報を保存できませんでした（yomawari report で作り直せません）: {e}")
 
-    def _stall_sections(self, run_dir: Path) -> tuple[list[str], list[tuple[str, str]]]:
-        """「進めなかったところ」の節と、「不具合の疑い」に載せる行。操作しないモード（aging）では出さない。"""
+    def _report_cfg(self) -> dict[str, Any]:
+        """レポートの設定（[fuzz] の report_* と stall_report_sec）。操作しないモード（aging）では、進めなかった区間を出さない
+        （操作しないので、進まないのが正常）。"""
+        cfg = {k: v for k, v in self.fuzz_cfg.items() if k.startswith("report_") or k == "stall_report_sec"}
         if self._fuzz is None:
-            return [], []
-        sec = float(self.fuzz_cfg["stall_report_sec"])
-        if sec <= 0:
-            return [], []
-        stalls = find_stalls(load_events(run_dir / "events.jsonl"), sec)
-        return render_stalls(stalls, sec), stall_rows(stalls)
+            cfg["stall_report_sec"] = 0.0
+        return cfg
 
     def _status(self, now: float, force: bool = False) -> None:
         if self.on_status is None or (not force and now - self._last_status < 1.0):
@@ -592,7 +589,6 @@ class Harness:
                 perf_lines = perf.report_lines()
             self._status(time.monotonic(), force=True)
             self._bus.close()
-            stall_lines, stall_table = self._stall_sections(run_dir)
             summary = RunSummary(
                 **base,
                 ended=now_wall(),
@@ -603,8 +599,7 @@ class Harness:
                 stop_reason=stop_reason,
                 harness_notes=self.notes,
                 silent_buttons=self.engine.silent_buttons(),
-                stalls=stall_lines,
-                stall_rows=stall_table,
+                report_cfg=self._report_cfg(),
                 perf=perf_lines,
             )
             self._save_summary(summary, run_dir)

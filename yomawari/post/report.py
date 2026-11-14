@@ -1,30 +1,19 @@
-"""report.md の生成（フェーズ1の最小構成）。"""
+"""report.md の生成（DESIGN.md §12「レポート構成」）。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
+from ..config import FUZZ_DEFAULTS
 from ..events import SEVERITIES, Issue
+from .digest import build_items, render_top
+from .stalls import load_events
 
 SEVERITY_LABEL = {"critical": "Critical", "major": "Major", "minor": "Minor", "info": "Info"}
-# 「不具合の疑い」に載せる、ハーネスの記録の言い回し（流れ・巻き戻し・一覧の探索が、不具合かもしれないと書くときのもの）
-SUSPECT_NOTE_WORDS = ("不具合の可能性", "進めない可能性")
 LOG_ERROR_RULE = "L-01"
-LOG_WARNING_RULE = "L-06"
-CELL_LEN = 120  # 「不具合の疑い」の表の1マスの文字数（長いものは下の節で読む）
-# 「不具合の疑い」の見立て。誤検知かもしれないものも載せ、どう疑わしいかを人が切り分けられるようにする
-DOUBT_ERROR = "ゲームの不具合の疑いが強い（直前にエラーログ）"
-DOUBT_LOG = "ゲームのエラーログ。動作に影響するかは未確定"
-DOUBT_WARNING = "ゲームの警告ログ。動作に影響するかは未確定"
-DOUBT_UNKNOWN = "ゲームの不具合か、ハーネスの誤検知かは未確定"
-DOUBT_BUTTON = "ハーネスの誤検知の可能性あり（押せない場面で押しただけかもしれない）"
-DOUBT_PERF = "ハーネスの誤検知の可能性あり（負荷のばらつきかもしれない）"
-DOUBT_STALL = "ハーネスの誤検知の可能性あり（進め方の問題かもしれない）"
-DOUBT_NOTE = "ハーネスの誤検知の可能性あり（ハーネスの推定）"
-DOUBT_SILENT = "ハーネスの誤検知の可能性あり（ロック中など仕様かもしれない）"
-
 
 @dataclass
 class RunSummary:
@@ -46,54 +35,17 @@ class RunSummary:
     purpose: str | None = None  # ランの目的（yomawari/purpose.py）
     purpose_description: str = ""
     focus: list[str] = field(default_factory=list)  # 目的で重点的に見るルール。深刻度ごとに先に並べる
-    stalls: list[str] = field(default_factory=list)  # 「進めなかったところ」の節（post/stalls.py）
     perf: list[str] = field(default_factory=list)  # 「パフォーマンス」の節（detect/perf.py）
-    stall_rows: list[tuple[str, str]] = field(default_factory=list)  # 進めなかった区間の (場所, 手がかり)（post/stalls.py）
-    suspect_error_window_sec: float = 120.0  # 検出のこの秒数前までのエラーログを、手がかりとして「不具合の疑い」に並べる
+    suspect_error_window_sec: float = 120.0  # 検出のこの秒数前までのエラーログを、手がかりとして項目に並べる
     stop_reason: str = ""  # 中断されたときの理由（手動か、外から止められたか）
     planned_hours: float | None = None  # 予定していた時間
-
-
-@dataclass
-class IssueGroup:
-    first: Issue
-    count: int
-    launches: list[int]
-
-
-def group_issues(issues: list[Issue]) -> list[IssueGroup]:
-    groups: dict[str, IssueGroup] = {}
-    for i in issues:
-        g = groups.get(i.key)
-        if g is None:
-            groups[i.key] = IssueGroup(i, 1, [i.launch])
-        else:
-            g.count += 1
-            if i.launch not in g.launches:
-                g.launches.append(i.launch)
-    return list(groups.values())
+    # レポートの設定（[fuzz] の report_* と stall_report_sec）。ないもの（古い run.json・操作しないモード）は既定値
+    report_cfg: dict[str, Any] = field(default_factory=dict)
 
 
 def _hms(sec: float) -> str:
     s = int(sec)
     return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
-
-
-def _fence(text: str) -> str:
-    return "```text\n" + text.rstrip("\n") + "\n```"
-
-
-def _cell(text: str) -> str:
-    """表の1マス: 1行目だけを、表を崩さない形で短くする。"""
-    line = text.strip().split("\n", 1)[0].replace("|", "\\|")
-    return line if len(line) <= CELL_LEN else line[:CELL_LEN] + "…"
-
-
-def _place(issue: Issue) -> str:
-    st = issue.evidence.get("state") or {}
-    # 最後の本文のあとにコマンドが進んでいれば、スクリプトが実際にいるその行（本文のない演出の途中）
-    where = issue.evidence.get("where") or st.get("command_line_id") or st.get("line_id") or st.get("scene")
-    return f"`{where}`" if where else "-"
 
 
 def _wall(issue: Issue) -> datetime | None:
@@ -117,79 +69,25 @@ def _error_before(issue: Issue, issues: list[Issue], window: float) -> Issue | N
     return max(near, key=lambda pair: pair[0])[1] if near else None
 
 
-def _doubt(issue: Issue) -> str:
-    """検出の種類から見た、誤検知の可能性（判定ではなく、切り分けの入り口）。"""
-    if issue.rule_id == LOG_ERROR_RULE:
-        return DOUBT_LOG
-    if issue.rule_id == LOG_WARNING_RULE:
-        return DOUBT_WARNING
-    if issue.rule_id == "S-05":
-        return DOUBT_BUTTON
-    if issue.rule_id.startswith("R-"):
-        return DOUBT_PERF
-    return DOUBT_UNKNOWN
-
-
-def _warning_rows(groups: list[IssueGroup]) -> list[str]:
-    """警告は場所ごとの件数が多くなるが、直すときは種類ごとに見るので、種類ごとに1行にする。回数の多い順。"""
-    by_kind: dict[str, list[IssueGroup]] = {}
-    for g in groups:
-        if g.first.rule_id == LOG_WARNING_RULE:
-            by_kind.setdefault(str(g.first.evidence.get("kind")), []).append(g)
-    rows = []
-    for gs in sorted(by_kind.values(), key=lambda gs: -sum(g.count for g in gs)):
-        i = gs[0].first
-        place = _place(i) if len(gs) == 1 else f"{_place(i)} ほか {len(gs) - 1} か所"
-        rows.append(f"| {SEVERITY_LABEL[i.severity]} | [{i.rule_id}] {i.title} | {place} | {sum(g.count for g in gs)} | "
-                    f"{_doubt(i)} | {_cell(i.detail)} |")
-    return rows
-
-
-def _suspects(summary: RunSummary, issues: list[Issue], groups: list[IssueGroup]) -> list[str]:
-    """「不具合の疑い」の節: 検出・進めなかった区間・ハーネスの記録に散らばった疑いを、重い順に1つの表にまとめる。
-    Critical と Major は検出ごとに、Minor と Info は件数が多くなるのでルールごとに1行にする（警告だけは種類ごと）。"""
-    rows: list[str] = []
-    window = summary.suspect_error_window_sec
-    for sev in ("critical", "major"):
-        # 同じ重さなら、目的で重点的に見るルール、動作の検出、性能（R-）の順
-        rank = {rule: n for n, rule in enumerate(summary.focus)}
-        for g in sorted((g for g in groups if g.first.severity == sev),
-                        key=lambda g: (rank.get(g.first.rule_id, len(rank)), g.first.rule_id.startswith("R-"))):
-            i = g.first
-            err = next((e for e in (_error_before(x, issues, window) for x in issues if x.key == i.key) if e), None)
-            clue = f"直前のエラーログ: {err.detail}" if err is not None else i.detail
-            doubt = DOUBT_ERROR if err is not None else _doubt(i)
-            rows.append(f"| {SEVERITY_LABEL[sev]} | [{i.rule_id}] {i.title} | {_place(i)} | {g.count} | {doubt} | {_cell(clue)} |")
-    rows += [f"| 要確認 | 進めなかった区間 | {where} | 1 | {DOUBT_STALL} | {_cell(clue)} |" for where, clue in summary.stall_rows]
-    rows += _warning_rows(groups)
-    for sev in ("minor", "info"):
-        by_rule: dict[str, list[IssueGroup]] = {}
-        for g in groups:
-            if g.first.severity == sev and g.first.rule_id != LOG_WARNING_RULE:
-                by_rule.setdefault(g.first.rule_id, []).append(g)
-        for rule, gs in by_rule.items():
-            total = sum(g.count for g in gs)
-            rows.append(f"| {SEVERITY_LABEL[sev]} | [{rule}] {gs[0].first.title} | {len(gs)} か所 | {total} | "
-                        f"{_doubt(gs[0].first)} | {_cell(gs[0].first.detail)} |")
-    notes = [n for n in summary.harness_notes if any(w in n for w in SUSPECT_NOTE_WORDS)]
-    rows += [f"| 要確認 | ハーネスの記録 | - | 1 | {DOUBT_NOTE} | {_cell(n)} |" for n in notes]
-    if summary.silent_buttons:
-        names = "、".join(f"`{k}`" for k in sorted(summary.silent_buttons))
-        rows.append(f"| 要確認 | 一度も反応しなかったボタン | - | {len(summary.silent_buttons)} | {DOUBT_SILENT} | {_cell(names)} |")
-    out = ["## 不具合の疑い", "",
-           ("このランで不具合かもしれないと見たものを、重い順にまとめた。確定ではなく、ハーネスの誤検知かもしれないものや、"
-            "仕様どおりのものも載せる。「見立て」は検出の種類から見たもので、切り分けの入り口にする。詳しくは下の各節を見る"), ""]
-    if not rows:
-        return out + ["なし", ""]
-    return out + ["| 重さ | 疑い | 場所 | 回数 | 見立て | 手がかり |", "|---|---|---|---|---|---|", *rows, ""]
-
-
 def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
-    groups = group_issues(issues)
-    counts = {s: sum(1 for g in groups if g.first.severity == s) for s in SEVERITIES}
+    """report.md の中身。先頭に「まとめ」「やること」と項目ごとの節（post/digest.py）、そのあとにランの情報・性能・
+    一度も反応しなかったボタン・実行環境を置く（DESIGN.md §12「レポート構成」）。"""
+    cfg = {**{k: v for k, v in FUZZ_DEFAULTS.items() if k.startswith("report_") or k == "stall_report_sec"},
+           **summary.report_cfg}
+    if summary.mode == "aging":
+        cfg["stall_report_sec"] = 0.0  # 操作しないので、進まないのが正常
+    events = load_events(run_dir / "events.jsonl")
+    focus = {rule: n for n, rule in enumerate(summary.focus)}
+    window = summary.suspect_error_window_sec
+    counts = {s: len({i.key for i in issues if i.severity == s}) for s in SEVERITIES}
     out: list[str] = [f"# Yomawari レポート {summary.run_id}", ""]
 
-    out += ["## サマリ", "", "| 項目 | 値 |", "|---|---|"]
+    items = build_items(issues, events, cfg, summary.harness_notes, summary.silent_buttons, focus)
+    stopped = _stopped(summary) if summary.interrupted else "予定どおり終わった"
+    out += render_top(items, events, summary.duration_sec, summary.launches, summary.restarts, stopped, cfg,
+                      lambda i: _error_before(i, issues, window))
+
+    out += ["## ランの情報", "", "| 項目 | 値 |", "|---|---|"]
     out += [
         f"| ビルド | {summary.build_name} (`{summary.build_path}`) |",
         f"| 開始 / 終了 | {summary.started} / {summary.ended} |",
@@ -205,49 +103,6 @@ def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
         "| 前回比 | （フェーズ4で対応） |",
         "",
     ]
-    out += _suspects(summary, issues, groups)
-
-    for sev in SEVERITIES:
-        sev_groups = [g for g in groups if g.first.severity == sev]
-        # 目的で重点的に見るルールを先に（focus に書いた順）
-        rank = {rule: n for n, rule in enumerate(summary.focus)}
-        sev_groups.sort(key=lambda g: rank.get(g.first.rule_id, len(rank)))
-        out += [f"## {SEVERITY_LABEL[sev]}", ""]
-        if not sev_groups:
-            out += ["なし", ""]
-            continue
-        for g in sev_groups:
-            i = g.first
-            star = "（重点）" if i.rule_id in rank else ""
-            out += [
-                f"### [{i.rule_id}] {i.title}{star}",
-                "",
-                f"- 内容: {i.detail}",
-                f"- 発生回数: {g.count}",
-                f"- 最初の発生: {i.wall}（起動 #{i.launch}）",
-                f"- 発生した起動: {', '.join(f'#{n}' for n in g.launches)}",
-            ]
-            log_name = "player.log" if i.launch == 0 else f"player.{i.launch}.log"
-            out.append(f"- ログ: [{log_name}]({log_name})")
-            if "dump" in i.evidence:
-                out.append(f"- クラッシュダンプ: `{i.evidence['dump']}`")
-            if i.evidence.get("log"):
-                out += ["- ログ抜粋:", "", _fence(i.evidence["log"])]
-            if i.evidence.get("recent"):
-                out.append(f"- 直前の操作（古い順）: {' → '.join(f'`{r}`' for r in i.evidence['recent'])}")
-            st = i.evidence.get("state")
-            if st:
-                line = f"行 `{st.get('line_id')}`"
-                if st.get("command_line_id"):
-                    line = f"行 `{st['command_line_id']}`（最後の本文は `{st.get('line_id')}`。そのあとはコマンドだけが進んでいた）"
-                out.append(
-                    f"- そのときの画面: scene `{st.get('scene')}`、{line}、"
-                    f"menu {', '.join(f'`{m}`' for m in st.get('menus') or []) or 'なし'}、"
-                    f"最前面のモーダル `{st.get('top_modal')}`"
-                )
-            out += ["", "- 判定: [ ] 正しい検出　[ ] 誤検知", ""]
-
-    out += summary.stalls
     out += summary.perf
 
     if summary.silent_buttons:

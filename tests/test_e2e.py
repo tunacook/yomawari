@@ -49,7 +49,7 @@ def test_normal_run_has_no_issues(tmp_path, mock_app, fake_platform):
     assert evs[-1]["kind"] == "proc_exit" and evs[-1]["data"]["by_harness"] is True
     assert "-yomawari" in evs[0]["data"]["cmd"]
     report = r.report_path.read_text()
-    assert "## Critical\n\nなし" in report and "起動回数 / 再起動回数 | 1 / 0" in report
+    assert "## やること" in report and "- やること: なし" in report and "起動回数 / 再起動回数 | 1 / 0" in report
     assert_restored(fake_platform, tmp_path)
 
 
@@ -61,7 +61,7 @@ def test_crash_is_c01_and_restarts(tmp_path, mock_app, fake_platform):
     assert r.exit_code == 1
     assert (r.run_dir / "player.log").exists() and (r.run_dir / "player.1.log").exists()
     report = r.report_path.read_text()
-    assert "[C-01]" in report and "発生回数: 2" in report and "打ち切り" in report
+    assert "[C-01]" in report and "回数: 2（起動 #0, #1）" in report and "打ち切り" in report
     assert_restored(fake_platform, tmp_path)
 
 

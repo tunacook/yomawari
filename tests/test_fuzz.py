@@ -987,3 +987,33 @@ def test_op_events_say_where_the_op_came_from():
     assert all("by" in o for o in ops)
     assert any(o["by"] == "list" and o.get("goal", "").startswith("ListUI/Slot") for o in ops)
     assert all("odds" in o for o in ops if not o["irregular"] and o["trigger"] is None)
+
+
+def test_answer_and_judgement_are_recorded_for_the_report():
+    # レポートで、質問ごとに何を答えたか・プロファイルの正解が分かっていたか・当たり外れを数えるために残す
+    from yomawari.fuzz.flow import Answer
+
+    st, run, s = _locale_session("ja-JP")
+    events = s.publish.__self__
+    ctx = ("質問", "main/s1:5")
+    run.ctx_answers[ctx] = (Answer(at=("main/s1:5",), pick=("はい",)),)
+    run.wrong_left[ctx] = 1
+    run.flow.last_leaf = (ctx, ("はい",))
+    s._answered()
+    run.flow.last_leaf = (ctx, ("いいえ",))
+    s._answered()
+    run.flow.judged.append(((ctx, ("いいえ",)), False))
+    s._judged()
+    answers = [e.data for e in events if e.kind == "answer"]
+    assert [a["picked"] for a in answers] == [["はい"], ["いいえ"]]
+    assert [a["follows"] for a in answers] == [True, False]
+    assert answers[0]["known"] == ["はい"] and answers[0]["question"] == "main/s1:5"
+    assert answers[1]["deliberate"] is True and answers[1]["locale_off"] is False
+    judged = [e.data for e in events if e.kind == "judged"]
+    assert judged == [{"flow": "質問", "question": "main/s1:5", "picked": ["いいえ"], "right": False}]
+    # プロファイルに正解がない質問は、沿うかどうかを書かない
+    other = ("質問", "main/s1:9")
+    run.flow.last_leaf = (other, ("はい",))
+    s._answered()
+    last = [e.data for e in events if e.kind == "answer"][-1]
+    assert last["known"] == [] and last["follows"] is None
