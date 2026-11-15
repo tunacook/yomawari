@@ -27,25 +27,6 @@ _PERMISSION_PANES = {
 }
 
 
-LAUNCHD_LABEL = "com.tunacook.yomawari.run"
-
-
-def launchd_plist(argv: list[str], hour: int, minute: int, workdir: Path, log: Path, path_env: str) -> bytes:
-    """毎日 hour:minute に argv を実行する LaunchAgent の plist。眠っていて時刻を過ぎたら、起きたときに1回実行される。"""
-    return plistlib.dumps({
-        "Label": LAUNCHD_LABEL,
-        "ProgramArguments": argv,
-        "StartCalendarInterval": {"Hour": hour, "Minute": minute},
-        "WorkingDirectory": str(workdir),
-        "StandardOutPath": str(log),
-        "StandardErrorPath": str(log),
-        # launchd の PATH は /usr/bin:/bin:/usr/sbin:/sbin だけ。標準出力は端末でないので文字コードを決めておく
-        "EnvironmentVariables": {"PATH": path_env, "PYTHONIOENCODING": "utf-8"},
-        # ゲームを操作するので、バックグラウンドの処理として資源を絞られないようにする
-        "ProcessType": "Interactive",
-    })
-
-
 def parse_lsappinfo_pid(out: str) -> int | None:
     """`lsappinfo info -only pid <ASN>` の出力から pid を取り出す。
 
@@ -483,43 +464,6 @@ class MacPlatform:
             return subprocess.run(["sysctl", "-n", "hw.model"], capture_output=True, text=True, timeout=5).stdout.strip()
         except (OSError, subprocess.SubprocessError):
             return ""
-
-    def schedule_path(self) -> Path:
-        return HOME / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
-
-    def _launchctl(self, *args: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(["launchctl", *args], capture_output=True, text=True, check=False)
-
-    def schedule_install(self, argv: list[str], hour: int, minute: int, workdir: Path, log: Path) -> Path:
-        """LaunchAgent を置いて読み込む。前に置いたものは置き換える。読み込めなければ RuntimeError。"""
-        path = self.schedule_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        log.parent.mkdir(parents=True, exist_ok=True)
-        dirs = [str(Path(argv[0]).parent), "/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
-        path_env = ":".join(dict.fromkeys(dirs))
-        domain = f"gui/{os.getuid()}"
-        self._launchctl("bootout", f"{domain}/{LAUNCHD_LABEL}")  # 読み込まれていなければ失敗するが、構わない
-        path.write_bytes(launchd_plist(argv, hour, minute, workdir, log, path_env))
-        r = self._launchctl("bootstrap", domain, str(path))
-        if r.returncode != 0:
-            raise RuntimeError(f"launchctl bootstrap が失敗しました: {(r.stderr or r.stdout).strip()}")
-        return path
-
-    def schedule_uninstall(self) -> Path | None:
-        """LaunchAgent を外して消す。置いていなければ None。"""
-        path = self.schedule_path()
-        self._launchctl("bootout", f"gui/{os.getuid()}/{LAUNCHD_LABEL}")
-        if not path.exists():
-            return None
-        path.unlink()
-        return path
-
-    def schedule_info(self) -> dict | None:
-        """置いてある LaunchAgent の中身。なければ None。"""
-        try:
-            return plistlib.loads(self.schedule_path().read_bytes())
-        except (OSError, plistlib.InvalidFileException, ValueError):
-            return None
 
     def perf_stats(self, pid: int) -> dict:
         """パフォーマンスの判定に使う、ゲームの GPU とマシンの状態（DESIGN.md §10「パフォーマンス」）。sudo は要らない。
