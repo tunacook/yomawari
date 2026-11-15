@@ -1512,3 +1512,59 @@ def test_exhausted_question_answers_again_then_gives_up():
     s.on_event(Event("game", "load", {"slot": "GameSave004", "phase": "start"}, 0))
     _weights(s, st)
     assert tr.active is not None and not tr.abandoned
+
+
+STUCK = """
+[[flow]]
+name = "質問に答える"
+start = { screen = "WordListUI", by = "game" }
+steps = [
+  { screen = "WordListUI", press = "WordSlot*" },
+  { screen = "WordUI", press = "AnswerButton" },
+  { screen = "AnswerDialogUI", press = "Accept" },
+]
+"""
+
+
+def test_flow_gives_up_when_entering_the_same_step_again_and_again():
+    # run 2026-11-14_2214: 「この言葉で答える」が押しても届かず（画面の外）、言葉を選ぶ → 答える画面 → 戻る、を 1834 回
+    # くり返した。同じ選び方で同じ手順に入り直し続けたら、その質問をあきらめる
+    tracker = FlowTracker(parse_flows(tomllib.loads(STUCK)["flow"]))
+    st = GameState()
+    _feed(st, "line", line_id="main/s1:5", text="どれ？")
+    _feed(st, "menu", name="WordListUI", modal=True, buttons=FRAGS)
+
+    def around() -> None:
+        assert tracker.update(st, {}, 0, 10, step_retries=3) is not None  # 言葉の一覧（手順 1）
+        tracker.pressed("WordListUI/WordSlot(Clone)", "WordSlot(Clone)", True)
+        _feed(st, "menu", name="WordUI", modal=True, buttons=[{"name": "AnswerButton", "rect": [0.3, 0.8, 0.9, 0.9]}])
+        tracker.update(st, {}, 0, 10, step_retries=3)  # 答える画面（手順 2）に入る
+        _feed(st, "menu_close", name="WordUI")  # 答えるボタンが届かず、Esc で一覧へ戻った
+
+    for _ in range(3):
+        around()
+        assert tracker.active is not None
+    around()
+    assert tracker.active is None and ("質問に答える", "main/s1:5") in tracker.abandoned
+    assert any("手順 2" in e and "3 回入っても" in e for e in tracker.events)
+    # あきらめた質問では、流れを始め直さない
+    assert tracker.update(st, {}, 0, 10, step_retries=3) is None
+
+
+def test_flow_step_entries_reset_when_moving_on():
+    # 先の手順へ進めたら数え直す（答えて外れ、同じ組み合わせを選び直すのは、手順の入り直しとしては数えない）
+    tracker = FlowTracker(parse_flows(tomllib.loads(STUCK)["flow"]))
+    st = GameState()
+    _feed(st, "line", line_id="main/s1:5", text="どれ？")
+    _feed(st, "menu", name="WordListUI", modal=True, buttons=FRAGS)
+    for _ in range(5):
+        tracker.update(st, {}, 0, 10, step_retries=2)
+        tracker.pressed("WordListUI/WordSlot(Clone)", "WordSlot(Clone)", True)
+        _feed(st, "menu", name="WordUI", modal=True, buttons=[{"name": "AnswerButton", "rect": [0.3, 0.8, 0.9, 0.9]}])
+        tracker.update(st, {}, 0, 10, step_retries=2)
+        _feed(st, "menu", name="AnswerDialogUI", modal=True, buttons=[{"name": "Accept", "rect": [0.4, 0.6, 0.6, 0.7]}])
+        tracker.update(st, {}, 0, 10, step_retries=2)  # 手順 3 へ進めた
+        tracker.pressed("AnswerDialogUI/Accept", "Accept", True)  # 答えた（外れて、同じ質問に戻る）
+        _feed(st, "menu_close", name="AnswerDialogUI")
+        _feed(st, "menu_close", name="WordUI")
+    assert not tracker.abandoned
