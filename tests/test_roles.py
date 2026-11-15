@@ -61,6 +61,45 @@ def test_bad_role_hints_are_rejected(tmp_path):
     p.write_text("role_hints:\n  exit:\n    text: '終了'\n")
     with pytest.raises(RoleHintError):
         load_role_hints(p)
+    p.write_text("role_hint_max_chars: 0\nrole_hints:\n  exit:\n    text: ['終了']\n")
+    with pytest.raises(RoleHintError):
+        load_role_hints(p)
+
+
+def test_text_of_list_items_and_long_text_does_not_estimate_role():
+    # run 2026-11-12_2156: 思い出の言葉の一覧で、題名に "Exit" を含むスロットを exit と推定し、押さなくなった。
+    # 同じ名前のボタンが並んでいるもの（一覧のスロット）と、長い文字のものは、中身を見せる項目なので文字では推定しない
+    slot = Target("button", "ListUI", "Slot", (0.1, 0.1, 0.2, 0.2), "Station, Last Exit", nth=2, repeated=True)
+    assert HINTS.estimate(slot) is None
+    assert HINTS.estimate(_t("Btn", "Exit")) == ("exit", "文字「Exit」")
+    assert HINTS.max_chars == 20
+    assert HINTS.estimate(_t("Btn", "We met at the station's East Exit")) is None  # 空白を除いて 20 文字より長い
+    st = GameState()
+    st.feed(Event("game", "menu", {"name": "ListUI", "buttons": [
+        {"name": "Slot", "rect": [0.1, 0.1, 0.2, 0.2]}, {"name": "Slot", "rect": [0.1, 0.3, 0.2, 0.4]},
+        {"name": "Close", "rect": [0.1, 0.5, 0.2, 0.6]}]}, 0))
+    assert [b.repeated for b in st.menus["ListUI"].buttons] == [True, True, False]
+    st.set_read_text({"ListUI/Slot#1": "Last Exit"})
+    assert st.menus["ListUI"].buttons[1].repeated  # 読んだ文字を入れても、並んでいることは変わらない
+
+
+def test_stale_estimate_from_earlier_run_is_dropped(tmp_path):
+    # 前のランで覚えた推定（文字・名前のキーワードから）は、押す前にいまの文字と推定の決まりで見直す。
+    # 押した結果からした推定（suspect）は見直さない
+    path = tmp_path / "_experience" / "Rachel.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps({"roles": {
+        "ListUI/Slot#2": {"role": "exit", "status": "estimated", "evidence": "文字「Station, Last Exit」"},
+        "TitleUI/Btn": {"role": "exit", "status": "estimated", "evidence": "文字「Exit」"},
+        "TitleUI/Other": {"role": "exit", "status": "estimated", "evidence": "押すと終了コード 0 で終わった"},
+    }}))
+    book = RoleBook(HINTS, path)
+    slot = Target("button", "ListUI", "Slot", (0.1, 0.1, 0.2, 0.2), "Station, Last Exit", nth=2, repeated=True)
+    assert book.role_of(slot) is None and "ListUI/Slot#2" not in book.entries
+    assert "取り消した" in book.new[0]
+    assert book.role_of(_t("Btn")) == "exit"  # 文字をまだ読めていないときは、前の推定を使う
+    assert book.role_of(_t("Btn", "Start")) is None and "TitleUI/Btn" not in book.entries  # 文字が変わった
+    assert book.role_of(_t("Other")) == "exit"
 
 
 # --- RoleBook ---
