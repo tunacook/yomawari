@@ -17,6 +17,10 @@ runs/_experience/<ゲーム>.json の "progress" に足し合わせる。random 
 
 ゲームの言語を切り替えたボタン（押して settings の locale が変わった）と、その画面までの開き方も "locale" に覚え、
 次のランでゲームの言語をプロファイルの言語に戻すのに使う（DESIGN.md §9「プロファイルの言語」）。
+
+押すと設定（settings）の値だけが変わったボタンと、変わった設定・押したあとの値、その画面までの開き方も "settings" に覚え、
+次のランで設定を変えに行くのに使う（DESIGN.md §9「設定を変えに行く」）。開き方は、入り口（タイトル画面から・
+プレイ中のメニューから）ごとに別のものとして、いくつか覚える。
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 KINDS = ("tries", "progress", "rewind")
+MAX_ROUTES = 4  # 設定の画面ごとに覚える開き方の数
 
 
 @dataclass
@@ -53,6 +58,10 @@ class Experience:
         self.locale_buttons: dict[str, str] = {}
         # 言語を切り替えたボタンのある画面（menu）→ その画面を開いたボタンの label の並び（外側の画面から順に）
         self.locale_routes: dict[str, list[str]] = {}
+        # 押すと設定の値だけが変わったボタンの label → 変わった設定と、押したあとの値
+        self.setting_buttons: dict[str, dict[str, Any]] = {}
+        # 設定を変えるボタンのある画面（menu）→ その画面を開いたボタンの並び（外側の画面から順に）。入り口ごとに1つ
+        self.setting_routes: dict[str, list[list[str]]] = {}
         if path is not None and path.exists():
             self._load(path)
 
@@ -77,6 +86,15 @@ class Experience:
             for menu, route in (loc.get("routes") or {}).items():
                 if isinstance(route, list) and all(isinstance(x, str) for x in route):
                     self.locale_routes[str(menu)] = list(route)
+        st = doc.get("settings") or {}
+        if isinstance(st, dict):
+            for label, eff in (st.get("buttons") or {}).items():
+                if isinstance(eff, dict) and eff:
+                    self.setting_buttons[str(label)] = {str(k): v for k, v in eff.items()}
+            for menu, routes in (st.get("routes") or {}).items():
+                for route in routes if isinstance(routes, list) else []:
+                    if isinstance(route, list) and route and all(isinstance(x, str) for x in route):
+                        self.setting_routes.setdefault(str(menu), []).append(list(route))
         for key, ops in (doc.get("progress") or {}).items():
             if not isinstance(ops, dict):
                 continue
@@ -87,7 +105,7 @@ class Experience:
                         self._loaded.add((key, label))
 
     def save(self) -> None:
-        """ほかの記録（roles など）は残して、"progress" と "flow_wrong"・"flow_right"・"locale" だけを書き換える。"""
+        """ほかの記録（roles など）は残して、"progress" と "flow_wrong"・"flow_right"・"locale"・"settings" だけを書き換える。"""
         if self.path is None:
             return
         doc: dict[str, Any] = {}
@@ -105,6 +123,9 @@ class Experience:
         if self.locale_buttons or self.locale_routes:
             doc["locale"] = {"buttons": dict(sorted(self.locale_buttons.items())),
                              "routes": dict(sorted(self.locale_routes.items()))}
+        if self.setting_buttons or self.setting_routes:
+            doc["settings"] = {"buttons": dict(sorted(self.setting_buttons.items())),
+                               "routes": dict(sorted(self.setting_routes.items()))}
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -122,6 +143,17 @@ class Experience:
         menu = label.split("/", 1)[0]
         if route or menu not in self.locale_routes:
             self.locale_routes[menu] = list(route)
+
+    def setting_changed(self, label: str, effect: dict[str, Any], route: list[str]) -> None:
+        """ボタン（label）を押して、設定の値だけが変わった。effect は変わった設定と押したあとの値。route はその画面を
+        開いたボタンの並び（ゲームが開いた画面なら空）。開き方は入り口（最初のボタン）ごとに1つ、新しいほうを覚える。"""
+        known = self.setting_buttons.get(label, {})
+        self.setting_buttons[label] = {**known, **effect}
+        if not route:
+            return
+        menu = label.split("/", 1)[0]
+        routes = [r for r in self.setting_routes.get(menu, []) if r[0] != route[0]]
+        self.setting_routes[menu] = ([list(route)] + routes)[:MAX_ROUTES]
 
     def reach(self, place: str) -> bool:
         """本文の行・scene・選択肢に届いた。このランで初めてなら True（進行）。"""

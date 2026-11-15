@@ -48,6 +48,7 @@ from .ops import (
 )
 from .flow import Answer, FlowTracker, matches, text_matches
 from .resume import SaveHints, newest_slots, older_than, stamp_key
+from .settings_tour import SettingsTour
 from .rollback import EDGE_OPS, EDGE_TIMINGS, PATTERNS, RollbackWatch, Step, describe, edge_timing, step_of
 from .listing import (
     MASKED, NO, OK, UNKNOWN, Goal, Ledger, Row, blind_candidates, direction, distance, moves, stuck_rows,
@@ -213,6 +214,8 @@ class FuzzRun:
     # ウィンドウを画面に戻そうとした記録を、ハーネスの記録に書いたもの（起動, 幅, 高さ, 収まったか）
     window_fit_noted: set[tuple[int, int, int, bool]] = field(default_factory=set)
     locale_missing: bool = False  # プロファイルの言語が、ゲームの使える言語（settings の locales）になかった
+    # 設定を変えに行く（fuzz/settings_tour.py）。既定は変えに行かない（watchdog が [fuzz] の設定で作る）
+    tour: SettingsTour = field(default_factory=lambda: SettingsTour(0.0, 0.0, 0.0))
     # 画面の文字を読む（fuzz/reading.py）
     read_done: set[str] = field(default_factory=set)  # 画面から文字を読んだボタン（見た目が変わったら読み直す）
     read_look: dict[str, tuple[float, float]] = field(default_factory=dict)  # 読んだときのボタンの明るさ
@@ -294,6 +297,10 @@ class FuzzRun:
             out.append("巻き戻しの操作をまだ覚えていないので、エッジケースに巻き戻しは使わなかった"
                        "（ハーネスの操作のあとに前の行が出たら、その操作を巻き戻しとして覚える）")
         return out
+
+    def settings_notes(self) -> list[str]:
+        """設定を変えに行った記録と、このランで変わった設定・変わらなかった設定。"""
+        return self.tour.notes(self.experience.setting_buttons)
 
     def burst_notes(self) -> list[str]:
         """区間（ガチャプレイ・ボタンの網羅）の記録。"""
@@ -622,6 +629,7 @@ class FuzzSession:
             return
         now = time.monotonic()
         self._track_locale(now)
+        self._step_tour(now)
         if self.run.burst is not None and now >= self.run.burst[2]:
             self._end_burst("時間になった")
         sig = self.state.signature()
@@ -655,6 +663,7 @@ class FuzzSession:
         cands = self._apply_save_first(cands)
         cands = self._apply_flow(cands, now)
         cands = self._apply_locale(cands)
+        cands = self._apply_tour(cands)
         cands = self._one_mover(cands)
         top = self.state.top_modal()
         if top is not None and not top.buttons and not self.state.busy:
@@ -863,18 +872,52 @@ class FuzzSession:
         """ボタンを押して、ゲームの言語が切り替わった。そのボタンと、その画面を開いたボタンの並びを覚える
         （ランをまたいで、経験に覚える）。"""
         run = self.run
-        route: list[str] = []
-        menu, seen = t.menu, set()
-        while menu in run.opened_by and menu not in seen:
-            seen.add(menu)
-            opener = run.opened_by[menu]
-            route.insert(0, opener)
-            menu = opener.split("/", 1)[0]
+        route = self._route(t.menu)
         known = run.experience.locale_buttons.get(t.label)
         run.experience.locale_switched(t.label, locale, route)
         if known != locale:
             run.notes.append(f"`{t.label}` を押すとゲームの言語が {locale} に切り替わったので、言語を戻すのに使う"
                              + (f"（この画面は {' → '.join(f'`{r}`' for r in route)} で開いた）" if route else ""))
+
+    def _route(self, menu: str) -> list[str]:
+        """その画面（menu）を開いたボタンの並び（外側の画面から順に）。ゲームが開いた画面なら空。"""
+        route: list[str] = []
+        seen: set[str] = set()
+        while menu in self.run.opened_by and menu not in seen:
+            seen.add(menu)
+            opener = self.run.opened_by[menu]
+            route.insert(0, opener)
+            menu = opener.split("/", 1)[0]
+        return route
+
+    # --- 設定を変えに行く（DESIGN.md §9「設定を変えに行く」、fuzz/settings_tour.py） ---
+
+    def _tour_paused(self) -> bool:
+        """区間・ゲームの流れの途中・言語を戻しているあいだは、設定を変えに行かない。"""
+        run = self.run
+        return run.burst is not None or run.flow.active is not None or (
+            self._locale_off() and not run.locale_missing)
+
+    def _step_tour(self, now: float) -> None:
+        run = self.run
+        run.tour.observe(self.state.settings)
+        if self._tour_paused():
+            return
+        target = run.tour.target
+        run.tour.step(now, run.experience.setting_buttons, run.rng)
+        if run.tour.target is not None and run.tour.target != target:
+            self.publish(Event("harness", "settings_tour", {"key": run.tour.target, "result": "start"}, self.launch))
+        elif target is not None and run.tour.target is None:
+            self.publish(Event("harness", "settings_tour", {"key": target, "result": "gave_up"}, self.launch))
+            run.notes.append(f"設定 {target} を変えに行ったが、{run.tour.timeout:g} 秒のうちに変えられなかった"
+                             "（設定の画面の開き方を覚えていない・その画面に変えるボタンが出ていない、など）")
+
+    def _apply_tour(self, cands: list[Op]) -> list[Op]:
+        if self._tour_paused():
+            return cands
+        exp = self.run.experience
+        return self.run.tour.apply(cands, set(self.state.menus), self.state.settings,
+                                   exp.setting_buttons, exp.setting_routes)
 
     def _apply_locale(self, cands: list[Op]) -> list[Op]:
         """ゲームの言語がプロファイルの言語と違うあいだ、その言語に切り替えたことのあるボタンと、その画面を開くボタンを
@@ -2181,10 +2224,17 @@ class FuzzSession:
                 self.run.switches.add(op.label)
             if op.target is not None and self.state.settings_changes != settings_before and not screen_changed:
                 now = self.state.settings or {}
-                self.run.setting_effects[op.target.label] = {
-                    k: v for k, v in now.items() if k != "locales" and values_before.get(k) != v}
+                effect = {k: v for k, v in now.items() if k != "locales" and values_before.get(k) != v}
+                self.run.setting_effects[op.target.label] = effect
+                if op.target.kind == "button" and effect:
+                    self.run.experience.setting_changed(op.target.label, effect, self._route(op.target.menu))
         else:
             self.run.stats["no_response"] += 1
+        if self.state.settings_changes != settings_before:
+            now = self.state.settings or {}
+            changed = {k for k, v in now.items() if k != "locales" and values_before.get(k) != v}
+            route = self._route(op.target.menu) if op.target is not None else []
+            self.run.tour.changed(changed, route[0] if route else None, time.monotonic())
         if op.target is not None:
             self._verify_behind(op.target, responded)
         if expected is not None and not responded and op.target is not None:
