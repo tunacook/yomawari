@@ -8,6 +8,7 @@ R 系（パフォーマンス）は detect/perf.py の PerfMonitor でまとめ�
 from __future__ import annotations
 
 import re
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -232,6 +233,11 @@ _WARNING_QUOTED = re.compile(r"'[^']*'")
 _WARNING_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 
 
+def warning_kind(head: str) -> str:
+    """警告の種類（文面の中で変わる名前と数値を伏せたもの）。"""
+    return _WARNING_NUMBER.sub("N", _WARNING_QUOTED.sub("'*'", head))
+
+
 class LogWarningDetector(Detector):
     """L-06: ゲームが出す log_warning イベント。場所と文面の組ごとに検出し、レポートでは種類（evidence の kind）ごとにまとめる。"""
 
@@ -258,7 +264,7 @@ class LogWarningDetector(Detector):
             if m:
                 where, head = f"{m['script']}:{m['line']}", m["message"]
                 break
-        kind = _WARNING_NUMBER.sub("N", _WARNING_QUOTED.sub("'*'", head))
+        kind = warning_kind(head)
         return [
             self.issue(
                 f"Warning: {head[:200]}",
@@ -295,6 +301,147 @@ class ExitTimeoutDetector(Detector):
                 key=self.target, launch=launch, t=now, wall=self.wall, target=self.target,
             )
         ]
+
+
+class SeqGapDetector(Detector):
+    """L-05: [YOMAWARI] 行の seq が飛んだ（行の取りこぼし。ログの書き出しの失敗や、行の形式の崩れ）。seq は起動ごとに 0 から。
+    飛ぶたびに出し、レポートでは起動ごとに1件にまとめる（key が起動ごと）。"""
+
+    def __init__(self, rule: Rule) -> None:
+        super().__init__(rule)
+        self.last: dict[int, int] = {}
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        if ev.source != "game":
+            return []
+        seq = ev.data.get("seq")
+        if not isinstance(seq, int) or isinstance(seq, bool):
+            return []
+        prev = self.last.get(ev.launch)
+        self.last[ev.launch] = seq
+        if prev is None or seq <= prev + 1:
+            return []
+        missing = seq - prev - 1
+        return [
+            self.issue(
+                f"[YOMAWARI] 行の seq が {prev} から {seq} に飛びました（{missing} 行を受け取っていません）",
+                key=f"launch{ev.launch}", launch=ev.launch, t=ev.t, wall=ev.wall,
+                after=prev, got=seq, missing=missing,
+            )
+        ]
+
+
+class WarningFloodDetector(Detector):
+    """L-04: 同じ種類の警告（L-06 と同じく、名前と数値を伏せた文面）が、window_sec のうちに count 回以上出た。
+    毎フレーム出る警告は、ログを埋めて重くする。種類ごとに起動につき1件。"""
+
+    def __init__(self, rule: Rule) -> None:
+        super().__init__(rule)
+        self.window = float(rule.param("window_sec"))
+        self.count = int(rule.param("count"))
+        self.times: dict[tuple[int, str], deque[float]] = {}
+        self.reported: set[tuple[int, str]] = set()
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        if ev.source != "game" or ev.kind != "log_warning":
+            return []
+        msg = str(ev.data.get("message") or "")
+        head = msg.splitlines()[0] if msg else ""
+        kind = warning_kind(head)
+        key = (ev.launch, kind)
+        if key in self.reported:
+            return []
+        q = self.times.setdefault(key, deque())
+        q.append(ev.t)
+        while q and ev.t - q[0] > self.window:
+            q.popleft()
+        if len(q) < self.count:
+            return []
+        self.reported.add(key)
+        del self.times[key]
+        return [
+            self.issue(
+                f"同じ警告が {self.window:g} 秒のうちに {self.count} 回以上出ました: {head[:200]}",
+                key=kind[:120], launch=ev.launch, t=ev.t, wall=ev.wall, kind=kind[:200], message=head,
+            )
+        ]
+
+
+def _offscreen(rect: Any, margin: float) -> bool:
+    """矩形（正規化座標 [x0, y0, x1, y1]）の中心が、描画領域の外にある。"""
+    try:
+        x0, y0, x1, y1 = (float(v) for v in rect)
+    except (TypeError, ValueError):
+        return False
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    return not (-margin <= cx <= 1 + margin and -margin <= cy <= 1 + margin)
+
+
+class OffscreenDetector(Detector):
+    """V-05: ボタン・選択肢の中心が、描画領域の外に min_sec 以上とどまっている。出入りのアニメーションの途中
+    （run 2026-11-14_2214: メニューが滑り込むあいだ 0.4 秒ほど外にある）は数えない。スクロールする画面（scroll のある
+    menu）と、ゲームがスクロール領域のマスクで隠れていると伝えたボタン（hidden）は、外にあるのが正常なので除く。
+    scroll を出さない古いパッケージの menu は判定しない（run 2026-11-03_1658: スクロールする一覧の画面の外のスロットを出した）。"""
+
+    def __init__(self, rule: Rule) -> None:
+        super().__init__(rule)
+        self.min_sec = float(rule.param("min_sec"))
+        self.margin = float(rule.param("margin"))
+        self.since: dict[str, tuple[float, str, Any]] = {}  # label → (外に出た時刻, wall, 矩形)
+        self.reported: set[str] = set()
+        self.launch = 0
+
+    def _update(self, prefix: str, items: dict[str, Any], ev: Event) -> None:
+        for label in [k for k in self.since if k.startswith(prefix) and k not in items]:
+            del self.since[label]
+        for label, rect in items.items():
+            if label not in self.since:
+                self.since[label] = (ev.t, ev.wall, rect)
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        if ev.kind == "launch":
+            self.since.clear()
+            self.launch = ev.launch
+        if ev.source != "game":
+            return []
+        d = ev.data
+        if ev.kind == "menu":
+            name = str(d.get("name"))
+            items: dict[str, Any] = {}
+            # scroll を出さない古いパッケージでは、スクロールする画面かが分からないので判定しない
+            if "scroll" in d and not d.get("scroll"):
+                seen: dict[str, int] = {}
+                for b in d.get("buttons") or []:
+                    if not isinstance(b, dict):
+                        continue
+                    bname = str(b.get("name"))
+                    nth = seen.get(bname, 0)
+                    seen[bname] = nth + 1
+                    if not b.get("hidden") and _offscreen(b.get("rect"), self.margin):
+                        items[f"{name}/{bname}#{nth}" if nth else f"{name}/{bname}"] = b.get("rect")
+            self._update(name + "/", items, ev)
+        elif ev.kind == "menu_close":
+            self._update(str(d.get("name")) + "/", {}, ev)
+        elif ev.kind == "choices":
+            items = {f"choice:{c.get('id')}": c.get("rect") for c in d.get("items") or []
+                     if isinstance(c, dict) and _offscreen(c.get("rect"), self.margin)}
+            self._update("choice:", items, ev)
+        elif ev.kind == "choices_done":
+            self._update("choice:", {}, ev)
+        return []
+
+    def on_tick(self, now: float, launch: int) -> list[Issue]:
+        out = []
+        for label, (since, wall, rect) in list(self.since.items()):
+            if now - since < self.min_sec or label in self.reported:
+                continue
+            self.reported.add(label)
+            what = "選択肢" if label.startswith("choice:") else "ボタン"
+            out.append(self.issue(
+                f"{what} {label} が描画領域の外に {self.min_sec:g} 秒以上あります（矩形 {rect}）",
+                key=label, launch=launch, t=now, wall=wall, target=label, rect=rect,
+            ))
+        return out
 
 
 def _alive(ev: Event, limit: float) -> bool:
@@ -507,6 +654,9 @@ DETECTORS: dict[str, Callable[[Rule], Detector]] = {
     "C-03": BootTimeoutDetector,
     "C-04": ExitTimeoutDetector,
     "H-01": HeartbeatDetector,
+    "L-04": WarningFloodDetector,
+    "L-05": SeqGapDetector,
+    "V-05": OffscreenDetector,
     "S-01": ResponseCheckDetector,
     "S-02": AdvanceStallDetector,
     "S-03": TransitionStuckDetector,

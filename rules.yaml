@@ -76,6 +76,25 @@ rules:
       spot_patterns:
         - "^Scenario script '(?P<script>[^']+)' at line #(?P<line>[\\d.]+): (?P<message>.*)$"
 
+  - id: L-04
+    severity: minor
+    title: 同じ警告が続けて大量に出る
+    description: >-
+      同じ種類の警告（L-06 と同じく、文面の名前と数値を伏せたもの）が、短いあいだに大量に出た。
+      毎フレーム出る警告はログを埋め、書き出しで重くなる。種類ごとに起動につき1件
+    params:
+      window_sec: 60
+      count: 100
+
+  - id: L-05
+    severity: info
+    title: "[YOMAWARI] 行の取りこぼし"
+    description: >-
+      [YOMAWARI] 行の seq（起動ごとに 0 から1ずつ増える）が飛んだ。ハーネスが受け取れなかった行があり、
+      その間のイベント（本文・画面・設定など）を見ていない。行の形式の崩れ（ハーネスの記録に「解釈できません」と出る）か、
+      ログの書き出しの取りこぼし
+    params: {}
+
   - id: S-01
     severity: critical
     title: 応答確認に反応しない
@@ -129,6 +148,19 @@ rules:
       # "<menu>/<ボタン>" に対する正規表現。ゲーム固有のものはプロファイルの [rules.S-05] に書く。
       # 名前の既定値は、type を出さない古いパッケージのビルド向け。パッケージが type を出すようになったら消す
       ignore_patterns: ["Toggle", "Dropdown", "Slider"]
+
+  - id: V-05
+    severity: major
+    title: ボタン・選択肢が画面の外にある
+    description: >-
+      menu のボタンか選択肢の中心が、描画領域の外に min_sec 以上とどまっている（押せない・見えない）。
+      出入りのアニメーションの途中は min_sec で除く。スクロールする画面（scroll のある menu）と、
+      スクロール領域のマスクで隠れているボタン（hidden）は、外にあるのが正常なので除く。
+      scroll を出さない古いパッケージの menu は判定しない
+    params:
+      min_sec: 3
+      # 描画領域の外とみなす余白（正規化座標）。縁に接するボタンを外としない
+      margin: 0.01
 
   - id: V-07
     severity: major
