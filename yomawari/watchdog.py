@@ -30,6 +30,7 @@ from .judge import ollama
 from .events import Event, Issue, now_wall
 from .fuzz.decider import RandomDecider
 from .fuzz.advisor import ChoiceAdvisor
+from .fuzz.settings_tour import SettingsTour
 from .fuzz.experience import Experience
 from .fuzz.flow import FlowTracker
 from .fuzz.guard import Guard
@@ -437,6 +438,9 @@ class Harness:
                 continue_previous=prev_save is not None,
                 # 進め方の経験は、ボタンの役割と同じファイル（runs/_experience/<ゲーム>.json）に覚える
                 experience=Experience(self.roles.path),
+                tour=SettingsTour(float(self.fuzz_cfg["settings_tour_interval_sec"]),
+                                  float(self.fuzz_cfg["settings_tour_timeout_sec"]),
+                                  float(self.fuzz_cfg["settings_tour_factor"])),
             )
             # ゲームの流れで外れ・正解と分かった組み合わせを、ランをまたいで覚える
             self._fuzz.flow.remember(self._fuzz.experience.flow_wrong, self._fuzz.experience.flow_right)
@@ -562,6 +566,7 @@ class Harness:
                 self.notes += self._fuzz.blocked_notes(time.time())
                 self.notes += self._fuzz.burst_notes()
                 self.notes += self._fuzz.edge_notes()
+                self.notes += self._fuzz.settings_notes()
                 self.notes += self._fuzz.looks_notes()
                 self.notes += self._fuzz.locale_notes(time.monotonic())
                 if self._fuzz.advisor is not None:

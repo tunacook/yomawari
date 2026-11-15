@@ -501,6 +501,90 @@ class DimButtonRespondedDetector(Detector):
         ]
 
 
+def _same(a: Any, b: Any) -> bool:
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool) and not isinstance(b, bool):
+        return abs(float(a) - float(b)) < 1e-6
+    return bool(a == b)
+
+
+class SettingsPersistDetector(Detector):
+    """F-03: 設定を変えて起動し直したら、値が戻っている（DESIGN.md §10、§9「設定を変えに行く」）。
+
+    前の起動で最後に設定の画面を閉じたときの値（設定の画面が開いていなかったあいだは、そのときの値）と、次の起動の
+    最初の settings を比べる。設定を保存するのは画面を閉じたときというゲームが多いので、開いたまま終わった起動では、
+    閉じたときの値と最後の値のどちらかに一致すればよい。前の起動が落ちた（C-01）・固まって再起動した（on_detect: restart
+    の問題が出た）ときは比べない（保存の前に止まったのかもしれない）。設定の画面は、押して settings の値だけが変わった
+    ボタンのある画面（menu）とする。"""
+
+    def __init__(self, rule: Rule) -> None:
+        super().__init__(rule)
+        self.ok_codes = set(rule.param("harness_exit_codes"))
+        self.ignore = set(rule.param("ignore_keys"))
+        self.menus: set[str] = set()  # 押して設定の値だけが変わったボタンのある画面
+        self.open: dict[str, dict[str, Any] | None] = {}  # 開いている画面 → 開いたときの値
+        self.current: dict[str, Any] | None = None
+        self.committed: dict[str, Any] | None = None  # 設定の画面が閉じていたときの値
+        self.launch = 0
+        self.broken = False  # この起動で、再起動する問題が出た
+        self.prev: tuple[dict[str, Any], dict[str, Any], int] | None = None  # 前の起動の (閉じたときの値, 最後の値, 起動)
+        self.waiting = False  # 起動したあと、まだ最初の settings を見ていない
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        d = ev.data
+        if ev.kind == "launch":
+            self.launch, self.waiting, self.broken = ev.launch, True, False
+            self.current = self.committed = None
+            self.open = {}
+        elif ev.kind == "settings":
+            values = {k: v for k, v in d.items() if k not in self.ignore and k not in ("seq", "t", "f", "ev")}
+            out = self._compare(values, ev) if self.waiting else []
+            self.waiting = False
+            self.current = values
+            if not self.open.keys() & self.menus:
+                self.committed = values
+            return out
+        elif ev.kind == "op_result":
+            target = d.get("target")
+            if d.get("settings_changed") and isinstance(target, str) and not d.get("screen_changed"):
+                menu = target.split("/", 1)[0]
+                if menu not in self.menus and menu in self.open:
+                    # 初めて設定の画面と分かった。開いてから変わった値は、まだ保存されていないかもしれない
+                    self.committed = self.open[menu]
+                self.menus.add(menu)
+        elif ev.kind == "menu":
+            self.open.setdefault(str(d.get("name")), self.current)
+        elif ev.kind == "menu_close":
+            name = str(d.get("name"))
+            if name in self.menus and name in self.open and self.current is not None:
+                self.committed = self.current
+            self.open.pop(name, None)
+        elif ev.kind == "issue":
+            if d.get("action") == "restart" and ev.launch == self.launch:
+                self.broken = True
+        elif ev.kind == "proc_exit":
+            code = d.get("code")
+            normal = code == 0 or (bool(d.get("by_harness")) and code in self.ok_codes)
+            ok = normal and not self.broken and self.committed is not None and self.current is not None
+            self.prev = (self.committed, self.current, ev.launch) if ok else None  # type: ignore[assignment]
+        return []
+
+    def _compare(self, values: dict[str, Any], ev: Event) -> list[Issue]:
+        if self.prev is None:
+            return []
+        committed, last, launch = self.prev
+        self.prev = None
+        out = []
+        for k, want in committed.items():
+            if k not in values or _same(values[k], want) or _same(values[k], last.get(k)):
+                continue
+            out.append(self.issue(
+                f"起動 #{launch} の終わりに {k} = {want} だった設定が、起動し直したら {values[k]} になっていました",
+                key=k, launch=ev.launch, t=ev.t, wall=ev.wall,
+                setting=k, before=want, after=values[k], previous_launch=launch,
+            ))
+        return out
+
+
 DETECTORS: dict[str, Callable[[Rule], Detector]] = {
     "C-01": ProcessExitDetector,
     "C-02": CrashDumpDetector,
@@ -512,6 +596,7 @@ DETECTORS: dict[str, Callable[[Rule], Detector]] = {
     "S-03": TransitionStuckDetector,
     "S-05": ButtonNoResponseDetector,
     "V-07": DimButtonRespondedDetector,
+    "F-03": SettingsPersistDetector,
     "L-01": LogErrorDetector,
     "L-06": LogWarningDetector,
 }

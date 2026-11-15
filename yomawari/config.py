@@ -148,6 +148,12 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     # ゲームの言語がプロファイルの言語（locale）と違うあいだ、押してプロファイルの言語に切り替えたことのあるボタンと、
     # その画面を開くボタンの重みに掛ける（DESIGN.md §9「プロファイルの言語」）。1 以下なら戻しに行かない
     "locale_factor": 20.0,
+    # 設定を変えに行く（DESIGN.md §9「設定を変えに行く」）。この間隔で、このランで変わった回数がいちばん少ない設定を
+    # 変えに行く（0 で変えに行かない）。設定を変えるボタンと、その画面を開くボタンの重みに settings_tour_factor を掛け、
+    # settings_tour_timeout_sec のうちに変えられなければあきらめる
+    "settings_tour_interval_sec": 1200.0,
+    "settings_tour_factor": 20.0,
+    "settings_tour_timeout_sec": 300.0,
     # 質問の正解をどこから得るか（DESIGN.md §9「答えの選び方」）。profile: プロファイルの answers と覚えた正解 /
     # learn: 覚えた正解だけ。目的（purpose）で変える
     "answer_source": "profile",

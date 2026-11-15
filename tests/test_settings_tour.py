@@ -1,0 +1,211 @@
+"""設定を変えに行く（fuzz/settings_tour.py）と F-03（設定が次の起動に残らない）。"""
+
+import asyncio
+import random
+
+from yomawari.detect.engine import Engine
+from yomawari.events import Event
+from yomawari.fuzz.experience import Experience
+from yomawari.fuzz.ops import Op
+from yomawari.fuzz.settings_tour import SettingsTour
+
+from .test_fuzz import _LANG, _PAUSE, _SETTINGS, _locale_session
+
+_SOUND = {"name": "SettingsUI", "modal": True, "buttons": [
+    {"name": "Option_a", "rect": [0.1, 0.5, 0.3, 0.6], "type": "other"},
+    {"name": "Option_b", "rect": [0.5, 0.5, 0.7, 0.6], "type": "other"},
+    {"name": "Mute", "rect": [0.1, 0.65, 0.3, 0.75], "type": "other"},
+    {"name": "BackButton", "rect": [0.1, 0.8, 0.3, 0.9]}]}
+
+
+def _press(st, s, label, **values):
+    """ボタンを押すと、settings の値が values に変わる。"""
+    target = {t.label: t for t in st.targets()}[label]
+
+    def click(*a, **k):
+        st.feed(Event("game", "settings", {**(st.settings or {}), **values}, 0))
+
+    s.pointer.driver.click = click
+    asyncio.run(s._normal(Op("click", target), "modal:SettingsUI", False))
+
+
+def _weights(st, s):
+    return {op.target.label: op.weight for op in s._apply_tour([Op("click", t) for t in st.targets()])}
+
+
+def test_setting_buttons_and_routes_are_learned_per_entry(tmp_path):
+    st, run, s = _locale_session("ja-JP", _PAUSE, _SOUND)
+    run.experience = Experience(tmp_path / "exp.json")
+    run.opened_by.update({"PauseUI": "MainUI/MenuButton", "SettingsUI": "PauseUI/SettingsButton"})
+    _press(st, s, "SettingsUI/Mute", master_volume=0)
+    # 同じ画面を、別の入り口（タイトル画面）から開いて押した
+    run.opened_by = {"SettingsUI": "TitleUI/SettingsButton"}
+    _press(st, s, "SettingsUI/Option_a", reveal_speed=1)
+    exp = run.experience
+    assert exp.setting_buttons == {"SettingsUI/Mute": {"master_volume": 0}, "SettingsUI/Option_a": {"reveal_speed": 1}}
+    assert exp.setting_routes == {"SettingsUI": [["TitleUI/SettingsButton"],
+                                                  ["MainUI/MenuButton", "PauseUI/SettingsButton"]]}
+    exp.save()
+    again = Experience(tmp_path / "exp.json")
+    assert again.setting_buttons == exp.setting_buttons and again.setting_routes == exp.setting_routes
+    # 押して変わった設定は、このランで変わった回数に数える
+    assert run.tour.changes == {"master_volume": 1, "reveal_speed": 1}
+
+
+def test_tour_picks_least_changed_setting_and_boosts_buttons_then_route():
+    st, run, s = _locale_session("ja-JP", _PAUSE)
+    run.tour = SettingsTour(interval=100, timeout=50, factor=20)
+    exp = run.experience
+    exp.setting_buttons = {"SettingsUI/Option_a": {"reveal_speed": 1}, "SettingsUI/Option_b": {"reveal_speed": 0.5},
+                           "SettingsUI/Mute": {"master_volume": 0}}
+    exp.setting_routes = {"SettingsUI": [["PauseUI/SettingsButton"]]}
+    run.tour.changes["reveal_speed"] = 3
+    run.tour.step(0.0, exp.setting_buttons, random.Random(1))
+    assert run.tour.target is None  # 間隔がたつまでは行かない
+    run.tour.step(100.0, exp.setting_buttons, random.Random(1))
+    assert run.tour.target == "master_volume"  # このランで変わった回数がいちばん少ない設定
+    # 設定の画面が出ていない: その画面を開くボタンを優先する
+    w = _weights(st, s)
+    assert w["PauseUI/SettingsButton"] == 20.0 and w["PauseUI/CloseButton"] == 1.0
+    # 設定の画面が出ている: その設定を変えるボタンだけを優先する
+    st.feed(Event("game", "menu", _SOUND, 0))
+    w = _weights(st, s)
+    assert w["SettingsUI/Mute"] == 20.0 and w["SettingsUI/Option_a"] == 1.0 and w["SettingsUI/BackButton"] == 1.0
+    # 変えたら終わり。次は間隔がたってから
+    run.tour.changed({"master_volume"}, "PauseUI/SettingsButton", 120.0)
+    assert run.tour.target is None and run.tour.next_t == 220.0
+    assert set(_weights(st, s).values()) == {1.0}
+
+
+def test_tour_prefers_buttons_that_change_the_value():
+    st, run, s = _locale_session("ja-JP", _SOUND)
+    run.tour = SettingsTour(interval=1, timeout=50, factor=20, next_t=0.0)
+    exp = run.experience
+    # いまの reveal_speed は 0.5。Option_b を押しても変わらないので、Option_a を先に押す
+    exp.setting_buttons = {"SettingsUI/Option_a": {"reveal_speed": 1}, "SettingsUI/Option_b": {"reveal_speed": 0.5}}
+    run.tour.step(0.0, exp.setting_buttons, random.Random(1))
+    w = _weights(st, s)
+    assert w["SettingsUI/Option_a"] == 20.0 and w["SettingsUI/Option_b"] == 1.0
+
+
+def test_tour_pauses_and_gives_up():
+    st, run, s = _locale_session("en-US", _LANG)
+    run.tour = SettingsTour(interval=1, timeout=10, factor=20, next_t=0.0)
+    run.experience.setting_buttons = {"SettingsUI/Option_a": {"reveal_speed": 1}}
+    # 言語を戻しているあいだは変えに行かない
+    s._step_tour(5.0)
+    assert run.tour.target is None
+    st.feed(Event("game", "settings", {**_SETTINGS, "locale": "ja-JP"}, 0))
+    s._step_tour(5.0)
+    assert run.tour.target == "reveal_speed"
+    s._step_tour(16.0)
+    assert run.tour.target is None and run.tour.gave_up == {"reveal_speed": 1}
+    assert any("reveal_speed を変えに行ったが" in n for n in run.notes)
+
+
+def test_tour_disabled_by_default():
+    st, run, s = _locale_session("ja-JP", _SOUND)
+    run.experience.setting_buttons = {"SettingsUI/Mute": {"master_volume": 0}}
+    for t in (0.0, 1e6):
+        s._step_tour(t)
+    assert run.tour.target is None
+
+
+def test_settings_notes():
+    tour = SettingsTour(interval=1, timeout=1, factor=20)
+    tour.observe(_SETTINGS)
+    tour.target, tour.tours = "master_volume", 2
+    tour.changed({"master_volume"}, "TitleUI/SettingsButton", 0.0)
+    tour.gave_up["reveal_speed"] = 1
+    notes = tour.notes({"SettingsUI/Mute": {"master_volume": 0}, "SettingsUI/Option_a": {"reveal_speed": 1}})
+    assert notes[0].startswith("設定を変えに 2 回行った（変えられた 1 回、時間のうちに変えられなかった reveal_speed 1 回）")
+    assert "`TitleUI/SettingsButton` 1 回" in notes[0]
+    assert notes[1] == "このランで変わった設定: master_volume 1 回"
+    assert "reveal_speed、" in notes[2] and "auto_delay（変えるボタンを見つけていない）" in notes[2]
+    assert "locale（変えるボタンを見つけていない）" in notes[2]
+
+
+# --- F-03 ---
+
+def _f03(repo_rules):
+    return Engine({"F-03": repo_rules["F-03"]})
+
+
+def _ev(kind, launch, t, source="game", **data):
+    return Event(source, kind, data, launch=launch, t=t, wall=f"w{t}")
+
+
+def _settings(launch, t, **values):
+    return _ev("settings", launch, t, **{**_SETTINGS, **values})
+
+
+def _change_and_exit(launch, close=True, code=-15, by_harness=True, restart=False):
+    evs = [
+        _ev("launch", launch, launch * 100, source="harness"),
+        _settings(launch, launch * 100 + 1),
+        _ev("menu", launch, launch * 100 + 2, name="SettingsUI", modal=True, buttons=[]),
+        _settings(launch, launch * 100 + 3, master_volume=0),
+        _ev("op_result", launch, launch * 100 + 3, source="harness", target="SettingsUI/Mute",
+            settings_changed=True, screen_changed=False),
+    ]
+    if close:
+        evs.append(_ev("menu_close", launch, launch * 100 + 4, name="SettingsUI"))
+    if restart:
+        evs.append(_ev("issue", launch, launch * 100 + 5, source="harness", rule_id="H-01", action="restart"))
+    evs.append(_ev("proc_exit", launch, launch * 100 + 6, source="proc", code=code, by_harness=by_harness))
+    return evs
+
+
+def _feed(engine, evs):
+    out = []
+    for e in evs:
+        out += engine.feed(e)
+    return out
+
+
+def test_f03_setting_reverted_after_relaunch(repo_rules):
+    e = _f03(repo_rules)
+    issues = _feed(e, _change_and_exit(0) + [_ev("launch", 1, 100, source="harness"), _settings(1, 101)])
+    assert [(i.rule_id, i.severity, i.evidence["setting"], i.evidence["before"], i.evidence["after"])
+            for i in issues] == [("F-03", "major", "master_volume", 0, 1)]
+
+
+def test_f03_setting_kept(repo_rules):
+    e = _f03(repo_rules)
+    assert _feed(e, _change_and_exit(0) + [_ev("launch", 1, 100, source="harness"),
+                                           _settings(1, 101, master_volume=0.0)]) == []
+
+
+def test_f03_settings_screen_open_at_exit_accepts_either(repo_rules):
+    # 設定の画面を開いたまま終わった: 閉じたときの値（変える前）でも、最後の値でもよい
+    for after in (1, 0):
+        e = _f03(repo_rules)
+        evs = _change_and_exit(0, close=False) + [_ev("launch", 1, 100, source="harness"),
+                                                   _settings(1, 101, master_volume=after)]
+        assert _feed(e, evs) == []
+
+
+def test_f03_skips_after_crash_or_restart(repo_rules):
+    for kw in ({"code": 134, "by_harness": False}, {"restart": True}):
+        e = _f03(repo_rules)
+        evs = _change_and_exit(0, **kw) + [_ev("launch", 1, 100, source="harness"), _settings(1, 101)]
+        assert _feed(e, evs) == []
+
+
+def test_f03_compares_only_first_settings_of_launch(repo_rules):
+    e = _f03(repo_rules)
+    evs = _change_and_exit(0) + [_ev("launch", 1, 100, source="harness"), _settings(1, 101, master_volume=0),
+                                 _settings(1, 102, master_volume=1)]
+    assert _feed(e, evs) == []
+
+
+def test_response_without_setting_change_is_not_counted_as_no_response():
+    st, run, s = _locale_session("ja-JP", _PAUSE)
+    target = {t.label: t for t in st.targets()}["PauseUI/SettingsButton"]
+
+    def click(*a, **k):
+        st.feed(Event("game", "menu", _SOUND, 0))  # 設定の画面が開いた（設定の値は変わらない）
+
+    s.pointer.driver.click = click
+    asyncio.run(s._normal(Op("click", target), "modal:PauseUI", False))
+    assert run.stats["no_response"] == 0 and not run.tour.changes
