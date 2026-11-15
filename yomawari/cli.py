@@ -35,6 +35,7 @@ from .post.rebuild import rebuild_report
 from .profile import apply_rules, load_spec
 from .purpose import MODES, PurposeError
 from .purpose import resolve as resolve_purpose
+from .runs import PruneResult, prune_runs
 from .savestate import SaveState, resolve_target
 from .sensors.window import ClientArea
 from .state import GameState
@@ -275,7 +276,10 @@ def run(
         judge_cfg=cfg.judge,
     )
     if forget_note:
-        harness.notes.append(forget_note)  # レポートの「ハーネスの記録」に、学習を消してから回したことを残す
+        harness.notes.append(forget_note)
+    keep_days = float(rc["keep_runs_days"])
+    pruned = prune_runs(cfg.runs_dir, keep_days, datetime.now())
+    harness.notes += _prune_notes(pruned, keep_days)  # レポートの「ハーネスの記録」に残す  # レポートの「ハーネスの記録」に、学習を消してから回したことを残す
     if live:
         with live:
             result = asyncio.run(harness.run(opts))
@@ -453,16 +457,137 @@ def builds_check(ctx: typer.Context, name: str = typer.Argument(..., help="ビ�
 # --- schedule ---
 
 
+def _self_command() -> str:
+    """いま動いている yomawari のコマンドの絶対パス（launchd から同じものを起動する）。"""
+    found = shutil.which(sys.argv[0])
+    return str(Path(found or sys.argv[0]).absolute())
+
+
+def parse_at(at: str) -> tuple[int, int]:
+    """'HH:MM' を (時, 分) に。形が違えば ValueError。"""
+    hh, sep, mm = at.strip().partition(":")
+    if not (sep and hh.isdigit() and mm.isdigit() and len(mm) == 2):
+        raise ValueError(at)
+    h, m = int(hh), int(mm)
+    if not (0 <= h < 24 and 0 <= m < 60):
+        raise ValueError(at)
+    return h, m
+
+
 @schedule_app.command("install")
-def schedule_install(at: str = typer.Option("01:00", "--at", help="起動時刻（HH:MM）")) -> None:
-    """launchd に定時実行を登録する。"""
-    _stub("schedule install", at=at)
+def schedule_install(
+    ctx: typer.Context,
+    at: str = typer.Option("01:00", "--at", help="毎日始める時刻（HH:MM）"),
+    build: str | None = typer.Option(None, "--build", "-b", help="登録済みビルドの名前。既定は yomawari.toml の default_build"),
+    hours: float | None = typer.Option(None, "--hours", help="実行時間（時間）。既定は yomawari.toml の run.hours"),
+    purpose: str | None = typer.Option(None, "--purpose", "-p", help="ランの目的。既定は yomawari.toml の run.purpose"),
+) -> None:
+    """毎日決まった時刻に yomawari run を始めるよう、launchd に登録する（前の登録は置き換える）。"""
+    try:
+        hour, minute = parse_at(at)
+    except ValueError:
+        err.print(f"[red]--at は HH:MM で指定してください: {at}[/]")
+        raise typer.Exit(EXIT_HARNESS_ERROR) from None
+    cfg = _config(ctx)
+    plat = get_platform()
+    try:
+        b = cfg.resolve_build(build, None)
+    except ConfigError as e:
+        err.print(f"[red]{e}（yomawari builds list）[/]")
+        raise typer.Exit(EXIT_HARNESS_ERROR) from None
+    if b is None:
+        _require_tty("ビルドの登録")
+        b = register_interactive(cfg, plat, load_rules(cfg.rules_path))
+    if purpose is not None:
+        try:
+            resolve_purpose(purpose, cfg.purposes)
+        except PurposeError as e:
+            err.print(f"[red]{e}[/]")
+            raise typer.Exit(EXIT_HARNESS_ERROR) from None
+    argv = [_self_command(), "--config", str(cfg.path), "run", "--build", b.name]
+    if hours is not None:
+        argv += ["--hours", f"{hours:g}"]
+    if purpose is not None:
+        argv += ["--purpose", purpose]
+    log_path = cfg.runs_dir.resolve() / "_schedule" / "launchd.log"
+    try:
+        path = plat.schedule_install(argv, hour, minute, cfg.base_dir, log_path)
+    except (RuntimeError, OSError, NotImplementedError) as e:
+        err.print(f"[red]登録できませんでした: {e}[/]")
+        raise typer.Exit(EXIT_HARNESS_ERROR) from None
+    console.print(f"[green]毎日 {hour:02d}:{minute:02d} に始めるよう登録しました[/]: {path}")
+    console.print(f"  実行するコマンド: {shlex.join(argv)}")
+    console.print(f"  launchd の出力: {log_path}")
+    console.print("  注意:")
+    console.print("  - その時刻に Mac が眠っていたら、起きたときに始まります。ふたを閉じたままでは始まりません")
+    console.print("  - 画面がロックされていると、ゲームを操作できません（yomawari doctor・run の注意を参照）")
+    console.print("  - launchd から始めると、権限（画面収録・アクセシビリティ）を見る対象がターミナルアプリではなくなります。"
+                  "最初は時刻を近くにして、ランが動くことを確かめてください")
+    console.print("  外すとき: yomawari schedule uninstall")
 
 
 @schedule_app.command("uninstall")
 def schedule_uninstall() -> None:
-    """launchd の定時実行を解除する。"""
-    _stub("schedule uninstall")
+    """launchd の登録を外す。"""
+    try:
+        path = get_platform().schedule_uninstall()
+    except NotImplementedError as e:
+        err.print(f"[red]{e}[/]")
+        raise typer.Exit(EXIT_HARNESS_ERROR) from None
+    console.print(f"登録を外しました: {path}" if path else "登録はありません")
+
+
+@schedule_app.command("status")
+def schedule_status() -> None:
+    """launchd に登録した内容を表示する。"""
+    try:
+        info = get_platform().schedule_info()
+    except NotImplementedError as e:
+        err.print(f"[red]{e}[/]")
+        raise typer.Exit(EXIT_HARNESS_ERROR) from None
+    if info is None:
+        console.print("登録はありません（yomawari schedule install）")
+        return
+    when = info.get("StartCalendarInterval", {})
+    console.print(f"毎日 {int(when.get('Hour', 0)):02d}:{int(when.get('Minute', 0)):02d} に始めます")
+    console.print(f"  実行するコマンド: {shlex.join(info.get('ProgramArguments', []))}")
+    console.print(f"  launchd の出力: {info.get('StandardOutPath', '')}")
+
+
+# --- 古いラン ---
+
+
+def _prune_notes(res: PruneResult, days: float, dry_run: bool = False) -> list[str]:
+    notes = []
+    if res.removed:
+        verb = "消します" if dry_run else "消した"
+        notes.append(f"始めてから {days:g} 日より経ったラン {len(res.removed)} 件を{verb}（run.keep_runs_days）: "
+                     + ", ".join(res.removed))
+    for name, why in res.kept:
+        notes.append(f"古いが残したラン: {name}（{why}）")
+    for name, e in res.errors:
+        notes.append(f"古いランを消せなかった: {name}（{e}）")
+    return notes
+
+
+@app.command()
+def prune(
+    ctx: typer.Context,
+    days: float | None = typer.Option(None, "--days", help="この日数より前に始めたランを消す。既定は yomawari.toml の run.keep_runs_days"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="消すものを表示するだけで、消さない"),
+) -> None:
+    """古いランを消す。yomawari run も、始めるときに同じことをする。"""
+    cfg = _config(ctx)
+    keep = float(days if days is not None else cfg.run["keep_runs_days"])
+    if keep <= 0:
+        console.print("keep_runs_days が 0 以下なので消しません")
+        return
+    res = prune_runs(cfg.runs_dir, keep, datetime.now(), dry_run=dry_run)
+    notes = _prune_notes(res, keep, dry_run)
+    for n in notes or [f"{keep:g} 日より経ったランはありません"]:
+        console.print(n)
+    if res.errors:
+        raise typer.Exit(EXIT_HARNESS_ERROR)
 
 
 # --- doctor / restore ---

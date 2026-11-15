@@ -9,8 +9,6 @@ from yomawari.cli import app
 COMMANDS = [
     (["replay", "C-01-0001"], "replay"),
     (["minimize", "C-01-0001"], "minimize"),
-    (["schedule", "install", "--at", "02:30"], "schedule install"),
-    (["schedule", "uninstall"], "schedule uninstall"),
 ]
 
 
@@ -25,8 +23,8 @@ def test_every_command_logs_and_exits_0(args, command, caplog):
 
 def test_args_are_logged(caplog):
     caplog.set_level(logging.INFO, logger="yomawari")
-    CliRunner().invoke(app, ["schedule", "install", "--at", "02:30"])
-    assert "'at': '02:30'" in caplog.records[-1].getMessage()
+    CliRunner().invoke(app, ["--config", "/tmp/y.toml", "replay", "C-01-0001"])
+    assert "'issue_id': 'C-01-0001'" in caplog.records[-1].getMessage()
 
 
 def test_verbose_enables_debug(caplog):

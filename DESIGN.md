@@ -67,7 +67,7 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 ### システム間のやりとり
 | 経路 | 手段 |
 |---|---|
-| launchd → ウォッチドッグ | 時刻起動（`caffeinate` でラップ） |
+| launchd → ウォッチドッグ | 時刻起動（`schedule install` で置く LaunchAgent。スリープはハーネスが `caffeinate` で防ぐ） |
 | ウォッチドッグ → ゲーム | プロセス起動（`-yomawari`、`-logFile` を自動付与） |
 | ゲーム → ハーネス | `YomawariLog` → Player.log → センサーがtail |
 | ハーネス → ゲーム | OS入力（`pyautogui`） |
@@ -246,7 +246,8 @@ yomawari inspect [--build NAME] [--seconds 60] [--click MENU/BUTTON ...]   # 画
 yomawari experience report [--build NAME] [--out PATH]   # 経験の蓄積から体験レポート（Markdown）を出す（§9「経験の蓄積」）
 yomawari experience forget [--build NAME | --game NAME] [--roles] [--progress] [--flow-wrong] [--flow-right] [--yes]   # 覚えたことを消す（§9「経験の蓄積」）
 yomawari doctor
-yomawari schedule install --at 01:00 | uninstall
+yomawari schedule install --at 01:00 [--build NAME] [--hours H] [--purpose P] | uninstall | status   # 毎日決まった時刻に run を始める（下の「定時実行」）
+yomawari prune [--days N] [--dry-run]   # 古いランを消す（§12「runs/ 構成」）。run も始めるときに同じことをする
 yomawari restore
 ```
 
@@ -263,6 +264,13 @@ yomawari restore
 - 標準入力が端末でない（launchd 等）ときは、入力を待たず終了コード2で終わる
 - `schedule install` でビルド未登録なら、そこで登録を促す
 - 表示は `rich` の `Prompt` / `Confirm`
+
+### 定時実行（schedule）
+- `schedule install` は、毎日 `--at` の時刻に `yomawari --config <yomawari.toml の絶対パス> run --build <名前>`（`--hours`・`--purpose` を付けたらそれも）を実行する LaunchAgent（`~/Library/LaunchAgents/com.tunacook.yomawari.run.plist`）を置き、`launchctl bootstrap gui/<uid>` で読み込む。前に置いたものは置き換える（登録は1つ）
+- 実行するのは、`schedule install` を実行した yomawari のコマンドそのもの（絶対パス）。作業ディレクトリは `yomawari.toml` のディレクトリ。launchd の標準出力・標準エラーは `runs/_schedule/launchd.log` に書く
+- その時刻に Mac が眠っていたら、launchd は起きたときに1回実行する。眠りから起こすことはしない
+- launchd から始めたランは、権限（画面収録・アクセシビリティ）を見る対象がターミナルアプリではなくなる（§13）
+- `schedule uninstall` で外し、plist を消す。`schedule status` で、置いた内容を見る
 
 ### 実行中の表示
 ```
@@ -1245,7 +1253,7 @@ runs/
 ├─ coverage.json         # ラン間で引き継ぐ状態×操作の試行回数
 └─ baseline.json         # 既知ISSUEのシグネチャ、ラベルごとのベースラインスクショ参照
 ```
-古いランは `keep_runs_days` で自動削除。
+古いランは `run.keep_runs_days`（日。0 なら消さない）で消す。`yomawari run` が始めるときに、ランのディレクトリの名前にある開始日時から数えて、それより経ったランを消し、消したものを「ハーネスの記録」に書く。`yomawari prune`（`--dry-run` で表示だけ）でも消せる。ランの名前の形でないもの（`_experience` など）とファイルは消さない。古くても、未復元のセーブ退避があるラン（`restore_pending.json` が指す。ユーザーの本物のセーブが入っている）と、ビルドごとのいちばん新しいラン（`--continue` のセーブ）は残す
 
 ---
 
@@ -1254,6 +1262,7 @@ runs/
 - 画面がロックされると OS 入力もキャプチャも動かない。ラン中は自動ロック・スクリーンセーバーを止め、ログインしたままにする
 - ゲームウィンドウは最前面・非遮蔽が前提。実行中はその Mac をほかの作業に使えない
 - ターミナル（または実行元）に「画面収録」「アクセシビリティ」権限が必要
+- `schedule install` で launchd から始めると、親にターミナルアプリがないので、権限は yomawari を動かしている Python に付けることになると思われる（未確認）。最初は時刻を近くにして、ランが動くか確かめる
 - Python は arm64 ネイティブで動かす。x86_64 Python が Rosetta で動くと、依存ライブラリのアーキテクチャが食い違う
 - Steamworks 組み込み済みビルドでは、`SteamAPI_RestartAppIfNecessary` により Steam 経由で再起動され、プロセスを見失うことがある。ビルドの隣に `steam_appid.txt` を置くか、`-yomawari` 時は無効化する
 - フルスクリーンは Fullscreen Window（ボーダーレス）でテストする。切り替えアニメーション中はキャプチャが途切れるので、矩形が安定するまで待つ
@@ -1267,7 +1276,7 @@ runs/
 3. 画面とOS操作: `mss` キャプチャとリングバッファ、V-01〜05、OS操作カタログ、F系・A系ルール（R系（パフォーマンス）、L-02〜L-05、V-05・V-08・V-09、F-01・F-03 はフェーズ2の途中で先に入れた。フェーズ3に残るルールは V-01〜V-04、F-02・F-04、A-01・A-02）
 4. 再現: `events.jsonl` からの `replay`、`minimize`、前回比較、重複排除・統合
 5. 画像判定: Ollama Judge、V-06、誤検知除去、要目視欄、再現手順の文章化、ボタンの見た目からの役割の推定（§9）
-6. 無人運転: ウォッチドッグの別プロセス化、`schedule install`（launchd plist生成）、`caffeinate`、古いランの削除
+6. 無人運転: ウォッチドッグの別プロセス化、`schedule install`（launchd plist生成）、`caffeinate`、古いランの削除（`caffeinate`・`schedule install`・古いランの削除は先に入れた。残るのはウォッチドッグの別プロセス化）
 7. 後日: Windows対応、`local`/`jev` Decider、ゲームパッド（`InputDriver` 追加と `ui_focus`/`input_device` イベント）
 
 各フェーズで、ゲームなしでも動くテスト（Player.log のサンプルを流し込むモックゲーム）を用意する。

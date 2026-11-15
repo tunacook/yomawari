@@ -134,4 +134,6 @@ note = "ここでは何も突きつけない"
 | `yomawari doctor` | 権限・設定・Ollama などの準備ができているか確かめる |
 | `yomawari builds` | 登録済みのビルドを一覧する（`builds add` で登録） |
 | `yomawari restore` | ランが途中で止まったときに、退避したセーブ・設定を戻す |
+| `yomawari schedule install --at 01:00` | 毎日決まった時刻にランを始めるよう、launchd に登録する（macOS）。`--build`・`--hours`・`--purpose` も付けられる。`schedule uninstall` で外し、`schedule status` で登録した内容を見る |
+| `yomawari prune` | 古いラン（既定は 14 日より前。`run.keep_runs_days`）を消す。`--dry-run` で消すものを表示するだけ。`yomawari run` も始めるときに消す |
 | `yomawari experience forget` | ランをまたいで覚えたこと（`runs/_experience/<ゲーム>.json`）を消す。ハーネスの仕様が大きく変わったときなどに使う。`yomawari run --forget` でも、ランの前にすべて消せる |

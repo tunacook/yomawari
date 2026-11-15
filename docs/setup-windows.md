@@ -61,7 +61,7 @@ yomawari run -p stuck --hours 8  # 夜間に 8 時間
 - 終わると `runs\<日時>_<ビルド>\report.md` が `.md` に関連付けたアプリで開く（関連付けがなければ、開くアプリを選ぶ画面が出る。`--no-open` で開かない）
 - ハーネスが OS のマウス・キーボードで操作し、画面を撮るので、ラン中はその PC に触らない。ゲームのウィンドウを最前面に置いたまま、ほかのウィンドウで隠さない
 - macOS の `caffeinate`（ランのあいだスリープを止める）と `--display-off`（画面を消す）に当たる処理は、Windows 対応のときに決める。それまでは 4 の電源の設定でスリープを止めておく。画面を消すなら、「設定 → アカウント → サインイン オプション」で、スリープから戻ったときにサインインを求めないようにする（ロックされると入力が届かない）
-- 決まった時刻に始める `yomawari schedule install` はどの OS でもまだ実装していない（DESIGN.md フェーズ6）。それまでは手で始める
+- 決まった時刻に始める `yomawari schedule install` は、macOS（launchd）だけ実装した。Windows ではまだ使えないので、手で始める
 
 ### セーブを手で退避しておく
 ハーネスはロード・セーブを試すため、ランのあいだにゲームのセーブを書き換える。macOS ではランの前にセーブと PlayerPrefs を退避し、終わったら戻す（途中で止まったら `yomawari restore`）。Windows ではこの退避と復元もまだ実装していないので、大事なセーブがある PC では、ランの前に手で控えておく。`<Company>` と `<Product>` は、Unity の Player Settings の Company Name と Product Name。
