@@ -17,6 +17,8 @@ namespace Yomawari
      * - choices: 表示中の選択肢ボタン（id, text, rect, locked）
      * - selected: EventSystem のフォーカスがあるボタン（menu, name, nth）。Enter で押されるのはこのボタン
      * - bgm_play / bgm_stop / voice / voice_stop: IAudioManager で実際に鳴っている BGM・ボイス（id はリソースのパス）
+     * - 開いているドロップダウン（標準の Dropdown / TMP_Dropdown）のリスト: "&lt;ドロップダウンの name&gt;.List" のモーダルな menu。
+     *   リストはドロップダウンの子に作られるので、元の画面の buttons には入れない
      * ボタンの位置はホバーの拡大などで少し動くので、変化の判定は 1/20 単位に丸めて行う（出す値は丸めない）
      * </summary>
      */
@@ -43,6 +45,10 @@ namespace Yomawari
         readonly List<Selectable> selectables = new();
         readonly List<ScrollRect> scrollRects = new();
         readonly List<RaycastResult> hits = new();
+        // この回に見つけた、開いているドロップダウンのリスト（リスト → ドロップダウンの name）と、出しているリストの menu
+        readonly Dictionary<GameObject, string> openLists = new();
+        readonly Dictionary<string, string> listShown = new(); // menu の name → signature
+        readonly List<string> listClosed = new();
         PointerEventData pointer;
         string choicesSignature = ""; // 空 = 選択肢なし。起動直後に空の choices を出さない
         string settingsSignature; // 最後に出した settings。null = まだ出していない
@@ -184,6 +190,7 @@ namespace Yomawari
         {
             uis.Clear();
             seen.Clear();
+            openLists.Clear();
             manager.CollectUIs(uis);
             foreach (var ui in uis)
             {
@@ -225,6 +232,35 @@ namespace Yomawari
                 EmitClose(shown[ui]);
                 shown.Remove(ui);
             }
+            ScanLists();
+        }
+
+        // 開いているドロップダウンのリストを、"<ドロップダウンの name>.List" のモーダルな menu として出す（DESIGN.md §9
+        // 「ゲーム固有の仕様」①）。ハーネスは項目を選ぶか、リストの外を押して閉じる。閉じたら menu_close を出す
+        void ScanLists()
+        {
+            foreach (var pair in openLists)
+            {
+                var name = pair.Value + ".List";
+                var buttons = Buttons(pair.Key.transform, out var signature);
+                var scroll = Scrolls(pair.Key.transform, ref signature);
+                if (listShown.TryGetValue(name, out var prev) && prev == signature) continue;
+                listShown[name] = signature;
+                YomawariLog.Emit("menu",
+                    "\"name\":" + YomawariFormat.Str(name) + ",\"modal\":true,\"buttons\":" + buttons + ",\"scroll\":" + scroll);
+            }
+            listClosed.Clear();
+            foreach (var name in listShown.Keys)
+            {
+                var open = false;
+                foreach (var d in openLists.Values) open |= d + ".List" == name;
+                if (!open) listClosed.Add(name);
+            }
+            foreach (var name in listClosed)
+            {
+                listShown.Remove(name);
+                YomawariLog.Emit("menu_close", "\"name\":" + YomawariFormat.Str(name));
+            }
         }
 
         static void EmitClose(Shown s)
@@ -238,14 +274,21 @@ namespace Yomawari
         // covered は、中心をクリックしたときに EventSystem のレイキャストがほかの UI に先に当たるもの（上に重なった画面など）。
         // rect は祖先の RectMask2D / Mask と画面で切り取った見えている部分。中心が見えていないボタンは hidden にして、
         // 矩形は切り取らずに出す（ハーネスは同じ名前のボタンを出てきた順で数えるので、スクロールしても番号が変わらないように）
-        string Buttons(MonoBehaviour root, out string signature)
+        // root の中に開いているドロップダウンがあれば、そのリストを openLists に入れ、リストの項目はここに入れない（ScanLists で出す）
+        string Buttons(Component root, out string signature)
         {
             var json = new StringBuilder("[");
             var sig = new StringBuilder();
             root.GetComponentsInChildren(false, selectables);
             foreach (var s in selectables)
             {
+                var opened = YomawariDropdown.OpenList(s);
+                if (opened != null && opened != root.gameObject) openLists[opened] = s.name;
+            }
+            foreach (var s in selectables)
+            {
                 if (!s.IsInteractable() || !s.isActiveAndEnabled) continue;
+                if (InOpenList(s.transform, root.transform)) continue;
                 var rt = (RectTransform)s.transform;
                 if (!YomawariRect.TryGetScreen(rt, out var min, out var max)) continue;
                 var hidden = !Clip(rt, ref min, ref max);
@@ -263,6 +306,14 @@ namespace Yomawari
             }
             signature = sig.ToString();
             return json.Append(']').ToString();
+        }
+
+        // t が root の中で開いているドロップダウンのリストの中にあるか
+        bool InOpenList(Transform t, Transform root)
+        {
+            foreach (var l in openLists.Keys)
+                if (l != null && l.transform != root && l.transform.IsChildOf(root) && t.IsChildOf(l.transform)) return true;
+            return false;
         }
 
         // 画面座標 center をクリックしたとき、いちばん手前に当たるのが s（かその子）でなければ true。
@@ -332,7 +383,7 @@ namespace Yomawari
         }
 
         // スクロール領域ごとの {rect, up, down, left, right}（その方向にまだ項目があるか）
-        string Scrolls(MonoBehaviour root, ref string signature)
+        string Scrolls(Component root, ref string signature)
         {
             const float Eps = 0.001f;
             var json = new StringBuilder("[");
@@ -340,7 +391,7 @@ namespace Yomawari
             root.GetComponentsInChildren(false, scrollRects);
             foreach (var sr in scrollRects)
             {
-                if (!sr.isActiveAndEnabled || sr.content == null) continue;
+                if (!sr.isActiveAndEnabled || sr.content == null || InOpenList(sr.transform, root.transform)) continue;
                 var view = sr.viewport != null ? sr.viewport : (RectTransform)sr.transform;
                 if (!YomawariRect.TryGetScreen(view, out var min, out var max)) continue;
                 var content = sr.content.rect;
