@@ -544,6 +544,122 @@ def _alive(ev: Event, limit: float) -> bool:
     return age is not None and float(age) <= limit
 
 
+class ResolutionMismatchDetector(Detector):
+    """V-04: ゲームが出した resolution（描画領域のピクセル数）と、OS から測ったウィンドウ（proc_stats の sys.window と
+    ディスプレイの倍率 sys.backing）が合わない状態が min_sec 以上続いた。
+
+    幅はウィンドウの外枠の幅 × 倍率と比べ、高さは外枠からタイトルバーの分（0〜title_max_pt ポイント）を引いた残りと比べる
+    （DESIGN.md §8 と同じ見方。合わないとハーネスはボタンの位置を計算できない）。フルスクリーンではゲームが描画を
+    引き伸ばすので、modes（Windowed）のときだけ見る。resolution が変わった直後のウィンドウの大きさの変わり途中は、
+    min_sec で除く。resolution ごとに1件。"""
+
+    def __init__(self, rule: Rule) -> None:
+        super().__init__(rule)
+        self.min_sec = float(rule.param("min_sec"))
+        self.tolerance = float(rule.param("tolerance_px"))
+        self.title_max = float(rule.param("title_max_pt"))
+        self.modes = set(rule.param("modes"))
+        self.res: tuple[float, float, str] | None = None
+        self.since: tuple[float, str] | None = None
+        self.reported: set[tuple[int, float, float]] = set()
+
+    def _mismatch(self, win: list[float], scale: float) -> str | None:
+        assert self.res is not None
+        rw, rh, _ = self.res
+        width_px = win[2] * scale
+        content_pt = rh / scale
+        title = win[3] - content_pt
+        if abs(width_px - rw) <= self.tolerance and -1.0 <= title <= self.title_max:
+            return None
+        return (f"resolution は {rw:g}x{rh:g} なのに、ウィンドウの外枠は {width_px:.0f}x{win[3] * scale:.0f} ピクセル"
+                f"（{win[2]:g}x{win[3]:g} ポイント、倍率 {scale:g}）です")
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        d = ev.data
+        if ev.kind == "launch":
+            self.res, self.since = None, None
+        elif ev.source == "game" and ev.kind == "resolution":
+            try:
+                self.res = (float(d["w"]), float(d["h"]), str(d.get("mode")))
+            except (KeyError, TypeError, ValueError):
+                self.res = None
+            self.since = None
+        elif ev.kind == "proc_stats":
+            sysd = d.get("sys") or {}
+            win, scale = sysd.get("window"), sysd.get("backing")
+            if (self.res is None or self.res[2] not in self.modes or not isinstance(win, list) or len(win) != 4
+                    or not isinstance(scale, (int, float)) or scale <= 0):
+                self.since = None
+                return []
+            why = self._mismatch([float(x) for x in win], float(scale))
+            if why is None:
+                self.since = None
+                return []
+            if self.since is None:
+                self.since = (ev.t, ev.wall)
+                return []
+            key = (ev.launch, self.res[0], self.res[1])
+            if ev.t - self.since[0] < self.min_sec or key in self.reported:
+                return []
+            self.reported.add(key)
+            return [self.issue(
+                f"{why}。{self.min_sec:g} 秒以上合わないままです",
+                key=f"{self.res[0]:g}x{self.res[1]:g}", launch=ev.launch, t=ev.t, wall=self.since[1],
+                resolution=[self.res[0], self.res[1]], window=win, backing=scale,
+            )]
+        return []
+
+
+class WindowLostDetector(Detector):
+    """V-03: ハーネスが前面に戻そうとしても、ゲームのウィンドウが画面に出ない（最小化など）か、前面に戻らない状態が
+    min_sec 以上続いた。proc_stats の sys（on_screen・front）で続いた時間を測り、そのあいだにハーネスが操作しようとして
+    断られた（input_blocked「ゲームを前面にできません」、op_error「画面に出ていません」）ときだけ出す（操作しないモードや、
+    すぐ戻ったものは除く）。画面のロック中・画面が消えているあいだは数えない。ほかのアプリが前に出続けた場合も当たる。"""
+
+    BLOCKED = ("ゲームを前面にできません", "画面に出ていません")
+
+    def __init__(self, rule: Rule) -> None:
+        super().__init__(rule)
+        self.min_sec = float(rule.param("min_sec"))
+        self.since: tuple[float, str] | None = None
+        self.state = ""
+        self.tried: tuple[float, str] | None = None  # 最後に断られた時刻と理由
+        self.reported = False
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        d = ev.data
+        if ev.kind in ("launch", "proc_exit"):
+            self.since, self.tried, self.reported = None, None, False
+        elif ev.kind in ("input_blocked", "op_error"):
+            err = str(d.get("error") or "")
+            if any(w in err for w in self.BLOCKED):
+                self.tried = (ev.t, err)
+        elif ev.kind == "proc_stats":
+            sysd = d.get("sys") or {}
+            hidden = sysd.get("on_screen") is False
+            back = sysd.get("front") is False
+            if (not hidden and not back) or sysd.get("locked") or sysd.get("asleep"):
+                self.since, self.reported = None, False
+                return []
+            self.state = "画面に出ていない（最小化など）" if hidden else "前面に戻らない"
+            if self.since is None:
+                self.since = (ev.t, ev.wall)
+        return []
+
+    def on_tick(self, now: float, launch: int) -> list[Issue]:
+        if self.since is None or self.reported or now - self.since[0] < self.min_sec:
+            return []
+        # 断られたのが、この状態が始まる少し前（proc_stats の間隔）からあと
+        if self.tried is None or self.tried[0] < self.since[0] - 5:
+            return []
+        self.reported = True
+        return [self.issue(
+            f"ゲームのウィンドウが {self.min_sec:g} 秒以上{self.state}ままです。ハーネスが前面に戻そうとしましたが戻りません"
+            f"（{self.tried[1]}）。ほかのアプリが前に出続けた場合も当たるので、レポートの前後の記録で確かめてください",
+            key=self.state, launch=launch, t=now, wall=self.since[1], state=self.state, error=self.tried[1],
+        )]
+
+
 class ResponseCheckDetector(Detector):
     """S-01: イレギュラー操作の次の通常の操作（応答確認）に、画面が反応しない（ハートビートは生存）。
 
@@ -991,6 +1107,8 @@ DETECTORS: dict[str, Callable[[Rule], Detector]] = {
     "S-03": TransitionStuckDetector,
     "S-05": ButtonNoResponseDetector,
     "V-07": DimButtonRespondedDetector,
+    "V-03": WindowLostDetector,
+    "V-04": ResolutionMismatchDetector,
     "F-03": SettingsPersistDetector,
     "V-08": RevealSpeedDetector,
     "V-09": LocaleTextDetector,
