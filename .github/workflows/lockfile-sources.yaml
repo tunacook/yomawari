@@ -1,0 +1,39 @@
+# uv.lock が PyPI 以外（任意の URL や git リポジトリ）からパッケージを取得するように
+# 書き換えられていないかを確認する（lockfile injection 対策）
+name: Lockfile sources
+
+on:
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "uv.lock"
+      - "pyproject.toml"
+      - ".github/workflows/lockfile-sources.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check lockfile sources
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check lockfile sources
+        run: |
+          # 取得元は PyPI か、このリポジトリ自身（editable）だけを許可する
+          bad_source=$(grep -E '^source = ' uv.lock \
+            | grep -vE '^source = \{ registry = "https://pypi\.org/simple" \}$' \
+            | grep -vE '^source = \{ editable = "\." \}$' || true)
+          # 配布物（sdist / wheel）のダウンロード先は PyPI のファイルサーバーだけを許可する
+          bad_url=$(grep -oE 'url = "[^"]*"' uv.lock \
+            | grep -vE '^url = "https://files\.pythonhosted\.org/packages/' || true)
+          if [ -n "$bad_source$bad_url" ]; then
+            echo "::error file=uv.lock::PyPI 以外から取得するパッケージがあります"
+            printf '%s\n' "$bad_source" "$bad_url" | sed '/^$/d'
+            exit 1
+          fi
