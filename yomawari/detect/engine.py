@@ -132,6 +132,26 @@ class CrashDumpDetector(Detector):
         ]
 
 
+class SaveFileDetector(Detector):
+    """F-01: ゲームがセーブを終えた（save の phase: end）のに、セーブの場所のファイルが更新されていない。
+    ファイルはハーネス（sensors/savefile.py）が見て、save_file イベントで知らせる。"""
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        if ev.kind != "save_file" or ev.data.get("updated"):
+            return []
+        d = ev.data
+        newest = d.get("newest")
+        hint = (f"いちばん新しいファイルは {newest}（セーブを始める {d.get('newest_before_sec')} 秒前に更新）"
+                if newest else "ファイルが1つもない")
+        return [
+            self.issue(
+                f"セーブ {d.get('slot')} を終えたのに、セーブの場所（{d.get('save_dir')}）のファイルが更新されていません。{hint}",
+                key=str(d.get("slot")), launch=ev.launch, t=ev.t, wall=ev.wall,
+                slot=d.get("slot"), save_dir=d.get("save_dir"), newest=newest,
+            )
+        ]
+
+
 class BootTimeoutDetector(Detector):
     """C-03"""
 
@@ -504,6 +524,7 @@ class DimButtonRespondedDetector(Detector):
 DETECTORS: dict[str, Callable[[Rule], Detector]] = {
     "C-01": ProcessExitDetector,
     "C-02": CrashDumpDetector,
+    "F-01": SaveFileDetector,
     "C-03": BootTimeoutDetector,
     "C-04": ExitTimeoutDetector,
     "H-01": HeartbeatDetector,

@@ -45,6 +45,7 @@ from .profile import GameSpec
 from .post.report import RunSummary, write_report
 from .purpose import Purpose
 from .savestate import SaveState, previous_run_save, resolve_target
+from .sensors.savefile import SaveFileWatch
 from .state import GameState
 from .sensors.crash import watch_crash_dir
 from .sensors.logtail import InvalidRecord, Record, UnityEntry, YomawariRecord, tail_file
@@ -144,6 +145,7 @@ class Harness:
         self._driver: InputDriver | None = None
         self._fuzz_task: asyncio.Task[None] | None = None
         self._crash_seen: set[Path] = set()
+        self._save_watch: SaveFileWatch | None = None  # F-01: セーブしたらファイルが更新されたかを見る
         self._bus: EventBus | None = None
         self._started = 0.0
         self._last_status = 0.0
@@ -161,6 +163,8 @@ class Harness:
         self._handle_issues(self.engine.feed(ev))
         if self._session_fuzz is not None:
             self._session_fuzz.on_event(ev)
+        if self._save_watch is not None:
+            self._save_watch.on_event(ev)
         if ev.kind == "boot" and ev.source == "game":
             d = ev.data
             self.roles.build = "/".join(str(d[k]) for k in ("version", "build_guid") if d.get(k)) or None
@@ -518,12 +522,20 @@ class Harness:
         try:
             if saves.pending():
                 self.notes += ["前回のランの未復元の退避を見つけたため復元しました"] + saves.restore()
+            target = resolve_target(self.build, self.platform)
             if prev_save is not None:
-                self.notes += saves.backup(run_dir, resolve_target(self.build, self.platform), prev_save,
-                                           "前のランが終わったときのセーブ（--continue）")
+                self.notes += saves.backup(run_dir, target, prev_save, "前のランが終わったときのセーブ（--continue）")
             else:
-                self.notes += saves.backup(run_dir, resolve_target(self.build, self.platform), self.build.initial_save)
+                self.notes += saves.backup(run_dir, target, self.build.initial_save)
             backed_up = True
+            if "F-01" in self.rules:
+                if target.save_dir is not None:
+                    f01 = self.rules["F-01"]
+                    self._save_watch = SaveFileWatch(target.save_dir, self._publish, float(f01.param("check_after_sec")),
+                                                     float(f01.param("slack_sec")))
+                else:
+                    self.notes.append("セーブの場所が分からないため、F-01（セーブしたのにファイルが更新されない）を"
+                                      "評価していません（builds.<name>.save_dir で指定できます）")
             deadline = self._started + opts.hours * 3600
             launch = 0
             max_restarts = int(self.run_cfg["max_restarts"])
@@ -549,6 +561,9 @@ class Harness:
                 dark.cancel()
             if awake is not None:
                 awake.terminate()
+            if self._save_watch is not None:
+                self._save_watch.close()
+                self._save_watch = None
             if backed_up:
                 try:
                     self.notes += saves.restore()

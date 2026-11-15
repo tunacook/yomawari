@@ -43,6 +43,19 @@ rules:
     params:
       timeout_sec: 10
 
+  - id: F-01
+    severity: critical
+    title: セーブしたのにファイルが更新されない
+    description: >-
+      ゲームがセーブを終えた（save の phase: end）のに、セーブの場所（persistentDataPath。builds.<name>.save_dir で変えられる）
+      の下に、そのセーブを始めたあとに更新されたファイルが1つもない。どのファイルかはゲーム・エンジンごとに違うので問わない。
+      セーブの場所が分からないビルドでは評価しない
+    params:
+      # セーブを終えてから、ファイルを見るまで待つ時間（書き出しが終わるのを待つ）
+      check_after_sec: 2
+      # セーブを始めた時刻（ハーネスが受け取った時刻）より、この秒数前までに更新されたファイルも数える（ログを受け取る遅れ）
+      slack_sec: 3
+
   - id: H-01
     severity: critical
     title: ハング（ハートビート途絶）
