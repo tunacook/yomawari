@@ -1110,3 +1110,59 @@ def test_selected_line_from_player_log():
         st.feed(Event("game", r.data["ev"], r.data, 0))
         labels.append(st.selected)
     assert labels == ["Menu/Quit", None]
+
+
+def test_pressing_already_selected_value_or_profile_silent_is_expected():
+    # run 2026-11-14_2214: 選ばれている言語・文字の速さの選択肢を押して反応せず、S-05 にした。押すと設定の値だけが
+    # 変わるボタンは、その値がもう選ばれているときに押して反応しないのが正しい（作用しないことを確かめた押下）。
+    # プロファイルの silent（押しても反応しないのが仕様のボタン）も同じに扱う。どちらも押すのはやめない
+    from .test_looks import CFG, _Mouse
+
+    st = GameState()
+    st.feed(Event("game", "resolution", {"w": 2000, "h": 1000}, 0))
+    base = {"locale": "ja-JP", "reveal_speed": 0.5, "auto_delay": 0.5, "master_volume": 1, "bgm_volume": 1,
+            "sfx_volume": 1, "voice_volume": 1}
+    st.feed(Event("game", "settings", base, 0))
+    st.feed(Event("game", "menu", {"name": "Menu", "modal": True, "buttons": [
+        {"name": "Option_en", "rect": [0.1, 0.1, 0.3, 0.25], "type": "other"},
+        {"name": "AutoSlot", "rect": [0.5, 0.1, 0.7, 0.25]}]}, 0))
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                  rng=random.Random(1), cfg=CFG, response_timeout=0.2, silent_spec={"Menu/AutoSlot"})
+    events = []
+    s = FuzzSession(run, st, Pointer(windows, _Mouse(), 1, st, activate_wait=0), events.append, 0, lambda _: None)
+    locale = {"value": "ja-JP"}
+
+    def click(*a, **k):
+        if locale["value"] != "en-US":
+            locale["value"] = "en-US"
+            st.feed(Event("game", "settings", {**base, "locale": "en-US"}, 0))
+
+    s.pointer.driver.click = click
+    option, auto = st.targets()
+    engine = Engine(scaled_rules(1.0))
+    issues = []
+
+    def press(t):
+        asyncio.run(s._normal(Op("click", t), "modal:Menu", False))
+        res = [e.data for e in events if e.kind == "op_result"][-1]
+        issues.extend(engine.feed(Event("harness", "op_result", {**res, "heartbeat_age": 0.5}, 0)))
+        return res
+
+    first = press(option)
+    assert first["responded"] and first["expected_silent"] is None
+    assert run.setting_effects[option.label] == {"locale": "en-US"}
+    for _ in range(3):
+        res = press(option)  # もう English なので、押しても値は変わらない
+        assert not res["responded"] and res["expected_silent"] == "already_set"
+    assert option.label not in run.silent and issues == []
+    assert run.expected_silent[("already_set", option.label)] == 3
+    assert sum("locale=en-US" in n and "作用しない" in n for n in run.notes) == 1  # ボタンごとに最初の1回だけ書く
+    for _ in range(3):
+        assert press(auto)["expected_silent"] == "profile"
+    assert auto.label not in run.silent and issues == []
+    assert engine.silent_buttons() == {}  # 「一度も反応しなかったボタン」にも載せない
+    # 言語が戻れば、押して値が変わるはずなので、反応しなければふつうの押下として数える
+    st.feed(Event("game", "settings", base, 0))
+    locale["value"] = "en-US"  # 押しても変わらない（壊れた）とする
+    assert press(option)["expected_silent"] is None

@@ -51,11 +51,21 @@ def test_merge_order_and_arrays(tmp_path):
     {"guard": {"buttons": {"never": ["A/B"]}}},
     {"screens": {"ListUI": {"scroll": ["drag"]}}},
     {"screens": {"ListUI": {"weight": -1}}},
-    {"screens": {"ListUI": {"no_response_ok": ["Slot"]}}},  # 押した結果から覚えるので廃止した
+    {"screens": {"ListUI": {"no_response_ok": ["Slot"]}}},  # 古い名前。silent に書く
+    {"screens": {"ListUI": {"silent": "Slot"}}},
+    {"screens": {"ListUI": {"silent": [""]}}},
 ])
 def test_invalid_profile_is_rejected(profile):
     with pytest.raises(ConfigError):
         build_spec(profile, {})
+
+
+def test_silent_buttons_from_profile_and_local():
+    # 押しても反応しないのが仕様のボタン（セーブ画面のオートセーブの枠など）。yomawari.toml の分と足し合わせる
+    spec = build_spec({"screens": {"SaveUI": {"silent": ["AutoSlot"]}}},
+                      {"screens": {"SaveUI": {"silent": ["Banner"]}, "ListUI": {"weight": 0.5}}})
+    assert spec.silent_buttons == {"SaveUI/AutoSlot", "SaveUI/Banner"}
+    assert spec.screen_weights == {"ListUI": 0.5}
 
 
 def test_unknown_section_and_profile_path(tmp_path):
