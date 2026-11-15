@@ -128,3 +128,67 @@ class SettingsTour:
             out.append("このランで一度も変わらなかった設定: " + "、".join(
                 k + ("" if k in known else "（変えるボタンを見つけていない）") for k in never))
         return out
+
+
+VOLUME_KEYS = frozenset({"master_volume", "bgm_volume"})
+
+
+@dataclass
+class VolumeHold:
+    """音量を変えたら、A-03（音量の設定が音に効いていない）が比べる区間のあいだ、ほかの設定を変えない。
+
+    A-03 は、変える前の window_sec と、変えて settle_sec たってからの window_sec の出力の大きさを比べ、そのあいだにほかの
+    設定が変わっていれば判定しない。ハーネスが設定のボタンを続けて押すと、ほとんど判定できなくなるので（DESIGN.md §9
+    「設定を変えに行く」）:
+
+    - 音量（全体・BGM）が変わってから after 秒（settle_sec + window_sec）は、設定を変えると分かっているボタン（経験の
+      "settings"）を押さず、イレギュラー操作もしない
+    - 設定が変わってから before 秒（window_sec）は、音量を変えるボタンを押さない
+
+    待つ長さは rules.yaml の A-03 から決める（watchdog が作る）。A-03 がなければ待たない。
+    """
+
+    before: float = 0.0
+    after: float = 0.0
+    values: dict[str, Any] = field(default_factory=dict)  # 最後に見た設定の値
+    last_change: float | None = None  # 最後に設定が変わったのを見た時刻（time.monotonic）
+    until: float = 0.0  # 音量を変えたあと、ほかの設定を変えずに待つ終わりの時刻
+    holds: int = 0  # 音量が変わって待った回数
+
+    @property
+    def enabled(self) -> bool:
+        return self.after > 0
+
+    def observe(self, settings: dict[str, Any] | None, now: float) -> None:
+        """いまの設定の値を見る。ハーネスが押したか、ゲームが変えたかは問わない。"""
+        if not self.enabled or not settings:
+            return
+        values = {k: v for k, v in settings.items() if k != "locales"}
+        if self.values and values != self.values:
+            changed = {k for k in values.keys() | self.values.keys() if values.get(k) != self.values.get(k)}
+            self.last_change = now
+            if changed & VOLUME_KEYS:
+                self.until = now + self.after
+                self.holds += 1
+        self.values = values
+
+    def holding(self, now: float) -> bool:
+        """音量を変えたあとの、ほかの設定を変えずに待つあいだか。"""
+        return self.enabled and now < self.until
+
+    def apply(self, cands: list[Op], buttons: dict[str, dict[str, Any]], now: float) -> list[Op]:
+        """待つあいだは、設定を変えるボタンを候補から外す。"""
+        if not self.enabled:
+            return cands
+        if now < self.until:
+            drop = {label for label, eff in buttons.items() if eff}
+        elif self.last_change is not None and now - self.last_change < self.before:
+            drop = {label for label, eff in buttons.items() if VOLUME_KEYS & set(eff)}
+        else:
+            return cands
+        return [op for op in cands if op.target is None or op.target.label not in drop]
+
+    def notes(self) -> list[str]:
+        if not self.holds:
+            return []
+        return [f"音量を変えたあと {self.holds} 回、A-03 が比べる {self.after:g} 秒のあいだ、ほかの設定を変えずに待った"]
