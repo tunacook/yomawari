@@ -675,3 +675,46 @@ def test_silent_slot_comes_back_when_title_becomes_readable():
     run.silent.add(label)
     s._note_silent(next(t for t in st.targets() if t.label == label), True)
     assert label not in run.silent_letters
+
+
+def test_text_change_in_same_screen_counts_as_response():
+    # run 2026-11-14_2214: セーブ画面のページのボタンを押すと、スロットの文字（日時など）だけが入れ替わり、ボタンの名前の
+    # 並びは変わらない。「押しても反応しない」（S-05）とした。押しても画面の並びが変わらなければ、同じ画面のほかの
+    # ボタンの文字を読み直し、押す前から変わっていれば反応ありとする
+    from yomawari.fuzz.ops import Op
+
+    slots = [_slot(i) for i in range(3)]
+    page = Target("button", "AlbumUI", "Page02", (0.1, 0.8, 0.2, 0.9))
+    shot = _shot([(x.rect, 120) for x in slots])
+    st = GameState()
+    st.feed(Event("game", "resolution", {"w": 2000, "h": 1000}, 0))
+    st.feed(Event("game", "menu", {"name": "AlbumUI", "modal": True, "buttons": [
+        {"name": "Slot", "rect": list(x.rect)} for x in slots] + [{"name": "Page02", "rect": list(page.rect)}]}, 0))
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1, shot=shot)
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                  rng=random.Random(1), cfg=CFG, response_timeout=0.1)
+    events = []
+    s = FuzzSession(run, st, Pointer(windows, _Mouse(), 1, st, activate_wait=0), events.append, 0, lambda _: None)
+
+    def boxes(words):
+        return [(w, 0.9, (x.rect[0] + 0.01, x.rect[1] + 0.01, x.rect[2] - 0.01, x.rect[1] + 0.05))
+                for w, x in zip(words, slots)]
+
+    windows.texts = boxes(["11/01 10:00", "11/02 11:00", "空き"])
+    asyncio.run(s._look())
+    target = next(t for t in st.targets() if t.name == "Page02")
+    # ページを替えると、スロットの文字が入れ替わる
+    s.pointer.driver.click = lambda *a, **k: setattr(windows, "texts", boxes(["11/10 09:00", "11/11 12:00", "空き"]))
+    asyncio.run(s._normal(Op("click", target), "modal:AlbumUI", False))
+    res = [e.data for e in events if e.kind == "op_result"][-1]
+    assert res["responded"] and res["texts_changed"] and not res["screen_changed"]
+    assert target.label not in run.silent
+    assert st.read_text["AlbumUI/Slot"] == "11/10 09:00"
+    # 同じページをもう一度押しても、文字は変わらないので反応なし
+    asyncio.run(s._normal(Op("click", target), "modal:AlbumUI", False))
+    res = [e.data for e in events if e.kind == "op_result"][-1]
+    assert not res["responded"] and not res["texts_changed"]
+    # 1 つだけ変わった（読み取りの揺れ）ものは、反応としない
+    s.pointer.driver.click = lambda *a, **k: setattr(windows, "texts", boxes(["11/10 09:00", "11/11 12:08", "空き"]))
+    asyncio.run(s._normal(Op("click", target), "modal:AlbumUI", False))
+    assert not [e.data for e in events if e.kind == "op_result"][-1]["responded"]

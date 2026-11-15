@@ -38,7 +38,7 @@ from .experience import Experience, Press
 from .guard import Guard
 from .looks import Values, alike, brighter, brightest, dark, disabled_looks, groups, inactive, letters, masked, measure, text_inactive
 from .advisor import ChoiceAdvisor
-from .reading import assign, unread
+from .reading import assign, text_changed, unread
 from .ops import (
     Op,
     escape_candidates,
@@ -1982,6 +1982,40 @@ class FuzzSession:
             )
         return out
 
+    async def _texts_changed(self, pressed: Target) -> bool:
+        """押しても画面の並びが変わらなかったとき、同じ画面のほかのボタンの文字を読み直し、押す前に読んだ文字から
+        変わったか。ページを送る・タブを切り替えるボタンは、スロットの文字だけが入れ替わり、ボタンの名前の並びは
+        変わらない（run 2026-11-14_2214: セーブ画面のページのボタンを、押してページが替わったのに「反応しない」とした）。
+        前に文字を読めたボタンがなければ、撮らずに False を返す。"""
+        run = self.run
+        if not self.cfg["read_text"] or run.read_off:
+            return False
+        others = [t for t in self.state.targets()
+                  if t.kind == "button" and t.menu == pressed.menu and t.label != pressed.label and t.visible
+                  and t.label in self.state.read_text]
+        read = getattr(self.pointer.platform, "read_text", None)
+        if not others or read is None:
+            return False
+        try:
+            shot = await asyncio.to_thread(self.pointer.capture, float(self.cfg["hover_wait_sec"]))
+        except PointerError:
+            return False
+        finally:
+            self._drain_fits()
+        if shot is None:
+            return False
+        boxes = await asyncio.to_thread(read, shot)
+        if boxes is None:
+            return False
+        after = assign(boxes, others, float(self.cfg["read_text_min_conf"]))
+        before = {t.label: self.state.read_text[t.label] for t in others}
+        changed = text_changed(before, after, float(self.cfg["response_text_change_ratio"]))
+        if after:
+            self.state.set_read_text(after)
+            self.publish(Event("harness", "read_text", {"tried": len(others), "texts": after, "after": pressed.label},
+                               self.launch))
+        return changed
+
     async def _read_text(self, shot: Shot, measured: dict[str, Values]) -> None:
         """ボタンの文字を、撮った画像から読む（fuzz/reading.py）。読んだボタンは、見た目が変わるまで読み直さない。"""
         run = self.run
@@ -2084,6 +2118,9 @@ class FuzzSession:
             await asyncio.sleep(0.05)
         waited = time.monotonic() - started
         responded = self.state.signature() != before
+        texts_changed = False
+        if not responded and op.target is not None and op.target.kind == "button":
+            texts_changed = responded = await self._texts_changed(op.target)
         if not responded and op.target is not None and op.target.kind == "button":
             await self._check_front(op.target.label)
         # 別の画面に切り替わったか（ボタンのある menu・モーダルが開いた／閉じた、scene が変わった）。V-07 が使う
@@ -2175,6 +2212,8 @@ class FuzzSession:
                     # 待っているあいだに、スクリプトのコマンドが進んだ（本文のない演出の途中。S-01 はゲームが止まったとしない）
                     "commands_ran": commands_ran,
                     "quiet": quiet,
+                    # 画面の並びは変わらなかったが、同じ画面のボタンの文字が変わった（ページ送り・タブの切り替えなど）
+                    "texts_changed": texts_changed,
                     "responded": responded,
                     "waited": round(waited, 3),
                     "verify": verify,

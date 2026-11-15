@@ -106,6 +106,8 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "ai_timeout_sec": 60.0,  # AI の答えを待つ時間（裏で待つので、操作は止めない）
     "read_text": True,  # ボタンの文字を画面から読む（OCR。DESIGN.md §9「画面の文字を読む」）
     "read_text_min_conf": 0.3,  # 読んだ文字の確からしさ（0〜1）がこれより低ければ使わない
+    # 押しても画面の並びが変わらなかったとき、同じ画面のボタンのこの割合以上の文字が変われば反応ありとする（ページ送りなど）
+    "response_text_change_ratio": 0.5,
     "quiet_wait_sec": 1.0,  # 暗い・空のボタン、押しても一度も反応しなかったボタン（反応しないと見込んでいるもの）を押したあと、反応を待つ時間
     # 一覧の目標へ向かう操作（目標を押す・目標の向きへ動かす）の重みに掛ける（DESIGN.md §9「一覧の台帳と目標」。fuzz/listing.py）。
     # 重みは [fuzz.weights] click × 画面の重み × list_factor。試行回数で下げない
