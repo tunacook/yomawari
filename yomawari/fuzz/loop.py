@@ -714,7 +714,7 @@ class FuzzSession:
             return cands
         before = (tracker.active.name if tracker.active else None, tracker.index)
         step = tracker.update(self.state, run.opened_by, now, float(cfg["flow_idle_sec"]),
-                              int(cfg["flow_retry_lines"]))
+                              int(cfg["flow_retry_lines"]), int(cfg["flow_step_retries"]))
         after = (tracker.active.name if tracker.active else None, tracker.index)
         if tracker.abandon(int(cfg["flow_exhausted_picks"])):
             step, after = None, (None, tracker.index)

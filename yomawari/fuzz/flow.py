@@ -342,6 +342,11 @@ class FlowTracker:
         # （run 2026-11-12_0959: 試し終えた質問で、言葉を選ぶ → 一覧へ戻るを 3 時間 15 分くり返した）
         self.exhausted_picks: Counter[Ctx] = Counter()
         self.abandoned: set[Ctx] = set()
+        # 同じ質問・同じ選び方で、前の手順から手順に入った回数（その先の手順へ進めたら数え直す）。多すぎたら、その質問を
+        # あきらめる（run 2026-11-14_2214: 「この言葉で答える」が押しても届かず、言葉を選ぶ → 答える画面 → 戻る、を
+        # 1834 回くり返した）
+        self.step_entries: Counter[tuple[Ctx, int, Path]] = Counter()
+        self._entry: tuple[Ctx, int, Path] | None = None  # いまの手順に入ったときの (質問, 手順, 選び方)
 
     @property
     def step(self) -> Step | None:
@@ -414,8 +419,11 @@ class FlowTracker:
         return bool(here) and not any(fnmatchcase(before, p) for at in here for p in at)
 
     def update(self, state: GameState, opened_by: dict[str, str], now: float, idle_sec: float,
-               retry_lines: int = 0) -> Step | None:
-        """いまの状態から、流れの始まり・手順の進み・途切れを判定し、いまの手順を返す。"""
+               retry_lines: int = 0, step_retries: int = 0) -> Step | None:
+        """いまの状態から、流れの始まり・手順の進み・途切れを判定し、いまの手順を返す。
+
+        同じ質問・同じ選び方で、同じ手順に step_retries 回より多く入っても先の手順へ進めなければ、その質問をあきらめる
+        （0 ならあきらめない）。"""
         if self.active is None:
             for f in self.flows:
                 if f.start.match(state, opened_by):
@@ -435,6 +443,7 @@ class FlowTracker:
                     self.stats[f.name].started += 1
                     self.ctx = ctx
                     self.path = []
+                    self._entry = None
                     if self.ctx in self.ctx_seen:
                         self.stats[f.name].retried += 1
                     if self.last_leaf is not None and self.last_leaf[0] == self.ctx:
@@ -470,7 +479,11 @@ class FlowTracker:
                     if later is not None:
                         i = later
                 if i != self.index:
+                    if self._entry is not None and self._entry[1] == self.index and i > self.index:
+                        self.step_entries.pop(self._entry, None)  # 前に入った手順から、先の手順へ進めた
                     self.index = i
+                    if self.ctx is not None and self._enter(flow, i, step_retries):
+                        return None
                 st = self.stats[flow.name]
                 st.furthest = max(st.furthest, i + 1)
                 self.idle_since = None
@@ -499,6 +512,7 @@ class FlowTracker:
                     j, s = k, e
                     break
             self.index, self.path, self.idle_since = j, self.path[:picks], None
+            self._entry = None  # 前の手順へ戻るのは、入り直しとして数えない（その先の手順へまた入るときに数える）
             return s
         # 流れの始まりの画面にいるなら、まだ流れの中
         if flow.start.match(state, opened_by) or any(s.when.match(state, opened_by) for s in flow.steps[: self.index]):
@@ -510,6 +524,23 @@ class FlowTracker:
             self._break(f"手順 {self.index + 1}（{flow.steps[self.index].note or flow.steps[self.index].when}）で、"
                         "流れのどの画面でもなくなった")
         return None
+
+    def _enter(self, flow: Flow, i: int, limit: int) -> bool:
+        """手順 i に前の手順から入った。同じ質問・同じ選び方で limit 回より多く入っていれば、その質問をあきらめて True。"""
+        assert self.ctx is not None
+        self._entry = (self.ctx, i, tuple(self.path))
+        self.step_entries[self._entry] += 1
+        if limit <= 0 or self.step_entries[self._entry] <= limit:
+            return False
+        ctx = self.ctx
+        self.abandoned.add(ctx)
+        self.events.append(
+            f"流れ「{flow.name}」の `{ctx[1]}` で、手順 {i + 1}（{flow.steps[i].note or flow.steps[i].when}）に同じ選び方で"
+            f" {limit} 回入っても先の手順へ進めなかったので、この質問では流れに沿うのをやめた（開示の状態が変わるまで。"
+            "手順のボタンが押しても届かない・反応しない可能性がある）"
+        )
+        self._break("同じ手順に入り直し続けた")
+        return True
 
     def _picks_before(self, i: int) -> int:
         """手順 i より前に選んだものの数（once でない、押す・選ぶ手順の数）。"""
@@ -596,6 +627,7 @@ class FlowTracker:
         if not self.done_once and not self.dead:
             self.abandoned.clear()
             self.exhausted_picks.clear()
+            self.step_entries.clear()
             return
         self.events.append(f"{why}ので、読んだ思い出など一度済ませた手順（{len(self.done_once)} 件）と行き止まり"
                            f"（{len(self.dead)} 件）を忘れた（開示の状態が変わるため）")
@@ -605,6 +637,7 @@ class FlowTracker:
         # 開示が変われば、あきらめた質問にも新しい選び方があるかもしれない
         self.abandoned.clear()
         self.exhausted_picks.clear()
+        self.step_entries.clear()
 
     def note_exhausted(self) -> None:
         """いまの手順で選べるものの枝を、すべて試し終えた（同じ質問で、試せる組み合わせがもうない）。"""
@@ -715,6 +748,9 @@ class FlowTracker:
 
     def _complete(self, how: str) -> None:
         assert self.active is not None
+        if self._entry is not None:
+            self.step_entries.pop(self._entry, None)  # 最後まで進めた（入った手順から先へ進めた）
+            self._entry = None
         self.stats[self.active.name].completed += 1
         self.events.append(f"流れ「{self.active.name}」を最後まで進めた（{how}）")
         self.active = None
