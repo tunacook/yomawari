@@ -52,6 +52,7 @@ class Item:
     issues: list[Issue] = field(default_factory=list)
     timeline: list[str] = field(default_factory=list)
     timeline_label: str = ""
+    key: tuple[str, ...] | None = None  # 検出の項目のまとめ方（item_key）。進めなかった区間などは None
 
 
 def family(label: str) -> str | None:
@@ -76,7 +77,8 @@ def _button_of(issue: Issue) -> str | None:
     return None
 
 
-def _item_key(issue: Issue) -> tuple[str, ...]:
+def item_key(issue: Issue) -> tuple[str, ...]:
+    """やることの項目のまとめ方。前回のランとの比較（post/compare.py）も、この単位で比べる。"""
     if issue.rule_id in BUTTON_RULES:
         button = _button_of(issue)
         fam = family(button) if button else None
@@ -268,7 +270,7 @@ def _before(log: Log, issue: Issue) -> list[str]:
 def _issue_items(issues: list[Issue], log: Log | None, cfg: dict[str, Any]) -> list[Item]:
     groups: dict[tuple[str, ...], list[Issue]] = {}
     for i in issues:
-        groups.setdefault(_item_key(i), []).append(i)
+        groups.setdefault(item_key(i), []).append(i)
     items = []
     for key, members in groups.items():
         first = members[0]
@@ -276,7 +278,7 @@ def _issue_items(issues: list[Issue], log: Log | None, cfg: dict[str, Any]) -> l
         places = list(dict.fromkeys(p for p in (place_of(i) for i in members) if p != "-")) or ["-"]
         item = Item(title=f"[{first.rule_id}] {first.title}", severity=severity, what=_short(first.detail, 200),
                     count=len(members), place=places[0] + (f" ほか {len(places) - 1} か所" if len(places) > 1 else ""),
-                    issues=members)
+                    issues=members, key=key)
         if key[0] == "button":
             rules = "・".join(sorted({i.rule_id for i in members}))
             item.title = f"[{rules}] `{key[1]}` を押しても反応しない"
@@ -438,8 +440,10 @@ def last_progress(events: list[dict]) -> dict | None:
 
 
 def render_top(items: list[Item], events: list[dict], duration_sec: float, launches: int, restarts: int,
-               stopped: str, cfg: dict[str, Any], error_before: Any, interrupted: bool = False) -> list[str]:
-    """「まとめ」「やること」と項目ごとの節。項目がなければ、問題が見つからず、やることがないとはっきり書く。"""
+               stopped: str, cfg: dict[str, Any], error_before: Any, interrupted: bool = False,
+               prev_items: dict[tuple[str, ...], tuple[str, int]] | None = None) -> list[str]:
+    """「まとめ」「やること」と項目ごとの節。項目がなければ、問題が見つからず、やることがないとはっきり書く。
+    prev_items（前回のランの項目 → (見出し, 回数)）があれば、「やること」の表に前回の列を足す。"""
     out = ["## まとめ", ""]
     hours = duration_sec / 3600
     out.append(f"- {hours:.1f} 時間、起動 {launches} 回（再起動 {restarts} 回）。{stopped}")
@@ -464,10 +468,16 @@ def render_top(items: list[Item], events: list[dict], duration_sec: float, launc
         return out + [f"なし。{NOTHING_FOUND}", ""]
     out += [("同じ種類の検出・区間を 1 項目にまとめ、重い順に並べた。「誰が直す」は、決まった根拠で判断できたときだけ書く"
              "（ほかは未確定。下の節の数字と経過から切り分ける）"), ""]
-    out += ["| # | 起きたこと | 重さ | 誰が直す | 回数 | 場所 |", "|---|---|---|---|---|---|"]
+    if prev_items is None:
+        out += ["| # | 起きたこと | 重さ | 誰が直す | 回数 | 場所 |", "|---|---|---|---|---|---|"]
+    else:
+        out += ["| # | 起きたこと | 重さ | 誰が直す | 回数 | 前回 | 場所 |", "|---|---|---|---|---|---|---|"]
     for n, it in enumerate(items, 1):
+        prev = ""
+        if prev_items is not None:
+            prev = f"{prev_mark(it, prev_items)} | "
         out.append(f"| {n} | {_cell(it.title)} | {SEVERITY_LABEL.get(it.severity, it.severity)} | {it.who} | {it.count} | "
-                   f"{_cell(it.place)} |")
+                   f"{prev}{_cell(it.place)} |")
     out.append("")
     for n, it in enumerate(items, 1):
         out += [f"### {n}. {it.title}", "",
@@ -511,6 +521,15 @@ def render_top(items: list[Item], events: list[dict], duration_sec: float, launc
             out += [f"- 経過（{it.timeline_label}）:", "", "```text", *it.timeline, "```"]
         out += ["", "- 判定: [ ] 正しい検出　[ ] 誤検知", ""]
     return out
+
+
+def prev_mark(it: Item, prev_items: dict[tuple[str, ...], tuple[str, int]]) -> str:
+    """「やること」の表の前回の列: 前回もあった検出は「継続（前回 n 回）」、なかったものは「**新規**」。検出でない項目は「—」。"""
+    if it.key is None:
+        return "—"
+    if it.key in prev_items:
+        return f"継続（前回 {prev_items[it.key][1]} 回）"
+    return "**新規**"
 
 
 def _cell(text: str) -> str:

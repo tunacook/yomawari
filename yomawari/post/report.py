@@ -9,7 +9,9 @@ from typing import Any
 
 from ..config import FUZZ_DEFAULTS
 from ..events import SEVERITIES, Issue
-from .digest import build_items, render_top
+from .compare import PrevRun, load_previous
+from .coverage import render as render_coverage
+from .digest import _cell, build_items, render_top
 from .stalls import load_events
 
 SEVERITY_LABEL = {"critical": "Critical", "major": "Major", "minor": "Minor", "info": "Info"}
@@ -84,8 +86,10 @@ def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
 
     items = build_items(issues, events, cfg, summary.harness_notes, summary.silent_buttons, focus)
     stopped = _stopped(summary) if summary.interrupted else "予定どおり終わった"
+    prev = load_previous(run_dir, summary.build_name)
     out += render_top(items, events, summary.duration_sec, summary.launches, summary.restarts, stopped, cfg,
-                      lambda i: _error_before(i, issues, window), summary.interrupted)
+                      lambda i: _error_before(i, issues, window), summary.interrupted,
+                      prev.items if prev is not None else None)
 
     out += ["## ランの情報", "", "| 項目 | 値 |", "|---|---|"]
     out += [
@@ -100,9 +104,10 @@ def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
         "| 深刻度別件数 | "
         + " ".join(f"{SEVERITY_LABEL[s]} {counts[s]}" for s in SEVERITIES)
         + " |",
-        "| 前回比 | （フェーズ4で対応） |",
+        f"| 前回比 | {_vs_prev(items, prev)} |",
         "",
     ]
+    out += _gone(items, prev)
     out += summary.perf
 
     if summary.silent_buttons:
@@ -115,6 +120,8 @@ def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
         out += [f"| `{k}` | {n} |" for k, n in sorted(summary.silent_buttons.items())]
         out.append("")
 
+    out += render_coverage(events, cfg)
+
     out += ["## 実行環境", ""]
     out += [f"- {k}: {v}" for k, v in summary.env.items()]
     out.append(f"- ルール: `{summary.rules_path}`")
@@ -123,6 +130,33 @@ def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
         out += [f"- {n}" for n in summary.harness_notes]
     out.append("")
     return "\n".join(out)
+
+
+def _vs_prev(items: list, prev: PrevRun | None) -> str:
+    if prev is None:
+        return "前回のランがない（同じビルドで、これより前に始めたランがない）"
+    keys = {it.key for it in items if it.key is not None}
+    new = sum(1 for k in keys if k not in prev.items)
+    gone = sum(1 for k in prev.items if k not in keys)
+    took = f"、{_hms(prev.duration_sec)}" if prev.duration_sec is not None else ""
+    return (f"`{prev.run_id}`（{len(prev.items)} 項目{took}）と比べて、新規 {new}・継続 {len(keys) - new}・出なくなった {gone}"
+            "（検出の項目の数。「やること」の表の「前回」の列）")
+
+
+def _gone(items: list, prev: PrevRun | None) -> list[str]:
+    """前回は出て、今回は出なかった検出の項目。"""
+    if prev is None:
+        return []
+    keys = {it.key for it in items if it.key is not None}
+    gone = [(title, n) for k, (title, n) in prev.items.items() if k not in keys]
+    if not gone:
+        return []
+    out = ["## 前回から出なくなったもの", "",
+           (f"前回（`{prev.run_id}`）は出て、今回は出なかった検出。直ったか、今回はそこまで行かなかったか、ルールが変わったか"
+            "は、これだけでは分からない"), "",
+           "| 起きたこと | 前回の回数 |", "|---|---|"]
+    out += [f"| {_cell(title)} | {n} |" for title, n in sorted(gone, key=lambda g: -g[1])]
+    return out + [""]
 
 
 def _stopped(summary: RunSummary) -> str:

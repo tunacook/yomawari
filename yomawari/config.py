@@ -191,6 +191,8 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     # ボタンを押しても反応しないと検出したとき、押す前と後で読めた同じ画面のボタンのうち、この割合（0〜1）以上の文字が
     # 変わっていれば、「画面の文字が変わっていた（ハーネスの誤検知の見込み）」とする。時計など 1 つだけ変わるものは数えない
     "report_text_change_ratio": 0.5,
+    # レポートの「カバレッジ」: scene・画面・状態の表に載せる行数の上限（多い順。残りは「ほか n 個」にまとめる）
+    "report_coverage_rows": 30,
     "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")
