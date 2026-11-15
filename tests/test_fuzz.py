@@ -435,6 +435,35 @@ def test_s01_rechecks_with_another_op_before_raising():
     assert "「rapid_click 10」のあと" in issues[0].detail and f"click {tab.label} にも反応がありませんでした" in issues[0].detail
 
 
+def test_verify_skips_switches():
+    # run 2026-11-14_2214: 押してロードに切り替えたタブ（トグル）を、応答確認でもう一度押した。すでにオンなので何も起きず、
+    # ほかに前に反応した操作もなかったので S-01 としてゲームを止めた。押すと切り替わるもの（トグル、押すと設定の値だけが
+    # 変わるもの）は、前に反応していても応答確認に使わない
+    from .test_looks import CFG, _Mouse
+
+    st = GameState()
+    st.feed(Event("game", "resolution", {"w": 2000, "h": 1000}, 0))
+    base = {"locale": "ja-JP", "reveal_speed": 0.5, "auto_delay": 0.5, "master_volume": 1, "bgm_volume": 1,
+            "sfx_volume": 1, "voice_volume": 1}
+    st.feed(Event("game", "settings", base, 0))
+    st.feed(Event("game", "menu", {"name": "Menu", "modal": True, "buttons": [
+        {"name": "LoadToggle", "rect": [0.1, 0.1, 0.3, 0.25], "type": "toggle"},
+        {"name": "Option_en", "rect": [0.5, 0.1, 0.7, 0.25], "type": "other"},
+        {"name": "Close", "rect": [0.1, 0.5, 0.3, 0.65]}]}, 0))
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                  rng=random.Random(1), cfg=CFG, response_timeout=0.2)
+    s = FuzzSession(run, st, Pointer(windows, _Mouse(), 1, st, activate_wait=0), lambda _: None, 0, lambda _: None)
+    key = "modal:Menu"
+    toggle, option, close = st.targets()
+    s.pointer.driver.click = lambda *a, **k: st.feed(Event("game", "settings", {**base, "locale": "en-US"}, 0))
+    asyncio.run(s._normal(Op("click", option), key, False))  # 押すと言語だけが変わる
+    assert (key, f"click {option.label}") in run.responsive and f"click {option.label}" in run.switches
+    run.responsive |= {(key, f"click {toggle.label}"), (key, f"click {close.label}")}
+    cands = normal_candidates(st, Guard({}), CFG["weights"], False)
+    assert [op.label for op in s._verify_candidates(cands, key)] == [f"click {close.label}"]
+
+
 def test_settings_change_counts_as_response():
     # run 2026-11-12_2156: 設定画面の選択肢（言語・ウィンドウサイズ・テキスト速度）は、押しても画面の並びが変わらず、
     # 設定の値だけが変わる。「一度も反応しなかったボタン」とせず、settings の値が変われば反応ありとする
