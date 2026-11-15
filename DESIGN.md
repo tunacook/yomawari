@@ -769,7 +769,7 @@ class Decider(Protocol):
 | スクロールで隠れた項目 | `ScrollRect`、`RectMask2D`、`Mask` | ハーネスは、モーダルな画面ではいつもドラッグ・ホイール・方向キーを試し（§9「状態ごとの通常の操作」）、中心が描画領域の外のボタンは押さない。マスクで隠れているが描画領域の中にあるボタンは、① でしか除けない |
 | ボタンの種類 | `Button`、`Toggle`、`Dropdown` / `TMP_Dropdown`、`Slider`、`InputField` / `TMP_InputField` | `other` になる。押しても並びが変わらないものは、② で「反応しないボタン」として後回しにされる |
 | ボタンの役割 | Naninovel の `TitleExitButton`（exit）、`ControlPanelTitleButton`（to_title）、`TitleNewGameButton`（new_game）、`GameSettingsLanguage` / `Resolution` / `ScreenMode` / `GraphicsDropdown`（system_setting） | ② で推定し、押した結果で確定する |
-| 開いたドロップダウンのリスト | `Dropdown` / `TMP_Dropdown` の `IsExpanded` と、それが作る Dropdown List | 押しても反応しないボタンとして扱われる |
+| 開いたドロップダウンのリスト | `Dropdown` / `TMP_Dropdown` が開いたときに作るリスト（非公開のフィールド `m_Dropdown`。`Dropdown` には開いているかを返す公開の口がないため） | 押しても反応しないボタンとして扱われる |
 
 - ボタンの矩形を、祖先の `RectMask2D` / `Mask` の矩形と画面で切り取る。中心が見えていないボタンは `hidden` にし、ハーネスは押さない（スクロールで隠れた項目を押して、別の要素に当たるのを防ぐ）
 - ボタンの中心に EventSystem のレイキャストを当て、ほかの UI に先に当たるボタンは `covered` にする。ハーネスは押さず、S-05 の対象にもしない。どの画面がいちばん上かを、表示された順番ではなく、実際にクリックが当たるかで決めるため（Order in Layer の大きい画面の下になったメニューのボタンを押し続けて、S-05 を誤検知しないように）
@@ -777,7 +777,7 @@ class Decider(Protocol):
 - ボタンの一部が `covered` のモーダルより後に出た、モーダルでない画面に、`covered` でないボタンが見えているなら、その画面を手前の画面とする（ゲームがモーダルの印を付け忘れた、上に重なった画面）。モーダルのボタンがどれも覆われていなければ、あとから出た画面（文字の枠など）があってもモーダルを手前とする。閉じずに出し直された（動かした・ボタンが変わった）ときは、出た順番を変えない
 - `ScrollRect` ごとに、表示される範囲（`rect`）と、どの方向にまだ項目があるかを `scroll` で出す。ハーネスは、一覧の目標が表示範囲に入っているか・どちらへ動かせばよいかを、この `rect` で決める（§9「一覧の台帳と目標」）
 - ボタンの種類（`type`）を出す。押しても `menu` の並びが変わらない種類（`toggle` / `dropdown` / `slider` / `input`）は、S-05 の対象から種類で外す
-- `Dropdown` / `TMP_Dropdown`（とそれを継承した部品）が開いている（`IsExpanded`）間は、リストの項目を `<ドロップダウンの name>.List` のモーダルな `menu` として出す（未実装）。ハーネスは項目を選ぶか、リストの外を押して閉じる。リストが開いたことを「反応あり」とみなす
+- `Dropdown` / `TMP_Dropdown`（とそれを継承した部品）が開いている間は、リストの項目を `<ドロップダウンの name>.List` のモーダルな `menu` として出し、閉じたら `menu_close` を出す（パッケージ 0.14.0 から）。元の画面の `menu` からは、リストの項目とスクロール領域を除く。ハーネスは項目を選ぶか、リストの外を押して閉じる。リストが開いたことを「反応あり」とみなす
 - `locked` は、エンジンが押せないと分かっているとき（Naninovel の選択肢の `Locked` など）だけ出す
 
 #### ② 推定し、押した結果で確定する
