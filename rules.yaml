@@ -189,6 +189,29 @@ rules:
       # 名前の既定値は、type を出さない古いパッケージのビルド向け。パッケージが type を出すようになったら消す
       ignore_patterns: ["Toggle", "Dropdown", "Slider"]
 
+  - id: V-03
+    severity: major
+    title: ウィンドウが見えない・前面に戻らない
+    description: >-
+      ハーネスが前面に戻そうとしても、ゲームのウィンドウが画面に出ない（最小化など）か前面に戻らない状態が、min_sec 以上続いた。
+      ハーネスが操作しようとして断られた（ゲームを前面にできない・ウィンドウが画面に出ていない）ときだけ出す。
+      画面のロック中・画面が消えているあいだは数えない。ほかのアプリが前に出続けた場合も当たる
+    params:
+      min_sec: 30
+
+  - id: V-04
+    severity: major
+    title: 解像度とウィンドウの大きさが合わない
+    description: >-
+      ゲームが出した resolution（描画領域のピクセル数）と、OS から測ったウィンドウの外枠（ディスプレイの倍率を掛けたピクセル数）が、
+      min_sec 以上合わない。幅は外枠の幅と比べ、高さは外枠からタイトルバーの分（0〜title_max_pt ポイント）を引いた残りと比べる。
+      合わないとハーネスはボタンの位置を計算できない。フルスクリーンではゲームが描画を引き伸ばすので、modes のときだけ見る
+    params:
+      min_sec: 5
+      tolerance_px: 4
+      title_max_pt: 60
+      modes: ["Windowed"]
+
   - id: V-05
     severity: major
     title: ボタン・選択肢が画面の外にある

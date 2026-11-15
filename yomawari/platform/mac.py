@@ -474,6 +474,8 @@ class MacPlatform:
         - pressure: メモリの逼迫度（normal / warning / critical）
         - asleep: 画面が消えている / locked: 画面がロックされている
         - front: ゲームが前面にある / on_screen: ゲームのウィンドウが画面に出ている（最小化・隠れていない）
+        - window: ゲームのウィンドウの外枠 [x, y, w, h]（ポイント） / backing: そのウィンドウがあるディスプレイの倍率
+          （1 ポイントあたりのピクセル数。Retina なら 2）。V-04 が resolution と比べる
         分からない値は None。
         """
         out: dict = {
@@ -506,9 +508,28 @@ class MacPlatform:
         try:
             win = self.window_info(pid)
             out["on_screen"] = None if win is None else win.on_screen
+            if win is not None:
+                b = win.bounds
+                out["window"] = [b.x, b.y, b.w, b.h]
+                out["backing"] = self.display_scale(b)
         except Exception:
             pass
         return out
+
+    def display_scale(self, rect: ScreenRect) -> float | None:
+        """rect の中心があるディスプレイの倍率（1 ポイントあたりのピクセル数）。分からなければ None。"""
+        try:
+            import Quartz
+
+            center = Quartz.CGPointMake(rect.x + rect.w / 2, rect.y + rect.h / 2)
+            err, ids, n = Quartz.CGGetDisplaysWithPoint(center, 1, None, None)
+            if err or not n:
+                return None
+            mode = Quartz.CGDisplayCopyDisplayMode(ids[0])
+            width = Quartz.CGDisplayModeGetWidth(mode)
+            return float(Quartz.CGDisplayModeGetPixelWidth(mode)) / width if width else None
+        except Exception:
+            return None
 
     def activate(self, pid: int) -> None:
         from AppKit import NSApplicationActivateAllWindows, NSRunningApplication
