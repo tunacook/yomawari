@@ -179,4 +179,4 @@ model = ""
 [judge]
 kind = "local"               # local | none（フェーズ5〜）
 endpoint = "http://localhost:11434"
-model = "qwen2.5vl:7b"       # 画像対応モデル（README の環境構築 7 で ollama pull したもの）
+model = "qwen2.5vl:7b"       # 画像対応モデル（docs/setup-macos.md の 7 で ollama pull したもの）
