@@ -305,6 +305,30 @@ class MacPlatform:
 
     # --- ウィンドウ（pyobjc。テストや権限のない環境でも import だけで落ちないよう、使うときに読み込む） ---
 
+    def visible_area(self, rect: ScreenRect) -> ScreenRect | None:
+        """rect といちばん重なるディスプレイの、メニューバーと Dock を除いた見える範囲（ポイント、メインディスプレイの
+        左上原点）。分からなければ None。"""
+        try:
+            from AppKit import NSScreen
+        except ImportError:
+            return None
+        screens = list(NSScreen.screens() or [])
+        if not screens:
+            return None
+        primary_h = float(screens[0].frame().size.height)  # AppKit の座標は、最初の画面の左下が原点で上向き
+
+        def flip(f) -> ScreenRect:
+            return ScreenRect(float(f.origin.x), primary_h - float(f.origin.y) - float(f.size.height),
+                              float(f.size.width), float(f.size.height))
+
+        def overlap(s) -> float:
+            a = flip(s.frame())
+            w = min(a.x + a.w, rect.x + rect.w) - max(a.x, rect.x)
+            h = min(a.y + a.h, rect.y + rect.h) - max(a.y, rect.y)
+            return max(w, 0.0) * max(h, 0.0)
+
+        return flip(max(screens, key=overlap).visibleFrame())
+
     def window_info(self, pid: int) -> WindowInfo | None:
         """pid の通常ウィンドウ（レイヤー0）のうち、画面に出ているものを優先していちばん大きいもの。
         外枠はポイント単位、メインディスプレイの左上原点。

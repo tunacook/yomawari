@@ -1017,3 +1017,20 @@ def test_answer_and_judgement_are_recorded_for_the_report():
     s._answered()
     last = [e.data for e in events if e.kind == "answer"][-1]
     assert last["known"] == [] and last["follows"] is None
+
+
+def test_window_fit_is_recorded_as_event_and_note():
+    from yomawari.input.pointer import WindowFit
+    from yomawari.sensors.window import ScreenRect
+
+    st, run, s = _locale_session("ja-JP")
+    events = s.publish.__self__
+    before, visible = ScreenRect(792, 557, 800, 478), ScreenRect(0, 33, 1512, 949)
+    for _ in range(2):
+        s.pointer.fits.append(WindowFit(before, ScreenRect(712, 504, 800, 478), visible, True))
+        s._drain_fits()
+    fits = [e.data for e in events if e.kind == "window_fit"]
+    assert len(fits) == 2 and fits[0]["after"] == [712, 504, 800, 478] and fits[0]["fitted"] is True
+    notes = [n for n in run.notes if "はみ出して" in n]
+    assert len(notes) == 1 and "800x478 ポイント" in notes[0] and "戻した" in notes[0]
+    assert s.pointer.fits == []

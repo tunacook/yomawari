@@ -187,6 +187,9 @@ def timeline(log: Log, lo: int, hi: int, limit: int, launch: int | None = None) 
             add(wall, f"{'セーブ' if k == 'save' else 'ロード'} {d.get('slot')}")
         elif k == "issue":
             add(wall, f"検出 [{d.get('rule_id')}] {d.get('title')}")
+        elif k == "window_fit":
+            add(wall, "ウィンドウが画面からはみ出していたので、タイトルバーをドラッグして"
+                + ("戻した" if d.get("fitted") else "戻そうとした（収まらなかった）"))
         elif k == "launch":
             add(wall, "ゲームを起動した")
         elif k == "proc_exit":

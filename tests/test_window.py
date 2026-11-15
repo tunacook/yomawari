@@ -182,3 +182,79 @@ def test_locked_screen_blocks_input_and_is_noted():
     run.unblock(20003.0)  # すぐ戻ったもの（外部を開く操作のあとなど）は載せない
     notes = run.blocked_notes(30000.0)
     assert len(notes) == 1 and "計 3 時間 0 分" in notes[0] and "1 回" in notes[0]
+
+
+class DragWindows(FakeWindows):
+    """visible_area を持ち、タイトルバーのドラッグでウィンドウが動くもの。moves=False なら OS が動かさない。"""
+
+    def __init__(self, info, visible, moves=True):
+        super().__init__(info, front=info.pid)
+        self.visible = visible
+        self.moves = moves
+
+    def visible_area(self, rect):
+        return self.visible
+
+
+class DragDriver(RecordingDriver):
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        self.drags = []
+
+    def drag(self, x0, y0, x1, y1):
+        self.drags.append((x0, y0, x1, y1))
+        b = self.win.info.bounds
+        if self.win.moves and b.y <= y0 <= b.y + 28:
+            self.win.info = WindowInfo(self.win.info.pid, ScreenRect(b.x + x1 - x0, b.y + y1 - y0, b.w, b.h), True)
+
+
+def _resized_state():
+    s = GameState()
+    s.feed(Event("game", "resolution", {"w": 1600, "h": 900, "mode": "Windowed"}))
+    s.feed(Event("game", "menu", {"name": "CardUI", "modal": True,
+                                   "buttons": [{"name": "AnswerButton", "rect": [0.3, 0.84, 0.93, 0.93]}]}))
+    return s
+
+
+def test_window_out_of_display_is_dragged_back_by_title_bar():
+    # run 2026-11-14_2214: 画面の右下に置いたウィンドウを、ゲームの設定で 1600x900 にした。左上を動かさずに広がり、
+    # 下のボタンが画面の外に出て、押しても届かなかった
+    visible = ScreenRect(0, 33, 1512, 949)
+    win = DragWindows(WindowInfo(7, ScreenRect(792, 557, 800, 478), True), visible)
+    drv = DragDriver(win)
+    p = Pointer(win, drv, 7, _resized_state(), activate_wait=0, fit_wait=0)
+    x, y = p.click(p.state.find("CardUI/AnswerButton"))
+    assert len(drv.drags) == 1
+    x0, y0, x1, y1 = drv.drags[0]
+    assert 557 <= y0 <= 585 and x0 >= 792 + 80  # 閉じるボタンなどを避けて、タイトルバーをつかむ
+    assert win.info.bounds == ScreenRect(712, 504, 800, 478)  # 右と下を見える範囲に揃えた
+    assert x <= 1512 and y <= 982 and drv.clicks == [(x, y, "left", 1)]
+    assert len(p.fits) == 1 and p.fits[0].fitted
+    # 収まっていれば、もう動かさない
+    p.click(p.state.find("CardUI/AnswerButton"))
+    assert len(drv.drags) == 1
+
+
+def test_point_outside_display_is_not_pressed_when_window_cannot_move():
+    visible = ScreenRect(0, 33, 1512, 949)
+    win = DragWindows(WindowInfo(7, ScreenRect(792, 557, 800, 478), True), visible, moves=False)
+    drv = DragDriver(win)
+    p = Pointer(win, drv, 7, _resized_state(), activate_wait=0, fit_wait=0, fit_tries=2)
+    for _ in range(4):
+        with pytest.raises(PointerError, match="見える範囲の外"):
+            p.click(p.state.find("CardUI/AnswerButton"))
+    assert drv.clicks == []
+    assert len(drv.drags) == 2  # 同じ大きさでは fit_tries 回まで
+    assert [f.fitted for f in p.fits] == [False, False]
+    # 見える範囲の中の点は押す
+    p.click_at(0.1, 0.1)
+    assert len(drv.clicks) == 1
+
+
+def test_window_without_visible_area_is_left_as_is():
+    win = FakeWindows(WindowInfo(42, ScreenRect(5000, 5000, 1280, 748), True), front=42)
+    drv = RecordingDriver()
+    p = Pointer(win, drv, 42, title_state(), activate_wait=0)
+    p.click(p.state.find("TitleUI/NewGameButton"))
+    assert len(drv.clicks) == 1 and p.fits == []
