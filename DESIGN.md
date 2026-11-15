@@ -247,6 +247,7 @@ yomawari experience report [--build NAME] [--out PATH]   # 経験の蓄積から
 yomawari experience forget [--build NAME | --game NAME] [--roles] [--progress] [--flow-wrong] [--flow-right] [--yes]   # 覚えたことを消す（§9「経験の蓄積」）
 yomawari doctor
 yomawari schedule install --at 01:00 | uninstall
+yomawari prune [--days N] [--dry-run]   # 古いランを消す（§12「runs/ 構成」）。run も始めるときに同じことをする
 yomawari restore
 ```
 
@@ -1245,7 +1246,7 @@ runs/
 ├─ coverage.json         # ラン間で引き継ぐ状態×操作の試行回数
 └─ baseline.json         # 既知ISSUEのシグネチャ、ラベルごとのベースラインスクショ参照
 ```
-古いランは `keep_runs_days` で自動削除。
+古いランは `run.keep_runs_days`（日。0 なら消さない）で消す。`yomawari run` が始めるときに、ランのディレクトリの名前にある開始日時から数えて、それより経ったランを消し、消したものを「ハーネスの記録」に書く。`yomawari prune`（`--dry-run` で表示だけ）でも消せる。ランの名前の形でないもの（`_experience` など）とファイルは消さない。古くても、未復元のセーブ退避があるラン（`restore_pending.json` が指す。ユーザーの本物のセーブが入っている）と、ビルドごとのいちばん新しいラン（`--continue` のセーブ）は残す
 
 ---
 
@@ -1267,7 +1268,7 @@ runs/
 3. 画面とOS操作: `mss` キャプチャとリングバッファ、V-01〜05、OS操作カタログ、F系・A系ルール（R系（パフォーマンス）、L-02〜L-05、V-05・V-08・V-09、F-01・F-03 はフェーズ2の途中で先に入れた。フェーズ3に残るルールは V-01〜V-04、F-02・F-04、A-01・A-02）
 4. 再現: `events.jsonl` からの `replay`、`minimize`、前回比較、重複排除・統合
 5. 画像判定: Ollama Judge、V-06、誤検知除去、要目視欄、再現手順の文章化、ボタンの見た目からの役割の推定（§9）
-6. 無人運転: ウォッチドッグの別プロセス化、`schedule install`（launchd plist生成）、`caffeinate`、古いランの削除
+6. 無人運転: ウォッチドッグの別プロセス化、`schedule install`（launchd plist生成）、`caffeinate`、古いランの削除（`caffeinate` と古いランの削除は先に入れた）
 7. 後日: Windows対応、`local`/`jev` Decider、ゲームパッド（`InputDriver` 追加と `ui_focus`/`input_device` イベント）
 
 各フェーズで、ゲームなしでも動くテスト（Player.log のサンプルを流し込むモックゲーム）を用意する。

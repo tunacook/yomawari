@@ -35,6 +35,7 @@ from .post.rebuild import rebuild_report
 from .profile import apply_rules, load_spec
 from .purpose import MODES, PurposeError
 from .purpose import resolve as resolve_purpose
+from .runs import PruneResult, prune_runs
 from .savestate import SaveState, resolve_target
 from .sensors.window import ClientArea
 from .state import GameState
@@ -276,6 +277,9 @@ def run(
     )
     if forget_note:
         harness.notes.append(forget_note)  # レポートの「ハーネスの記録」に、学習を消してから回したことを残す
+    keep_days = float(rc["keep_runs_days"])
+    pruned = prune_runs(cfg.runs_dir, keep_days, datetime.now())
+    harness.notes += _prune_notes(pruned, keep_days)  # レポートの「ハーネスの記録」に残す
     if live:
         with live:
             result = asyncio.run(harness.run(opts))
@@ -463,6 +467,42 @@ def schedule_install(at: str = typer.Option("01:00", "--at", help="起動時刻�
 def schedule_uninstall() -> None:
     """launchd の定時実行を解除する。"""
     _stub("schedule uninstall")
+
+
+# --- 古いラン ---
+
+
+def _prune_notes(res: PruneResult, days: float, dry_run: bool = False) -> list[str]:
+    notes = []
+    if res.removed:
+        verb = "消します" if dry_run else "消した"
+        notes.append(f"始めてから {days:g} 日より経ったラン {len(res.removed)} 件を{verb}（run.keep_runs_days）: "
+                     + ", ".join(res.removed))
+    for name, why in res.kept:
+        notes.append(f"古いが残したラン: {name}（{why}）")
+    for name, e in res.errors:
+        notes.append(f"古いランを消せなかった: {name}（{e}）")
+    return notes
+
+
+@app.command()
+def prune(
+    ctx: typer.Context,
+    days: float | None = typer.Option(None, "--days", help="この日数より前に始めたランを消す。既定は yomawari.toml の run.keep_runs_days"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="消すものを表示するだけで、消さない"),
+) -> None:
+    """古いランを消す。yomawari run も、始めるときに同じことをする。"""
+    cfg = _config(ctx)
+    keep = float(days if days is not None else cfg.run["keep_runs_days"])
+    if keep <= 0:
+        console.print("keep_runs_days が 0 以下なので消しません")
+        return
+    res = prune_runs(cfg.runs_dir, keep, datetime.now(), dry_run=dry_run)
+    notes = _prune_notes(res, keep, dry_run)
+    for n in notes or [f"{keep:g} 日より経ったランはありません"]:
+        console.print(n)
+    if res.errors:
+        raise typer.Exit(EXIT_HARNESS_ERROR)
 
 
 # --- doctor / restore ---
