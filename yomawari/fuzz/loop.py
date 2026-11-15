@@ -55,6 +55,8 @@ from .listing import (
 )
 
 # プレイの目的（random モード）→ レポートでの呼び方
+# 画面を開く操作として覚える、ボタンでない操作の種類（右クリックメニュー・Esc で開くポーズ画面など）
+OPENER_KINDS = ("right_click", "key")
 INTENTS = {"progress": "本編を進める", "explore": "画面を見て回る"}
 # 再起動する前に、抜け出す操作を試すルール（ゲームは動いているが進まない）
 RECOVERABLE = ("S-02", "S-03")
@@ -180,6 +182,9 @@ class FuzzRun:
     experience: Experience = field(default_factory=Experience)
     presses: deque[Press] = field(default_factory=lambda: deque(maxlen=20))  # 最近押した操作
     opened_press: dict[str, Press] = field(default_factory=dict)  # 寄り道の画面 → それを開いた操作
+    # menu → それを開いた、ボタンでない操作（右クリック・キー）の label。設定・言語の画面の開き方をたどるのにだけ使う
+    # （opened_by には入れない。ゲームの流れの by や一覧の寄り道では、ゲームが開いた画面のまま扱う）
+    opened_via: dict[str, str] = field(default_factory=dict)
     # プレイの目的（random モード）。起動したとき・タイトルに戻ったときに選び直す
     intent: str | None = None
     plays: int = 0
@@ -880,7 +885,8 @@ class FuzzSession:
                              + (f"（この画面は {' → '.join(f'`{r}`' for r in route)} で開いた）" if route else ""))
 
     def _route(self, menu: str) -> list[str]:
-        """その画面（menu）を開いたボタンの並び（外側の画面から順に）。ゲームが開いた画面なら空。"""
+        """その画面（menu）を開いた操作の並び（外側の画面から順に）。ボタンの label のほか、いちばん外側の画面を
+        右クリック・キーで開いたなら、その操作の label（"right_click" など）が先頭に入る。ゲームが開いた画面なら空。"""
         route: list[str] = []
         seen: set[str] = set()
         while menu in self.run.opened_by and menu not in seen:
@@ -888,6 +894,8 @@ class FuzzSession:
             opener = self.run.opened_by[menu]
             route.insert(0, opener)
             menu = opener.split("/", 1)[0]
+        if menu in self.run.opened_via:
+            route.insert(0, self.run.opened_via[menu])
         return route
 
     # --- 設定を変えに行く（DESIGN.md §9「設定を変えに行く」、fuzz/settings_tour.py） ---
@@ -939,7 +947,8 @@ class FuzzSession:
         out = []
         for op in cands:
             t = op.target
-            if t is not None and t.kind == "button" and (t.label in buttons or t.label in route):
+            if (t is not None and t.kind == "button" and (t.label in buttons or t.label in route)) or (
+                    t is None and op.label in route):
                 op = dataclasses.replace(op, novelty=False, by="locale").scaled("locale", f)
             out.append(op)
         return out
@@ -1536,6 +1545,8 @@ class FuzzSession:
         for name in [n for n in run.opened_by if n not in self.state.menus]:
             del run.opened_by[name]  # 閉じた
             run.opened_press.pop(name, None)
+        for name in [n for n in run.opened_via if n not in self.state.menus]:
+            del run.opened_via[name]
         for menu in run.ledger.closed(set(self.state.menus)):
             for label in [k for k in run.quiet_seen if k.split("/", 1)[0] == menu]:
                 del run.quiet_seen[label]
@@ -2267,6 +2278,11 @@ class FuzzSession:
                     self.run.opened_by[name] = op.target.label
                     self.run.opened_press[name] = press
                     self.run.blind_tries.pop(name, None)
+        if responded and op.target is None and op.kind in OPENER_KINDS and op.group not in ("move", "list", "search"):
+            # 右クリック・キーで開いた画面（右クリックメニューなど）。設定・言語の画面の開き方の最初の一歩にする
+            for name in self.state.screens()[1] - screens_before[1]:
+                if name in self.state.menus and name not in menus_before:
+                    self.run.opened_via[name] = op.label
         if op.group == "search":
             for menu in self._blind.get(op.label, []):
                 self.run.blind_tries[menu] += 1

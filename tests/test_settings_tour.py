@@ -209,3 +209,55 @@ def test_response_without_setting_change_is_not_counted_as_no_response():
     s.pointer.driver.click = click
     asyncio.run(s._normal(Op("click", target), "modal:PauseUI", False))
     assert run.stats["no_response"] == 0 and not run.tour.changes
+
+
+def test_route_starts_with_right_click_and_tour_presses_it(tmp_path):
+    # 右クリックで開くメニューの奥の設定画面: 開き方の最初の一歩に right_click を覚え、変えに行くときに押しにいく
+    st, run, s = _locale_session("ja-JP")
+    run.experience = Experience(tmp_path / "exp.json")
+
+    async def do(op, _show=_PAUSE):
+        st.feed(Event("game", "menu", _show, 0))
+        return True
+
+    s._do = do
+    asyncio.run(s._normal(Op("right_click"), "reading", False))
+    assert run.opened_via == {"PauseUI": "right_click"} and run.opened_by == {}  # 流れ・一覧の寄り道は変えない
+
+    async def do2(op):
+        st.feed(Event("game", "menu", _SOUND, 0))
+        return True
+
+    s._do = do2
+    target = {t.label: t for t in st.targets()}["PauseUI/SettingsButton"]
+    asyncio.run(s._normal(Op("click", target), "modal:PauseUI", False))
+    del s._do  # 元の押し方に戻す（_press は driver.click を差し替える）
+    _press(st, s, "SettingsUI/Mute", master_volume=0)
+    assert run.experience.setting_routes == {"SettingsUI": [["right_click", "PauseUI/SettingsButton"]]}
+
+    # 画面がどれも出ていない: 右クリック（ボタンでない操作）を優先する
+    st2, _, s2 = _locale_session("ja-JP", run=run)
+    run.tour = SettingsTour(interval=1, timeout=50, factor=20, next_t=0.0)
+    run.tour.step(0.0, run.experience.setting_buttons, random.Random(1))
+    w = {op.label: op.weight for op in s2._apply_tour([Op("right_click", weight=1.0), Op("advance", weight=20.0)])}
+    assert w == {"right_click": 20.0, "advance": 20.0}
+
+
+def test_move_keys_are_not_openers():
+    st, run, s = _locale_session("ja-JP")
+
+    async def do(op):
+        st.feed(Event("game", "menu", _PAUSE, 0))
+        return True
+
+    s._do = do
+    asyncio.run(s._normal(Op("key", arg="down", group="move"), "reading", False))
+    assert run.opened_via == {}
+
+
+def test_locale_route_with_right_click():
+    st, run, s = _locale_session("en-US")
+    run.experience.locale_buttons = {"SettingsUI/Option_b": "ja-JP"}
+    run.experience.locale_routes = {"SettingsUI": ["right_click", "PauseUI/SettingsButton"]}
+    w = {op.label: op.weight for op in s._apply_locale([Op("right_click", weight=1.0), Op("advance", weight=20.0)])}
+    assert w == {"right_click": 20.0, "advance": 20.0}

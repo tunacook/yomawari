@@ -230,6 +230,42 @@ rules:
       # 比べない設定（使える言語の一覧は設定の値ではない）
       ignore_keys: ["locales"]
 
+  - id: V-08
+    severity: major
+    title: 文字の速さの設定が本文に効いていない
+    description: >-
+      本文の1文字あたりの表示時間（line から line_done まで。ハーネスが途中で操作した行と短い行は除く）を、
+      そのときの reveal_speed ごとに集め、大きい値（速い）のほうが小さい値より速くなっていなければ出す。
+      小さいほうがもともと速いとき（min_ms 未満。スキップ中の行が多いなど）は判定しない。DESIGN.md §9「設定を変えに行く」
+    params:
+      min_samples: 10   # 比べるのに使う、値ごとの行の数
+      min_chars: 8      # これより短い行は数えない（タグと空白を除いた文字数）
+      margin: 0.2       # 速い値の中央値が、遅い値の中央値よりこの割合以上短くなっていればよい
+      min_ms: 2         # 遅い値の中央値がこれ（1文字あたりミリ秒）未満なら判定しない
+
+  - id: V-09
+    severity: major
+    title: 言語の設定が本文に効いていない
+    description: >-
+      言語（locale）を切り替えたあとの本文の最初の lines 行（文字が min_letters 以上あるもの）で、いちばん多い文字の種類が
+      その言語の見込み（scripts）に当たらない行が mismatch 行以上あった。見込みを書いていない言語は判定しない
+    params:
+      lines: 5
+      mismatch: 4
+      min_letters: 4
+      # 言語タグの最初の部分 → 本文に多いはずの文字の種類（kana / han / hangul / latin / cyrillic）
+      scripts:
+        ja: [kana, han]
+        zh: [han]
+        ko: [hangul]
+        ru: [cyrillic]
+        en: [latin]
+        fr: [latin]
+        de: [latin]
+        es: [latin]
+        it: [latin]
+        pt: [latin]
+
   # --- パフォーマンス（DESIGN.md §10「パフォーマンス」）。共通の設定は下の perf。閾値は実機で回しながら調整する ---
 
   - id: R-01

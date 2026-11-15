@@ -7,7 +7,8 @@
 - どのボタンが設定を変えるかは、押して settings の値だけが変わったかで覚えたもの（経験の "settings"）を使う。
   プロファイルには書かない（§9「プロファイルの言語」）
 - 変えに行く設定は、このランで変わった回数がいちばん少ないもの。押せば今と違う値になるボタンを先に押す
-- 設定の画面が出ていなければ、その画面を開いたボタンの並び（入り口ごとに覚えたもの）を押しにいく
+- 設定の画面が出ていなければ、その画面を開いた操作の並び（入り口ごとに覚えたもの）を押しにいく。右クリックメニューの
+  ように、いちばん外側の画面を右クリック・キーで開いたなら、その操作も押しにいく
 - 区間（ガチャプレイ・ボタンの網羅）、ゲームの流れの途中、言語を戻しているあいだは、変えに行かない
 - 決めた時間のうちに変えられなければ、あきらめて「ハーネスの記録」に書く
 """
@@ -100,7 +101,8 @@ class SettingsTour:
         out = []
         for op in cands:
             t = op.target
-            if t is not None and t.kind == "button" and t.label in boost:
+            # 開き方の最初の一歩が右クリック・キーなら、その操作（ボタンでない）も押しにいく
+            if (t is not None and t.kind == "button" and t.label in boost) or (t is None and op.label in boost):
                 op = dataclasses.replace(op, novelty=False, by="settings").scaled("settings", self.factor)
             out.append(op)
         return out
