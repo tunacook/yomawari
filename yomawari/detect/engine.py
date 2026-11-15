@@ -8,6 +8,7 @@ R 系（パフォーマンス）は detect/perf.py の PerfMonitor でまとめ�
 from __future__ import annotations
 
 import re
+import statistics
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -585,6 +586,149 @@ class SettingsPersistDetector(Detector):
         return out
 
 
+_TAG = re.compile(r"<[^>]*>")
+# 文字の種類（V-09）。言語ごとの見込みは rules.yaml の V-09 scripts
+_SCRIPTS = {
+    "kana": re.compile(r"[\u3040-\u30ff]"),
+    "han": re.compile(r"[\u4e00-\u9fff]"),
+    "hangul": re.compile(r"[\uac00-\ud7af]"),
+    "latin": re.compile(r"[A-Za-z\u00c0-\u024f]"),
+    "cyrillic": re.compile(r"[\u0400-\u04ff]"),
+}
+
+
+def _plain(text: Any) -> str:
+    """本文からタグ（<ruby=...> など）と空白を除いたもの。"""
+    return re.sub(r"\s", "", _TAG.sub("", str(text or "")))
+
+
+def dominant_script(text: str, min_letters: int) -> str | None:
+    """本文でいちばん多い文字の種類。文字が min_letters に満たなければ None。"""
+    counts = {name: len(p.findall(text)) for name, p in _SCRIPTS.items()}
+    if sum(counts.values()) < min_letters:
+        return None
+    return max(counts, key=lambda k: counts[k])
+
+
+class RevealSpeedDetector(Detector):
+    """V-08: 文字の速さ（settings の reveal_speed）が、本文の表示に効いていない（DESIGN.md §9「設定を変えに行く」）。
+
+    本文の行が出て（line）表示し終わる（line_done）までの時間を、文字数で割って、そのときの reveal_speed ごとに集める。
+    あいだにハーネスが操作した行（クリックで表示を飛ばした行）と、短い行は数えない。値が大きいほど速い（Naninovel の
+    reveal speed）ので、2つの値の両方に min_samples 行たまったら、大きいほうの中央値が小さいほうより margin 以上
+    速くなっているかを見る。小さいほうがもともと速い（min_ms 未満。スキップ中の行が多いなど）ときは判定しない。
+    値の組ごとに1件。"""
+
+    def __init__(self, rule: Rule) -> None:
+        super().__init__(rule)
+        self.min_samples = int(rule.param("min_samples"))
+        self.min_chars = int(rule.param("min_chars"))
+        self.margin = float(rule.param("margin"))
+        self.min_ms = float(rule.param("min_ms"))
+        self.speed: float | None = None
+        self.ops = 0
+        self.pending: tuple[str, float, int, float, int] | None = None  # (line_id, t, 文字数, 速さ, 操作の数)
+        self.samples: dict[float, list[float]] = {}
+        self.judged: set[tuple[float, float]] = set()
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        d = ev.data
+        if ev.kind == "launch":
+            self.pending = None
+        elif ev.kind == "op":
+            self.ops += 1
+        elif ev.source != "game":
+            return []
+        elif ev.kind == "settings":
+            v = d.get("reveal_speed")
+            self.speed = float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+        elif ev.kind == "line":
+            n = len(_plain(d.get("text")))
+            self.pending = None
+            if self.speed is not None and n >= self.min_chars:
+                self.pending = (str(d.get("line_id")), ev.t, n, self.speed, self.ops)
+        elif ev.kind == "line_done" and self.pending is not None:
+            line_id, t, n, speed, ops = self.pending
+            self.pending = None
+            if str(d.get("line_id")) == line_id and ops == self.ops and speed == self.speed:
+                self.samples.setdefault(speed, []).append((ev.t - t) / n * 1000)
+                return self._judge(speed, ev)
+        return []
+
+    def _judge(self, speed: float, ev: Event) -> list[Issue]:
+        if len(self.samples[speed]) != self.min_samples:
+            return []  # たまったときに1回だけ、ほかの値と比べる
+        out = []
+        for other, values in self.samples.items():
+            if other == speed or len(values) < self.min_samples:
+                continue
+            slow, fast = (other, speed) if other < speed else (speed, other)
+            if (slow, fast) in self.judged:
+                continue
+            self.judged.add((slow, fast))
+            ms_slow = statistics.median(self.samples[slow][: self.min_samples])
+            ms_fast = statistics.median(self.samples[fast][: self.min_samples])
+            if ms_slow < self.min_ms or ms_fast <= ms_slow * (1 - self.margin):
+                continue
+            out.append(self.issue(
+                f"文字の速さ（reveal_speed）を {slow:g} から {fast:g} に上げても、本文の表示が速くなっていません"
+                f"（1文字あたりの中央値: {slow:g} で {ms_slow:.1f} ms、{fast:g} で {ms_fast:.1f} ms。各 {self.min_samples} 行）",
+                key=f"{slow:g}<{fast:g}", launch=ev.launch, t=ev.t, wall=ev.wall,
+                slow=slow, fast=fast, ms_slow=round(ms_slow, 2), ms_fast=round(ms_fast, 2),
+            ))
+        return out
+
+
+class LocaleTextDetector(Detector):
+    """V-09: 言語（settings の locale）を切り替えたのに、そのあとの本文がその言語の文字で出ない。
+
+    切り替えたあとの本文のうち、文字が min_letters 以上ある最初の lines 行を見て、いちばん多い文字の種類が、
+    その言語の見込み（scripts。言語タグの最初の部分ごと）に当たらない行が mismatch 行以上なら出す。見込みのない
+    言語は判定しない。切り替えるたびに数え直し、言語ごとに1件。"""
+
+    def __init__(self, rule: Rule) -> None:
+        super().__init__(rule)
+        self.lines = int(rule.param("lines"))
+        self.mismatch = int(rule.param("mismatch"))
+        self.min_letters = int(rule.param("min_letters"))
+        self.scripts = {str(k): set(v) for k, v in (rule.param("scripts") or {}).items()}
+        self.locale: str | None = None
+        self.seen: list[tuple[str, str]] = []  # 切り替えたあとの本文 (文字の種類, 本文)
+        self.reported: set[str] = set()
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        if ev.source != "game":
+            return []
+        d = ev.data
+        if ev.kind == "settings":
+            loc = d.get("locale")
+            if isinstance(loc, str) and loc != self.locale:
+                self.locale, self.seen = loc, []
+            return []
+        if ev.kind != "line" or self.locale is None or self.locale in self.reported:
+            return []
+        want = self.scripts.get(self.locale.split("-", 1)[0].lower())
+        if not want or len(self.seen) >= self.lines:
+            return []
+        text = _plain(d.get("text"))
+        script = dominant_script(text, self.min_letters)
+        if script is None:
+            return []
+        self.seen.append((script, text))
+        if len(self.seen) < self.lines:
+            return []
+        wrong = [(s, t) for s, t in self.seen if s not in want]
+        if len(wrong) < self.mismatch:
+            return []
+        self.reported.add(self.locale)
+        return [self.issue(
+            f"言語を {self.locale} に切り替えたのに、そのあとの本文 {self.lines} 行のうち {len(wrong)} 行が"
+            f"その言語の文字（{'・'.join(sorted(want))}）で出ていません（例: {wrong[0][1][:40]}）",
+            key=self.locale, launch=ev.launch, t=ev.t, wall=ev.wall,
+            locale=self.locale, scripts=[s for s, _ in self.seen], expected=sorted(want),
+        )]
+
+
 DETECTORS: dict[str, Callable[[Rule], Detector]] = {
     "C-01": ProcessExitDetector,
     "C-02": CrashDumpDetector,
@@ -597,6 +741,8 @@ DETECTORS: dict[str, Callable[[Rule], Detector]] = {
     "S-05": ButtonNoResponseDetector,
     "V-07": DimButtonRespondedDetector,
     "F-03": SettingsPersistDetector,
+    "V-08": RevealSpeedDetector,
+    "V-09": LocaleTextDetector,
     "L-01": LogErrorDetector,
     "L-06": LogWarningDetector,
 }
