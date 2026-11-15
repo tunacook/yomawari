@@ -15,6 +15,7 @@ namespace Yomawari
      *   と、スクロール領域（scroll）。DESIGN.md §3、§9「ゲーム固有の仕様」①。ゲーム側に Yomawari 用の部品は求めない（§1）
      * - transition: ISceneTransitionUI / ILoadingUI の表示（start）と非表示（end）
      * - choices: 表示中の選択肢ボタン（id, text, rect, locked）
+     * - selected: EventSystem のフォーカスがあるボタン（menu, name, nth）。Enter で押されるのはこのボタン
      * ボタンの位置はホバーの拡大などで少し動くので、変化の判定は 1/20 単位に丸めて行う（出す値は丸めない）
      * </summary>
      */
@@ -44,6 +45,7 @@ namespace Yomawari
         PointerEventData pointer;
         string choicesSignature = ""; // 空 = 選択肢なし。起動直後に空の choices を出さない
         string settingsSignature; // 最後に出した settings。null = まだ出していない
+        string selectedSignature = ""; // 最後に出した selected。空 = フォーカスのあるボタンなし（起動直後は出さない）
         float elapsed;
 
         // choices_done の index（直近に出した choices の中での順番）。見つからなければ -1
@@ -67,6 +69,59 @@ namespace Yomawari
             ScanUIs(manager);
             ScanChoices();
             ScanSettings();
+            ScanSelected();
+        }
+
+        // EventSystem のフォーカスがあるボタン（selected）を、変わったときだけ出す。Enter・Space で押されるのはこのボタンで、
+        // ハーネスは、終了ボタンなどにフォーカスがあるあいだ Enter を押さない（run 2026-11-14_2214: 方向キーで右クリック
+        // メニューの終了ボタンにフォーカスを移し、Enter でゲームを終了した）。ボタンは、それを含む表示中の menu のうち
+        // いちばん内側のものの name と、menu の buttons と同じ数え方の番号（同じ名前のボタンの何番目か。0 から）で表す。
+        // menu の外のもの・押せないものにフォーカスがあるときは、menu と name を null で出す
+        void ScanSelected()
+        {
+            var es = EventSystem.current;
+            var go = es != null ? es.currentSelectedGameObject : null;
+            string menu = null, name = null;
+            var nth = 0;
+            if (go != null && go.TryGetComponent<Selectable>(out var sel) && Pressable(sel))
+            {
+                MonoBehaviour owner = null;
+                var depth = -1;
+                foreach (var pair in shown)
+                {
+                    if (pair.Value.Transition || pair.Key is not MonoBehaviour mb || mb == null) continue;
+                    if (!sel.transform.IsChildOf(mb.transform)) continue;
+                    var d = 0;
+                    for (var t = mb.transform; t != null; t = t.parent) d++;
+                    if (d <= depth) continue;
+                    owner = mb;
+                    depth = d;
+                }
+                if (owner != null)
+                {
+                    owner.GetComponentsInChildren(false, selectables);
+                    foreach (var s in selectables)
+                    {
+                        if (s == sel) break;
+                        if (s.name == sel.name && Pressable(s)) nth++;
+                    }
+                    menu = owner.name;
+                    name = sel.name;
+                }
+            }
+            var signature = menu == null ? "" : menu + "/" + name + "#" + nth;
+            if (signature == selectedSignature) return;
+            selectedSignature = signature;
+            YomawariLog.Emit("selected", menu == null
+                ? "\"menu\":null,\"name\":null"
+                : "\"menu\":" + YomawariFormat.Str(menu) + ",\"name\":" + YomawariFormat.Str(name) + ",\"nth\":" + nth);
+        }
+
+        // menu の buttons に出すもの（Buttons と同じ条件）
+        static bool Pressable(Selectable s)
+        {
+            return s.IsInteractable() && s.isActiveAndEnabled &&
+                   YomawariRect.TryGetScreen((RectTransform)s.transform, out _, out _);
         }
 
         // ゲームの設定（言語・本文の出る速さ・音量）を、最初と変わったときだけ出す（settings）。どれも Naninovel の
