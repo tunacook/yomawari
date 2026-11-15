@@ -51,6 +51,7 @@ from .state import GameState
 from .sensors.crash import watch_crash_dir
 from .sensors.logtail import InvalidRecord, Record, UnityEntry, YomawariRecord, tail_file
 from .sensors.process import watch_process
+from .supervisor import child_state_path
 
 StatusCallback = Callable[[dict[str, Any]], None]
 
@@ -130,6 +131,7 @@ class Harness:
         self.spec = spec or GameSpec()
         self.judge_cfg = judge_cfg  # [judge]（Ollama）。None なら AI に聞かない
         self.driver_factory = driver_factory
+        self.on_run_dir: Callable[[Path], None] | None = None  # ランのディレクトリを作ったときに呼ぶ
         self.roles = roles or RoleBook()
         self.engine = Engine(rules, load_perf(rules_path))
         self.state = GameState()
@@ -403,6 +405,8 @@ class Harness:
 
     async def run(self, opts: RunOptions) -> RunResult:
         run_dir = new_run_dir(self.runs_dir, self.build.name)
+        if self.on_run_dir is not None:
+            self.on_run_dir(run_dir)  # 見張り役に、どのランを見張るかを知らせる（supervisor.py）
         # --continue: 前のランが終わったときのセーブを置いて、その続きから遊ぶ（DESIGN.md §9「続きから遊ぶ」）。
         # 見つからなければ、はじめから遊ぶ（そのときにあるのは人のセーブで、前のランの続きではない）
         prev_save = previous_run_save(self.runs_dir, self.build.name, run_dir) if opts.continue_previous else None
@@ -494,8 +498,10 @@ class Harness:
                 main_task.cancel()
             elif not told_waiting:
                 told_waiting = True
+                after = ("見張り役がセーブを戻し、記録からレポートを作り直します" if child_state_path() is not None
+                         else "レポートは出ません。セーブは yomawari restore で戻せます")
                 print("終了処理中です（ゲームの終了・セーブの復元・レポートの出力）。待てないときは Ctrl+\\ で強制終了できます"
-                      "（レポートは出ません。セーブは yomawari restore で戻せます）", file=sys.stderr)
+                      f"（{after}）", file=sys.stderr)
 
         loop.add_signal_handler(signal.SIGINT, request_stop, "手動で中断した（Ctrl+C）")
         loop.add_signal_handler(signal.SIGTERM, request_stop, "外から止められた（SIGTERM。kill や launchd の停止など）")

@@ -157,7 +157,7 @@ def test_cli_run_without_build_and_no_tty_exits_2(tmp_path):
 
 def test_cli_run_and_builds(tmp_path, mock_app, monkeypatch, fake_platform):
     monkeypatch.setattr(cli, "get_platform", lambda: fake_platform)
-    cfg = write_config(tmp_path, "[run]\nopen_report = false\n")
+    cfg = write_config(tmp_path, "[run]\nopen_report = false\nwatchdog = false\n")
     runner = CliRunner()
     res = runner.invoke(cli.app, ["--config", str(cfg), "builds", "add", "mock", str(mock_app), "--no-launch"])
     assert res.exit_code == 0, res.output
@@ -173,7 +173,7 @@ def test_cli_run_and_builds(tmp_path, mock_app, monkeypatch, fake_platform):
 
 def test_cli_run_forget_clears_experience_first(tmp_path, mock_app, monkeypatch, fake_platform):
     monkeypatch.setattr(cli, "get_platform", lambda: fake_platform)
-    cfg = write_config(tmp_path, f'default_build = "mock"\n[run]\nopen_report = false\n[builds.mock]\npath = "{mock_app}"\n')
+    cfg = write_config(tmp_path, f'default_build = "mock"\n[run]\nopen_report = false\nwatchdog = false\n[builds.mock]\npath = "{mock_app}"\n')
     exp = tmp_path / "runs" / "_experience" / "mock.json"
     exp.parent.mkdir(parents=True)
     exp.write_text('{"flow_wrong": {"選択肢で答える": {"main/a:1.0": [["話さない"]]}}}', encoding="utf-8")

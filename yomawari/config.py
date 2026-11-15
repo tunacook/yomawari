@@ -27,6 +27,9 @@ RUN_DEFAULTS: dict[str, Any] = {
     "display_off": False,  # ゲームが起動したあと、画面（ディスプレイ）を消す（macOS: pmset displaysleepnow）。--display-off
     "display_off_delay_sec": 10.0,  # ゲームが起動してから画面を消すまでの時間
     "continue": False,  # ランの最初の起動から、前のランのセーブの続きを遊ぶ（既定ははじめから）。--continue
+    # 見張り役（ウォッチドッグ）: ハーネス本体を子プロセスで動かし、落ちたら後始末する。--no-watchdog で使わない
+    "watchdog": True,
+    "watchdog_hang_sec": 300.0,  # ハーネス本体の記録（events.jsonl）がこの秒数増えなければ、固まったとみなして止める
 }
 SENSOR_DEFAULTS: dict[str, Any] = {
     "log_poll_sec": 0.1,

@@ -90,15 +90,17 @@ def _estimated(run_dir: Path, events: list[dict], partial: RunSummary | None, ru
     )
 
 
-def rebuild_report(run_dir: Path, rules_path: Path) -> Path:
+def rebuild_report(run_dir: Path, rules_path: Path, notes: list[str] | None = None) -> Path:
     """run_dir の report.md を作り直して、そのパスを返す。前の report.md は report.prev.md に残す。
-    events.jsonl がなければ FileNotFoundError。"""
+    notes は「ハーネスの記録」の先頭に足す（見張り役がした後始末など）。events.jsonl がなければ FileNotFoundError。"""
     events = load_events(run_dir / "events.jsonl")
     summary = load_summary(run_dir)
     if summary is None or not summary.ended:
         summary = _estimated(run_dir, events, summary, rules_path)
     else:
         summary = dataclasses.replace(summary, harness_notes=[*summary.harness_notes, "`yomawari report` で作り直した"])
+    if notes:
+        summary = dataclasses.replace(summary, harness_notes=[*notes, *summary.harness_notes])
     report = run_dir / "report.md"
     if report.exists():
         os.replace(report, run_dir / "report.prev.md")
