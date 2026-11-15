@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from ..events import SEVERITIES, Issue
+from ..fuzz.reading import text_changed
 from .stalls import Stall, find_stalls
 
 WHO_GAME = "ゲーム"
@@ -238,8 +239,7 @@ def text_changed_after(log: Log, fam: str, ratio: float) -> tuple[int, int]:
         if not same:
             continue
         compared += 1
-        diff = sum(1 for k in same if "".join(before[k].split()) != "".join(after[k].split()))
-        if diff and diff >= ratio * len(same):
+        if text_changed({k: before[k] for k in same}, {k: after[k] for k in same}, ratio):
             changed += 1
     return changed, compared
 

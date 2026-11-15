@@ -36,3 +36,15 @@ def assign(boxes: list[TextBox], targets: list[Target], min_conf: float) -> dict
         t = min(inside, key=lambda b: (b.rect[2] - b.rect[0]) * (b.rect[3] - b.rect[1]))
         found.setdefault(t.label, []).append((round(y0, 2), x0, text))
     return {label: " ".join(s for _y, _x, s in sorted(parts))[:MAX_TEXT] for label, parts in found.items()}
+
+
+def text_changed(before: dict[str, str], after: dict[str, str], ratio: float) -> bool:
+    """押す前と後に読めた同じボタンの文字のうち、ratio 以上が変わっていたか（空白の違いは数えない）。
+
+    ページを送る・タブを切り替えるボタンは、押しても画面の並び（ボタンの名前）は変わらず、スロットの文字だけが
+    入れ替わる。1 つだけ変わったもの（読み取りの揺れ）は、ratio で外す。"""
+    same = [k for k in after if k in before]
+    if not same:
+        return False
+    diff = sum(1 for k in same if "".join(before[k].split()) != "".join(after[k].split()))
+    return diff > 0 and diff >= ratio * len(same)
