@@ -62,6 +62,33 @@ rules:
       # 誤検知になる既知のメッセージ（正規表現）。ゲームごとに追記する
       ignore_patterns: []
 
+  - id: L-02
+    severity: minor
+    title: フォントにない文字
+    description: >-
+      TextMeshPro が、フォント（とフォールバック）にない文字を □ などに置き換えたと警告した。フォントと文字の組ごとに1件。
+      この警告は L-06 では数えない
+    params:
+      # 警告の文面（正規表現。code: 文字の16進のコード、font: フォント、object: テキストのオブジェクト）
+      patterns:
+        - "The character with Unicode value \\\\u(?P<code>[0-9A-Fa-f]+) was not found in the \\[(?P<font>[^\\]]+)\\] font asset(?:.*in text object \\[(?P<object>[^\\]]+)\\])?"
+
+  - id: L-03
+    severity: major
+    title: リソースの読み込みに失敗
+    description: >-
+      リソース（シナリオ・画像・音声・プレハブなど）を読み込めなかったというログ（エラーか警告）。読み込めなかったものごとに1件。
+      同じログは L-01・L-06 では数えない
+    params:
+      # ログの文面（正規表現。name: 読み込めなかったもの、type: 種類。どちらもなくてよい）。ゲームごとに追記する
+      patterns:
+        # Naninovel のリソースの読み込み
+        - "Failed to load '(?P<name>[^']+)' resource of type '(?P<type>[^']+)'"
+        # 「Failed to load <種類>: <名前>」の形の、ゲームが自分で出すもの
+        - "^Failed to load (?:\\w+ )*?(?P<type>texture|sprite|image|audio|clip|sound|asset|resource|prefab|font|video)s?:\\s*(?P<name>\\S.*)$"
+        # Unity: コンポーネントのスクリプトが見つからない
+        - "The referenced script (?:\\((?P<name>[^)]*)\\) )?on this Behaviour.* is missing!"
+
   - id: L-06
     severity: minor
     title: Warning ログ
