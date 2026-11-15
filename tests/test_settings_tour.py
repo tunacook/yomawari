@@ -7,7 +7,7 @@ from yomawari.detect.engine import Engine
 from yomawari.events import Event
 from yomawari.fuzz.experience import Experience
 from yomawari.fuzz.ops import Op
-from yomawari.fuzz.settings_tour import SettingsTour
+from yomawari.fuzz.settings_tour import SettingsTour, VolumeHold
 
 from .test_fuzz import _LANG, _PAUSE, _SETTINGS, _locale_session
 
@@ -261,3 +261,53 @@ def test_locale_route_with_right_click():
     run.experience.locale_routes = {"SettingsUI": ["right_click", "PauseUI/SettingsButton"]}
     w = {op.label: op.weight for op in s._apply_locale([Op("right_click", weight=1.0), Op("advance", weight=20.0)])}
     assert w == {"right_click": 20.0, "advance": 20.0}
+
+
+def _labels(cands):
+    return {op.target.label for op in cands}
+
+
+def test_volume_hold_keeps_other_settings_still_while_a03_compares():
+    # run 2026-11-15_2240: 音量を 61 回変えたのに、ほかの設定を続けて変えたため A-03 が 1 回しか判定できなかった
+    st, run, s = _locale_session("ja-JP", _SOUND)
+    run.volume_hold = VolumeHold(before=5, after=6.5)
+    run.experience.setting_buttons = {"SettingsUI/Option_a": {"reveal_speed": 1},
+                                      "SettingsUI/Mute": {"master_volume": 0}}
+    hold = run.volume_hold
+    cands = [Op("click", t) for t in st.targets()]
+    hold.observe(st.settings, 0.0)
+    assert hold.apply(cands, run.experience.setting_buttons, 0.0) == cands
+    # 音量が変わった: 比べる区間のあいだは、設定を変えるボタンをどれも押さない。ほかのボタンは押せる
+    hold.observe({**st.settings, "master_volume": 0}, 10.0)
+    left = _labels(hold.apply(cands, run.experience.setting_buttons, 16.0))
+    assert left == {"SettingsUI/Option_b", "SettingsUI/BackButton"}
+    assert hold.holding(16.0) and not hold.holding(16.5)
+    assert len(hold.apply(cands, run.experience.setting_buttons, 16.5)) == len(cands)
+    # ほかの設定が変わった: window_sec のあいだは、音量のボタンだけ押さない（変える前の区間に入るため）
+    hold.observe({**st.settings, "master_volume": 0, "reveal_speed": 1}, 20.0)
+    assert not hold.holding(20.0)
+    assert _labels(hold.apply(cands, run.experience.setting_buttons, 24.9)) == _labels(cands) - {"SettingsUI/Mute"}
+    assert len(hold.apply(cands, run.experience.setting_buttons, 25.0)) == len(cands)
+    assert hold.notes() == ["音量を変えたあと 1 回、A-03 が比べる 6.5 秒のあいだ、ほかの設定を変えずに待った"]
+
+
+def test_volume_hold_skips_irregular_ops_and_is_off_by_default():
+    st, run, s = _locale_session("ja-JP", _SOUND)
+    assert not run.volume_hold.enabled and run.volume_hold.notes() == []
+    run.volume_hold.observe(st.settings, 0.0)
+    run.volume_hold.observe({**st.settings, "bgm_volume": 0}, 1.0)
+    assert not run.volume_hold.holding(1.0)  # A-03 がなければ待たない
+    done = []
+
+    async def do(op, **k):
+        done.append(op)
+        return True
+
+    s._do = do
+    st.booted = True
+    asyncio.run(s._irregular("random"))
+    assert len(done) >= 1  # 待っていなければ、イレギュラーな操作をする
+    done.clear()
+    run.volume_hold = VolumeHold(before=5, after=6.5, until=float("inf"))
+    asyncio.run(s._irregular("random"))
+    assert done == []

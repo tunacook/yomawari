@@ -30,7 +30,7 @@ from .judge import ollama
 from .events import Event, Issue, now_wall
 from .fuzz.decider import RandomDecider
 from .fuzz.advisor import ChoiceAdvisor
-from .fuzz.settings_tour import SettingsTour
+from .fuzz.settings_tour import SettingsTour, VolumeHold
 from .fuzz.experience import Experience
 from .fuzz.flow import FlowTracker
 from .fuzz.guard import Guard
@@ -450,6 +450,10 @@ class Harness:
                                   float(self.fuzz_cfg["settings_tour_timeout_sec"]),
                                   float(self.fuzz_cfg["settings_tour_factor"])),
             )
+            if "A-03" in self.rules:
+                a03 = self.rules["A-03"]
+                window = float(a03.param("window_sec"))
+                self._fuzz.volume_hold = VolumeHold(before=window, after=float(a03.param("settle_sec")) + window)
             # ゲームの流れで外れ・正解と分かった組み合わせを、ランをまたいで覚える
             self._fuzz.flow.remember(self._fuzz.experience.flow_wrong, self._fuzz.experience.flow_right)
             if self.fuzz_cfg["ai_choice"] and self.fuzz_cfg["use_flow"] and self.spec.flows and self.judge_cfg is not None:

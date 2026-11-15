@@ -48,7 +48,7 @@ from .ops import (
 )
 from .flow import Answer, FlowTracker, matches, text_matches
 from .resume import SaveHints, newest_slots, older_than, stamp_key
-from .settings_tour import SettingsTour
+from .settings_tour import SettingsTour, VolumeHold
 from .rollback import EDGE_OPS, EDGE_TIMINGS, PATTERNS, RollbackWatch, Step, describe, edge_timing, step_of
 from .listing import (
     MASKED, NO, OK, UNKNOWN, Goal, Ledger, Row, blind_candidates, direction, distance, moves, stuck_rows,
@@ -221,6 +221,8 @@ class FuzzRun:
     locale_missing: bool = False  # プロファイルの言語が、ゲームの使える言語（settings の locales）になかった
     # 設定を変えに行く（fuzz/settings_tour.py）。既定は変えに行かない（watchdog が [fuzz] の設定で作る）
     tour: SettingsTour = field(default_factory=lambda: SettingsTour(0.0, 0.0, 0.0))
+    # 音量を変えたら、A-03 が比べる区間のあいだほかの設定を変えない（fuzz/settings_tour.py）。既定は待たない
+    volume_hold: VolumeHold = field(default_factory=VolumeHold)
     # 画面の文字を読む（fuzz/reading.py）
     read_done: set[str] = field(default_factory=set)  # 画面から文字を読んだボタン（見た目が変わったら読み直す）
     read_look: dict[str, tuple[float, float]] = field(default_factory=dict)  # 読んだときのボタンの明るさ
@@ -305,7 +307,7 @@ class FuzzRun:
 
     def settings_notes(self) -> list[str]:
         """設定を変えに行った記録と、このランで変わった設定・変わらなかった設定。"""
-        return self.tour.notes(self.experience.setting_buttons)
+        return self.tour.notes(self.experience.setting_buttons) + self.volume_hold.notes()
 
     def burst_notes(self) -> list[str]:
         """区間（ガチャプレイ・ボタンの網羅）の記録。"""
@@ -635,6 +637,7 @@ class FuzzSession:
         now = time.monotonic()
         self._track_locale(now)
         self._step_tour(now)
+        self.run.volume_hold.observe(self.state.settings, now)
         if self.run.burst is not None and now >= self.run.burst[2]:
             self._end_burst("時間になった")
         sig = self.state.signature()
@@ -669,6 +672,7 @@ class FuzzSession:
         cands = self._apply_flow(cands, now)
         cands = self._apply_locale(cands)
         cands = self._apply_tour(cands)
+        cands = self.run.volume_hold.apply(cands, self.run.experience.setting_buttons, now)
         cands = self._one_mover(cands)
         top = self.state.top_modal()
         if top is not None and not top.buttons and not self.state.busy:
@@ -2342,6 +2346,8 @@ class FuzzSession:
     async def _irregular(self, trigger: str) -> None:
         if not self._ready() or self._exiting:
             return
+        if self.run.volume_hold.holding(time.monotonic()):
+            return  # 音量を変えた直後は、イレギュラーな操作で設定を変えない（A-03 の比べる区間）
         key = "irregular:" + state_key(self.state)
         run = self.run
         seq = run.rollback.best()
