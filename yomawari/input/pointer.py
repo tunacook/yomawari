@@ -1,16 +1,19 @@
 """状態トラッカーの Target（正規化座標の rect）を、画面座標に直して押す。
 
 押す直前に毎回ウィンドウを取り直し（キャッシュしない）、ゲームが前面でなければ前面にする。
+ウィンドウがディスプレイの見える範囲からはみ出していれば、人がするようにタイトルバーをドラッグして戻す。それでも
+見える範囲の外にある点は押さない（DESIGN.md §8「ウィンドウが画面からはみ出したとき」）。
 OS の差分は platform（ウィンドウ）と InputDriver（入力）に任せ、ここは OS を意識しない。
 """
 
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 
 from ..platform import Platform
 from ..sensors.screen import Shot
-from ..sensors.window import ClientArea, client_area
+from ..sensors.window import ClientArea, ScreenRect, client_area
 from ..state import GameState, Target
 from .base import InputDriver
 
@@ -23,6 +26,35 @@ class InputBlocked(PointerError):
     """OS がゲームへの入力を受け付けない（画面がロックされている、ゲームを前面にできない）。人が画面を戻すまで続く。"""
 
 
+# タイトルバーをつかむとき、左端の閉じる・最小化・拡大のボタンを避ける幅（ポイント）
+_TITLE_BUTTONS = 80.0
+# ウィンドウが見える範囲に収まっているとみなす誤差（ポイント）
+_FIT_TOLERANCE = 1.0
+
+
+def _inside(r: ScreenRect, area: ScreenRect) -> bool:
+    t = _FIT_TOLERANCE
+    return (r.x >= area.x - t and r.y >= area.y - t and r.x + r.w <= area.x + area.w + t
+            and r.y + r.h <= area.y + area.h + t)
+
+
+def _shift(start: float, size: float, lo: float, span: float) -> float:
+    """[start, start+size] を [lo, lo+span] に収める移動量。収まらなければ始まりを揃える。"""
+    if size > span or start < lo:
+        return lo - start
+    return min(0.0, lo + span - (start + size))
+
+
+@dataclass
+class WindowFit:
+    """ウィンドウが見える範囲からはみ出していたので、タイトルバーをドラッグして戻そうとした記録。"""
+
+    before: ScreenRect
+    after: ScreenRect | None  # 動かしたあとの外枠（取れなければ None）
+    visible: ScreenRect  # ディスプレイの見える範囲
+    fitted: bool  # 見える範囲に収まった
+
+
 class Pointer:
     def __init__(
         self,
@@ -31,12 +63,20 @@ class Pointer:
         pid: int,
         state: GameState,
         activate_wait: float = 0.3,
+        fit_wait: float = 0.5,
+        fit_tries: int = 3,
     ) -> None:
         self.platform = platform
         self.driver = driver
         self.pid = pid
         self.state = state
         self.activate_wait = activate_wait
+        self.fit_wait = fit_wait  # タイトルバーをドラッグしたあと、ウィンドウを取り直すまで待つ秒数
+        self.fit_tries = fit_tries  # 同じ大きさのウィンドウで、戻そうとする回数（OS が動かさないときに試し続けない）
+        self.fits: list[WindowFit] = []  # 戻そうとした記録。FuzzSession が取り出してイベントとハーネスの記録にする
+        self._fit_size: tuple[float, float] | None = None
+        self._fit_count = 0
+        self._visible: ScreenRect | None = None  # 最後に area() で見た、ディスプレイの見える範囲
 
     def area(self) -> ClientArea:
         info = self.platform.window_info(self.pid)
@@ -44,13 +84,58 @@ class Pointer:
             raise PointerError("ゲームのウィンドウが見つかりません")
         if not info.on_screen:
             raise PointerError("ゲームのウィンドウが画面に出ていません（最小化など）")
+        area = self._client(info.bounds)
+        visible_area = getattr(self.platform, "visible_area", None)
+        self._visible = visible_area(info.bounds) if visible_area is not None else None
+        if self._visible is not None and not _inside(info.bounds, self._visible):
+            area = self._fit(info.bounds, area, self._visible)
+        return area
+
+    def _client(self, bounds: ScreenRect) -> ClientArea:
         res = self.state.resolution
         if not res or not res.get("w") or not res.get("h"):
             raise PointerError("resolution イベントがまだ来ていません")
-        area = client_area(info.bounds, float(res["w"]), float(res["h"]))
+        area = client_area(bounds, float(res["w"]), float(res["h"]))
         if area is None:
-            raise PointerError(f"ウィンドウの外枠 {info.bounds} と解像度 {res['w']}x{res['h']} が合いません")
+            raise PointerError(f"ウィンドウの外枠 {bounds} と解像度 {res['w']}x{res['h']} が合いません")
         return area
+
+    def _fit(self, bounds: ScreenRect, area: ClientArea, visible: ScreenRect) -> ClientArea:
+        """ウィンドウが見える範囲からはみ出している（ゲームの設定でウィンドウを大きくした、など）。人がするように、
+        タイトルバーをドラッグして見える範囲に戻す。タイトルバーがない・見えない、同じ大きさで fit_tries 回戻せなかった
+        ときは、そのままにする（見える範囲の外の点は、押すときに断る）。"""
+        size = (bounds.w, bounds.h)
+        if size != self._fit_size:
+            self._fit_size, self._fit_count = size, 0
+        title = area.rect.y - bounds.y
+        if self._fit_count >= self.fit_tries or title < 4:
+            return area
+        lo = max(bounds.x + _TITLE_BUTTONS, visible.x + 4)
+        hi = min(bounds.x + bounds.w - 20, visible.x + visible.w - 4)
+        y0 = bounds.y + title / 2
+        if lo > hi or not visible.y <= y0 <= visible.y + visible.h:
+            return area
+        self._fit_count += 1
+        x0 = (lo + hi) / 2
+        dx = _shift(bounds.x, bounds.w, visible.x, visible.w)
+        dy = _shift(bounds.y, bounds.h, visible.y, visible.h)
+        self.ensure_front()
+        self.driver.drag(x0, y0, x0 + dx, y0 + dy)
+        if self.fit_wait > 0:
+            time.sleep(self.fit_wait)
+        info = self.platform.window_info(self.pid)
+        after = info.bounds if info is not None else None
+        fitted = after is not None and _inside(after, visible)
+        self.fits.append(WindowFit(bounds, after, visible, fitted))
+        if fitted:
+            self._fit_count = 0
+        return self._client(after) if after is not None else area
+
+    def _check_visible(self, x: float, y: float) -> None:
+        """見える範囲の外の点は押さない（押しても OS がゲームに届けない。反応しないとも数えない）。"""
+        v = self._visible
+        if v is not None and not (v.x <= x <= v.x + v.w and v.y <= y <= v.y + v.h):
+            raise PointerError(f"押す点 ({x:.0f}, {y:.0f}) がディスプレイの見える範囲の外です（ウィンドウが画面からはみ出している）")
 
     def ensure_front(self) -> None:
         locked = getattr(self.platform, "screen_locked", None)
@@ -81,6 +166,7 @@ class Pointer:
         """描画領域の正規化座標を押す（本文送りなど、ボタン以外の場所）。"""
         area = self.area()
         x, y = area.to_screen(nx, ny)
+        self._check_visible(x, y)
         self.ensure_front()
         self.driver.click(x, y, button=button, clicks=clicks)
         return (x, y)
@@ -88,6 +174,7 @@ class Pointer:
     def scroll_at(self, nx: float, ny: float, amount: int) -> tuple[float, float]:
         area = self.area()
         x, y = area.to_screen(nx, ny)
+        self._check_visible(x, y)
         self.ensure_front()
         self.driver.scroll(x, y, amount)
         return (x, y)
@@ -97,6 +184,7 @@ class Pointer:
         area = self.area()
         x0, y0 = area.to_screen(nx0, ny0)
         x1, y1 = area.to_screen(nx1, ny1)
+        self._check_visible(x0, y0)
         self.ensure_front()
         self.driver.drag(x0, y0, x1, y1)
         return (x0, y0)

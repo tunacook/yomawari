@@ -350,7 +350,9 @@ class Harness:
             asyncio.create_task(self._ticker(launch, stop)),
         ]
         if self._fuzz is not None and self._driver is not None:
-            pointer = Pointer(self.platform, self._driver, proc.pid, self.state)
+            pointer = Pointer(self.platform, self._driver, proc.pid, self.state,
+                              fit_wait=float(self.fuzz_cfg["window_fit_wait_sec"]),
+                              fit_tries=int(self.fuzz_cfg["window_fit_tries"]))
             self._session_fuzz = FuzzSession(self._fuzz, self.state, pointer, self._publish, launch, self._on_expect_exit)
             self._fuzz_task = asyncio.create_task(self._session_fuzz.loop(stop))
             tasks.append(self._fuzz_task)

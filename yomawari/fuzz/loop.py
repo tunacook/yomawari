@@ -199,6 +199,8 @@ class FuzzRun:
     locale_off: tuple[str, float] | None = None  # いまプロファイルと違う言語 (言語, 始まりの time.monotonic())
     locale_spans: list[tuple[str, float, float]] = field(default_factory=list)  # 終わったもの (言語, 始まり, 終わり)
     locale_unjudged: int = 0  # 違う言語のあいだに答えて、当たり外れを数えなかった回数
+    # ウィンドウを画面に戻そうとした記録を、ハーネスの記録に書いたもの（起動, 幅, 高さ, 収まったか）
+    window_fit_noted: set[tuple[int, int, int, bool]] = field(default_factory=set)
     locale_missing: bool = False  # プロファイルの言語が、ゲームの使える言語（settings の locales）になかった
     # 画面の文字を読む（fuzz/reading.py）
     read_done: set[str] = field(default_factory=set)  # 画面から文字を読んだボタン（見た目が変わったら読み直す）
@@ -1890,6 +1892,8 @@ class FuzzSession:
             shot = await asyncio.to_thread(self.pointer.capture, float(self.cfg["hover_wait_sec"]))
         except PointerError:
             return
+        finally:
+            self._drain_fits()
         if shot is None:
             # 画面収録の権限がないなど。見た目なしで続ける
             if not run.shot_failed:
@@ -2289,12 +2293,42 @@ class FuzzSession:
         self._verify_next = True
         self._verify_tried = []
 
+    def _drain_fits(self) -> None:
+        """ウィンドウが画面からはみ出していて、タイトルバーをドラッグして戻そうとした記録を、イベントとハーネスの記録にする。
+        ゲームの設定でウィンドウを大きくすると、左上を動かさずに広がって、右や下のボタンが画面の外に出ることがある
+        （run 2026-11-14_2214: 画面の右下に置いたウィンドウを 1600x900 にして、下のボタンが押せずに 222 分進めなかった）。"""
+        pointer = self.pointer
+        fits = getattr(pointer, "fits", None)
+        if not fits:
+            return
+        for f in fits:
+            def box(r: Any) -> list[float]:
+                return [round(r.x), round(r.y), round(r.w), round(r.h)]
+
+            self.publish(Event("harness", "window_fit", {
+                "before": box(f.before), "after": box(f.after) if f.after is not None else None,
+                "visible": box(f.visible), "fitted": f.fitted,
+            }, self.launch))
+            key = (self.launch, round(f.before.w), round(f.before.h), f.fitted)
+            if key in self.run.window_fit_noted:
+                continue
+            self.run.window_fit_noted.add(key)
+            size = f"{f.before.w:.0f}x{f.before.h:.0f}"
+            self.run.notes.append(
+                f"ゲームのウィンドウ（{size} ポイント）がディスプレイの見える範囲からはみ出していたので、タイトルバーをドラッグして"
+                + ("戻した" if f.fitted else "戻そうとしたが、収まらなかった（見える範囲の外のボタンは押さない）")
+                + f"（起動 #{self.launch}）")
+        fits.clear()
+
     async def _do(self, op: Op, trigger: str | None = None) -> bool:
         """op を実行して op イベントを出す。押せなければ op_error を出して False。"""
         blocked = False
         async with self._lock:
             try:
-                pos = await asyncio.to_thread(self._input, op)
+                try:
+                    pos = await asyncio.to_thread(self._input, op)
+                finally:
+                    self._drain_fits()
             except InputBlocked as e:
                 self.run.stats["error"] += 1
                 if self.run.block(str(e), time.time()):
