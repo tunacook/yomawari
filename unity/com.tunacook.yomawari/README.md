@@ -7,15 +7,15 @@
 | ev | 出すタイミング |
 |---|---|
 | `boot` | 起動直後（`version`, `build_type`, `build_guid`, `unity`） |
-| `heartbeat` | 1 秒ごと（`fps`, `frame_max`, `gc_mem`, `mem_total`, `mem_gfx`。`mem_*` は `ProfilerRecorder` で読めるときだけ） |
+| `heartbeat` | 1 秒ごと（`fps`, `frame_max`, `gc_mem`, `mem_total`, `mem_gfx`, `audio_db`。`mem_*` は `ProfilerRecorder` で読めるときだけ。`audio_db` はその 1 秒の最終出力の大きさ（dBFS。無音は -100）） |
 | `log_error` | Error / Exception / Assert のログ（`type`, `message`, `stack`） |
 | `resolution` | 起動直後と、解像度か画面モードが変わったとき（`w`, `h`, `mode`） |
 
-Naninovel 1.21 以上が入っていると、`Yomawari.Naninovel` が `scene` / `line` / `line_done` / `choices` / `choices_done` / `menu` / `menu_close` / `transition` / `save` / `load` / `command`（本文以外のコマンドの実行）/ `settings`（言語と使える言語の一覧・本文の出る速さ・音量。起動直後と変わったとき）/ `selected`（フォーカスがあるボタン。変わったとき）も出す。ゲームへの組み込み手順はリポジトリの `docs/game-integration.md`。
+Naninovel 1.21 以上が入っていると、`Yomawari.Naninovel` が `scene` / `line` / `line_done` / `choices` / `choices_done` / `menu` / `menu_close` / `transition` / `save` / `load` / `command`（本文以外のコマンドの実行）/ `settings`（言語と使える言語の一覧・本文の出る速さ・音量。起動直後と変わったとき）/ `selected`（フォーカスがあるボタン。変わったとき）/ `bgm_play` / `bgm_stop` / `voice` / `voice_stop`（実際に鳴っている BGM・ボイスが変わったとき）も出す。ゲームへの組み込み手順はリポジトリの `docs/game-integration.md`。
 
 ## ボタンについて出すこと
 
-`menu` のボタンには、種類（`type`）、役割（`role`）、スクロール領域で隠れている（`hidden`）、ほかの UI に覆われている（`covered`）が付く（`DESIGN.md` §3、§9「ゲーム固有の仕様」①）。ボタンの文字は出さず、ハーネスが画面から読む。どれもエンジンの標準の部品から自動で読み取り、ゲーム側で Yomawari のための部品を付ける必要はない（`DESIGN.md` §1）。
+`menu` のボタンには、種類（`type`）、役割（`role`）、スクロール領域で隠れている（`hidden`）、ほかの UI に覆われている（`covered`）が付く（`DESIGN.md` §3、§9「ゲーム固有の仕様」①）。ボタンの文字は出さず、ハーネスが画面から読む。開いたドロップダウン（`Dropdown` / `TMP_Dropdown`）のリストは、`<ドロップダウンの name>.List` という別のモーダルな `menu` として出す。どれもエンジンの標準の部品から自動で読み取り、ゲーム側で Yomawari のための部品を付ける必要はない（`DESIGN.md` §1）。
 
 - 文字: ボタンの子の `Text` / `TMP_Text` の文字列（改行を詰め、40 文字まで）。文字が画像に焼き込まれたボタンでは出ない
 - 役割: Naninovel の `TitleExitButton`（`exit`）、`ControlPanelTitleButton`（`to_title`）、`TitleNewGameButton`（`new_game`）と、言語・解像度・画面モード・画質の設定の Dropdown（`system_setting`）のときだけ出る。それ以外のボタンの役割は、ハーネスが文字・名前・見た目から推定し、押した結果で確定する（`DESIGN.md` §9「役割の推定と判定」）

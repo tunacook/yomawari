@@ -116,7 +116,7 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 | ev | 主なフィールド | 用途 |
 |---|---|---|
 | `boot` | `version`, `build_type`, `build_guid`, `unity` | 起動確認、ビルド取り違え検出（ビルド時刻は実行時に取れないので `build_guid` で代える） |
-| `heartbeat` | `fps`, `frame_max`, `gc_mem`, `mem_total`, `mem_gfx` | 1秒ごと。ハング検出、エイジング、パフォーマンス（§10「パフォーマンス」）。`frame_max` はその1秒でいちばん長かったフレームの時間（ms）。`mem_total` / `mem_gfx` は `ProfilerRecorder` の Total Used Memory / Gfx Used Memory（バイト。読めなければ出さない）。パッケージ 0.7.1 までは `fps` と `gc_mem` だけ |
+| `heartbeat` | `fps`, `frame_max`, `gc_mem`, `mem_total`, `mem_gfx`, `audio_db` | 1秒ごと。ハング検出、エイジング、パフォーマンス（§10「パフォーマンス」）。`frame_max` はその1秒でいちばん長かったフレームの時間（ms）。`mem_total` / `mem_gfx` は `ProfilerRecorder` の Total Used Memory / Gfx Used Memory（バイト。読めなければ出さない）。`audio_db` はその1秒の最終出力（`AudioListener.GetOutputData` の左チャンネル）の実効値（dBFS。無音は -100）で、音量の設定が音に効いているかを見る（§10 A-03。パッケージ 0.13.0 から）。パッケージ 0.7.1 までは `fps` と `gc_mem` だけ |
 | `command` | `name`, `target`, `line_id` | 本文以外のスクリプトのコマンドを実行し始めたとき（Naninovel では `IScriptPlayer.OnExecute` のメイントラック。本文の `print` は `line` で出す）。`name` はスクリプトに書く名前（`char`・`back`・`spawn`・`bgm` など）、`target` は名前のない引数の値（式なら出さない）。演出の前後でパフォーマンスが落ちないかを見る（§10 R-07・R-08）。パッケージ 0.8.0 から |
 | `scene` | `name`（Naninovel ではスクリプトのパス） | 進行把握 |
 | `line` | `label`, `line_id`, `speaker`, `text`, `printer`, `append` | 進行把握、テンポ。Naninovel では `label` はスクリプトのパス、`line_id` は `<パス>:<行>.<インライン>` |
@@ -130,7 +130,7 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 | `settings` | `locale`, `locales`, `reveal_speed`, `auto_delay`, `master_volume`, `bgm_volume`, `sfx_volume`, `voice_volume` | 起動直後と変化時（0.2 秒ごとに監視、値は小数第 3 位まで）。ゲームの設定。Naninovel では `ILocalizationManager.SelectedLocale`（`locales` は使える言語の一覧 `AvailableLocales`。0.11.0 から）、`ITextPrinterManager.BaseRevealSpeed` / `BaseAutoDelay`、`IAudioManager` の各音量（0〜1）。設定画面がゲーム独自の部品でも、値はエンジンの標準のサービスから読める。ハーネスは、押して値が変われば反応ありとする（設定画面の選択肢・スライダーは、押しても画面の並びが変わらない）。ウィンドウの大きさは `resolution`。パッケージ 0.10.0 から |
 | `selected` | `menu`, `name`, `nth` | 変化時（0.2 秒ごとに監視）。エンジンのフォーカス（`EventSystem.current.currentSelectedGameObject`）があるボタン。Enter・Space で押されるのはこのボタン。`menu` はそのボタンを含む表示中の `menu` のうちいちばん内側のもの、`nth` は `menu` の `buttons` と同じ数え方で、同じ名前のボタンの何番目か（0 から）。`menu` の外のもの・押せないものにフォーカスがあるときは `menu` と `name` を `null` にする。ハーネスは、通常の操作で押さないボタン（ガードの区分が `expect_exit` / `external` / `deny` など）にフォーカスがあるあいだ、Enter を押さない（§9「ガード」）。パッケージ 0.12.0 から |
 | `save` / `load` | `slot`, `type`, `phase: start/end` | セーブ検証、分岐の巻き戻し |
-| `bgm_play` / `bgm_stop` / `voice` | `id` | 音声の整合性 |
+| `bgm_play` / `bgm_stop` / `voice` / `voice_stop` | `id` | 実際に鳴っている BGM・ボイスが変わったとき（0.2 秒ごとに見る）。Naninovel では `IAudioManager.CollectPlayedBgm` / `GetPlayedVoice`、`id` はリソースのパス。`OnPlayBgm` などは再生・停止を頼まれたときのイベントで、ボイスが最後まで鳴って終わったときには来ないので、鳴っているかを見に行く。0.2 秒より短く止まってまた鳴ったものは、続けて鳴っていたものとする。音声の整合性（§10 A-01〜A-03）。パッケージ 0.13.0 から |
 | `error_shown` | `kind` | ゲームがエラー表示を出した（セーブ失敗等） |
 | `log_error` | `type`（Error / Exception / Assert）, `message`, `stack` | `logMessageReceived` から出す。L-01 の判定 |
 | `log_warning` | `message` | `logMessageReceived` の Warning。L-06 の判定。パッケージ 0.9.0 から |
@@ -769,7 +769,7 @@ class Decider(Protocol):
 | スクロールで隠れた項目 | `ScrollRect`、`RectMask2D`、`Mask` | ハーネスは、モーダルな画面ではいつもドラッグ・ホイール・方向キーを試し（§9「状態ごとの通常の操作」）、中心が描画領域の外のボタンは押さない。マスクで隠れているが描画領域の中にあるボタンは、① でしか除けない |
 | ボタンの種類 | `Button`、`Toggle`、`Dropdown` / `TMP_Dropdown`、`Slider`、`InputField` / `TMP_InputField` | `other` になる。押しても並びが変わらないものは、② で「反応しないボタン」として後回しにされる |
 | ボタンの役割 | Naninovel の `TitleExitButton`（exit）、`ControlPanelTitleButton`（to_title）、`TitleNewGameButton`（new_game）、`GameSettingsLanguage` / `Resolution` / `ScreenMode` / `GraphicsDropdown`（system_setting） | ② で推定し、押した結果で確定する |
-| 開いたドロップダウンのリスト | `Dropdown` / `TMP_Dropdown` の `IsExpanded` と、それが作る Dropdown List | 押しても反応しないボタンとして扱われる |
+| 開いたドロップダウンのリスト | `Dropdown` / `TMP_Dropdown` が開いたときに作るリスト（非公開のフィールド `m_Dropdown`。`Dropdown` には開いているかを返す公開の口がないため） | 押しても反応しないボタンとして扱われる |
 
 - ボタンの矩形を、祖先の `RectMask2D` / `Mask` の矩形と画面で切り取る。中心が見えていないボタンは `hidden` にし、ハーネスは押さない（スクロールで隠れた項目を押して、別の要素に当たるのを防ぐ）
 - ボタンの中心に EventSystem のレイキャストを当て、ほかの UI に先に当たるボタンは `covered` にする。ハーネスは押さず、S-05 の対象にもしない。どの画面がいちばん上かを、表示された順番ではなく、実際にクリックが当たるかで決めるため（Order in Layer の大きい画面の下になったメニューのボタンを押し続けて、S-05 を誤検知しないように）
@@ -777,7 +777,7 @@ class Decider(Protocol):
 - ボタンの一部が `covered` のモーダルより後に出た、モーダルでない画面に、`covered` でないボタンが見えているなら、その画面を手前の画面とする（ゲームがモーダルの印を付け忘れた、上に重なった画面）。モーダルのボタンがどれも覆われていなければ、あとから出た画面（文字の枠など）があってもモーダルを手前とする。閉じずに出し直された（動かした・ボタンが変わった）ときは、出た順番を変えない
 - `ScrollRect` ごとに、表示される範囲（`rect`）と、どの方向にまだ項目があるかを `scroll` で出す。ハーネスは、一覧の目標が表示範囲に入っているか・どちらへ動かせばよいかを、この `rect` で決める（§9「一覧の台帳と目標」）
 - ボタンの種類（`type`）を出す。押しても `menu` の並びが変わらない種類（`toggle` / `dropdown` / `slider` / `input`）は、S-05 の対象から種類で外す
-- `Dropdown` / `TMP_Dropdown`（とそれを継承した部品）が開いている（`IsExpanded`）間は、リストの項目を `<ドロップダウンの name>.List` のモーダルな `menu` として出す（未実装）。ハーネスは項目を選ぶか、リストの外を押して閉じる。リストが開いたことを「反応あり」とみなす
+- `Dropdown` / `TMP_Dropdown`（とそれを継承した部品）が開いている間は、リストの項目を `<ドロップダウンの name>.List` のモーダルな `menu` として出し、閉じたら `menu_close` を出す（パッケージ 0.14.0 から）。元の画面の `menu` からは、リストの項目とスクロール領域を除く。ハーネスは項目を選ぶか、リストの外を押して閉じる。リストが開いたことを「反応あり」とみなす
 - `locked` は、エンジンが押せないと分かっているとき（Naninovel の選択肢の `Locked` など）だけ出す
 
 #### ② 推定し、押した結果で確定する
@@ -868,7 +868,7 @@ answers = [                             # 質問ごとの正解（§9「答え�
 - 値が本文に効いているかは、文字の速さを V-08、言語を V-09 で見る（§10）。設定を変えに行ったときだけでなく、ランの中で値が変わったときはいつも見る
   - 文字の速さ: 本文の1文字あたりの表示時間（`line` から `line_done` まで。ハーネスが途中で操作した行と短い行は除く）を、`reveal_speed` の値ごとに集めて比べる。値が大きいほど速い（Naninovel の reveal speed）。run 2026-11-14_2214・2026-11-13_2251 では、0 で約 17〜19 ms、0.5 で約 7〜9 ms、0.75 で約 4 ms、1 で 0 ms（一度に出る）だった
   - 言語: 切り替えたあとの本文の最初の数行で、いちばん多い文字の種類（かな・漢字・ハングル・ラテン文字・キリル文字）が、その言語の見込みに当たるかを見る。見込みは `rules.yaml` の V-09 `scripts` に言語タグごとに書く
-  - 音量で音が変わるかを確かめるのは未実装。パッケージが実際の音量を出す必要がある
+  - 音量で音が変わるかは、パッケージが出す最終出力の大きさ（`heartbeat` の `audio_db`）で見る（§10 A-03）。全体と BGM の音量だけで、効果音・ボイスの音量は見ない
 
 #### ゲームの流れ
 ゲームには、本編を読み進めるだけでは分からない遊び方のサイクルがある（例: 本編で質問が出る → 手がかりの一覧から開示済みのものを選ぶ → 読むと答えの候補が開示される → 候補から選んで答える）。ハーネスは画面ごとにボタンを試すので、それぞれの画面は動かせても、サイクルを最後まで回さずに途中で本編へ戻ってループすることがある。人がゲームの遊び方を説明するように、プロファイルの `[[flow]]` に手順を書いてハーネスに渡す（`fuzz/flow.py`）。
@@ -1114,8 +1114,9 @@ answers = [                             # 質問ごとの正解（§9「答え�
 | V-07 | 同じ種類に見えるボタンの並びで、押せないときの一般的な見せ方（半透明・灰色）か伏せ字で押せないように見えるボタンを押したら、別の画面が出た（ボタンのある `menu` かモーダルが開いた・閉じた、`scene` が変わった。§9「画像による推定」）。ほかより暗いだけでは出さない。押せないことを知らせる演出（震える、ボタンのない通知）と、押してセーブが始まったもの（空きのセーブスロットは暗く写る）は除く。ボタンごとに1回 | Major |
 | V-08 | 文字の速さ（`reveal_speed`）の設定が本文に効いていない。本文の1文字あたりの表示時間を値ごとに集め（ハーネスが途中で操作した行・短い行は除く）、大きい値（速い）の中央値が、小さい値より 20% 以上短くなっていない。小さい値がもともと速い（1文字 2 ms 未満。スキップ中の行が多いなど）ときは判定しない（フェーズ2で先に入れた。§9「設定を変えに行く」） | Major |
 | V-09 | 言語（`locale`）を切り替えたのに、そのあとの本文の最初の5行のうち4行以上が、その言語の文字（`rules.yaml` の `scripts`）で出ていない。見込みを書いていない言語は判定しない（フェーズ2で先に入れた。§9「設定を変えに行く」） | Major |
-| A-01 | `bgm_stop` なしで次の `bgm_play` | Major |
-| A-02 | タイトル戻り後も音声イベントが続く | Minor |
+| A-01 | BGM が 2 つ以上、`min_sec`（5 秒）以上重なって鳴り続ける（前の BGM を止めずに次の BGM を鳴らした）。止めて次へ移るフェードは、止めた時点で外れるので数えない。重なった組ごとに起動につき1件（フェーズ2で先に入れた） | Major |
+| A-02 | タイトルに戻った（起動して最初にボタンを持って出た menu が、閉じたあとまた出た）あとも、戻る前に鳴り始めたボイスが `min_sec`（5 秒）以上鳴り続ける。BGM の重なりは A-01 で見る。起動につき1件（フェーズ2で先に入れた） | Minor |
+| A-03 | `master_volume`・`bgm_volume` を変えたのに、出力の大きさ（`heartbeat` の `audio_db`）の変わり方が、見込み（20·log10(後 / 前) dB。0 は `min_volume` として数える）の `effect_ratio`（0.3）未満。見込みが `min_change_db`（6 dB）以上のときだけ、変える前の `window_sec`（5 秒）と、変えて `settle_sec`（1.5 秒）たってからの `window_sec` の中央値で比べる。そのあいだに BGM・ボイス・ほかの設定が変わったとき、音が `silent_db`（-60 dB）未満のとき、heartbeat が `min_samples`（3）回に足りないときは判定しない。効果音・ボイスの音量は、ほかの音と分けられないので見ない。設定ごとに起動につき1件（フェーズ2で先に入れた。§9「設定を変えに行く」） | Major |
 | F-01 | `save`（`phase: end`）が来たのに、セーブの場所（persistentDataPath か `builds.<name>.save_dir`）の下に、そのセーブを始めたあとに更新されたファイルが1つもない。ファイルの名前の付け方はゲームごとに違うので、どのファイルかは問わない。ハーネスがセーブの終わりから `check_after_sec` 待って見て `save_file` イベントを出し、それで判定する（フェーズ2で先に入れた） | Critical |
 | F-02 | セーブ中強制終了→再起動後のロードで例外、またはスロット消失 | Critical |
 | F-03 | 設定を変えたあと、正常に終わって（ハーネスが止めた場合も含む）起動し直したら、最初の `settings` が前の起動の終わりの値と違う。比べるのは、前の起動で最後に設定の画面（押して設定の値だけが変わったボタンのある menu）を閉じたときの値。開いたまま終わったときは、最後の値でもよい（設定を保存するのは画面を閉じたときというゲームが多い）。前の起動が落ちた・`on_detect: restart` の問題で終わったときは比べない（フェーズ2で先に入れた。§9「設定を変えに行く」） | Major |
