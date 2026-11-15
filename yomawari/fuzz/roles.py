@@ -24,6 +24,10 @@ ROLES = ("exit", "external", "to_title", "system_setting", "new_game", "deny")
 CONFIRMABLE = ("exit", "external", "to_title", "system_setting")
 
 
+# キーワードからした推定の根拠の書き出し（RoleHints.estimate）。押した結果からした推定（suspect）と分ける
+_HINTED = ("文字「", "名前「")
+
+
 class RoleHintError(RuleError):
     pass
 
@@ -34,10 +38,15 @@ class RoleHints:
 
     text: dict[str, list[str]] = field(default_factory=dict)
     name: dict[str, list[str]] = field(default_factory=dict)
+    max_chars: int | None = None  # 文字で推定するのは、文字（空白を除く）がこの長さまでのボタンだけ
 
     def estimate(self, target: Target) -> tuple[str, str] | None:
-        """(役割, 根拠) を返す。文字で決まればそれ、なければ名前。複数の役割に当てはまれば推定しない。"""
-        if target.text:
+        """(役割, 根拠) を返す。文字で決まればそれ、なければ名前。複数の役割に当てはまれば推定しない。
+
+        文字で推定するのは、ボタンの名前として読める短い文字のときだけ。同じ名前のボタンが並んでいるもの（一覧の
+        スロットなど）と、長い文字のものは、中身（題名・本文）を見せる項目で、文字の中の語は役割を表さない
+        （run 2026-11-12_2156: 思い出の言葉の一覧で、題名に "Exit" を含むスロットを exit と推定し、押さなくなった）。"""
+        if self.text_usable(target):
             roles = {r for r, words in self.text.items() if any(_text_match(w, target.text) for w in words)}
             if len(roles) == 1:
                 return roles.pop(), f"文字「{target.text}」"
@@ -48,6 +57,12 @@ class RoleHints:
         if len(roles) == 1:
             return roles.pop(), f"名前「{target.name}」"
         return None
+
+
+    def text_usable(self, target: Target) -> bool:
+        if not target.text or target.repeated:
+            return False
+        return self.max_chars is None or len("".join(target.text.split())) <= self.max_chars
 
 
 def load_role_hints(path: Path) -> RoleHints:
@@ -65,6 +80,11 @@ def load_role_hints(path: Path) -> RoleHints:
             if not isinstance(words, list) or not all(isinstance(w, str) and w for w in words):
                 raise RoleHintError(f"rules.yaml の role_hints.{role}.{kind} は文字列の配列にしてください")
             getattr(hints, kind)[role] = list(words)
+    limit = doc.get("role_hint_max_chars")
+    if limit is not None:
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+            raise RoleHintError("rules.yaml の role_hint_max_chars は正の整数にしてください")
+        hints.max_chars = limit
     return hints
 
 
@@ -139,6 +159,11 @@ class RoleBook:
             return e.role
         if target.role:
             return target.role
+        if e is not None and self._stale(e, target):
+            del self.entries[target.label]
+            self.new.append(f"`{target.label}` は{e.evidence}から `{e.role}` と推定していたが、いまの文字と名前からは"
+                            f"そう推定できないので取り消した")
+            e = None
         if e is None:
             guess = self.hints.estimate(target)
             if guess is None:
@@ -147,6 +172,16 @@ class RoleBook:
             e = self.entries[target.label] = RoleEntry(role, "estimated", why, self.build)
             self.new.append(f"`{target.label}` は{why}から `{role}` と推定した")
         return e.role if e.status == "estimated" else None
+
+    def _stale(self, e: RoleEntry, target: Target) -> bool:
+        """文字・名前のキーワードからした推定が、いまの文字・名前と推定の決まりでは成り立たない。前のランで覚えた推定も
+        押す前に見直す（文字が変わった、推定の決まりを直した）。文字からの推定で、文字をまだ読めていないときは見直さない。"""
+        if e.status != "estimated" or not e.evidence.startswith(_HINTED):
+            return False
+        if e.evidence.startswith("文字「") and not target.text and not target.repeated:
+            return False
+        guess = self.hints.estimate(target)
+        return guess is None or guess[0] != e.role
 
     def is_estimate(self, target: Target) -> bool:
         e = self.entries.get(target.label)

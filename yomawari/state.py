@@ -47,6 +47,7 @@ class Target:
     locked: bool = False  # ゲームが「いまは押せない（押しても何も起きないのが仕様）」と伝えたもの
     hidden: bool = False  # ゲームが「スクロール領域のマスクで隠れている」と伝えたもの
     covered: bool = False  # ゲームが「中心を押すと、上に重なったほかの UI に当たる」と伝えたもの
+    repeated: bool = False  # 同じ menu に同じ名前のボタンが並んでいる（一覧のスロットなど、中身を見せる項目）
 
     @property
     def key(self) -> str:
@@ -223,6 +224,7 @@ class GameState:
                     hidden=bool(b.get("hidden")), covered=bool(b.get("covered")),
                 ))
                 seen[bname] = seen.get(bname, 0) + 1
+        buttons = [dataclasses.replace(b, repeated=True) if seen[b.name] > 1 else b for b in buttons]
         prev = self.menus.get(name)
         if self.title_menu is None and buttons:
             # 最初はボタンなし（フェードイン中で押せない）で出て、あとからボタン付きで出し直すことがあるので、
