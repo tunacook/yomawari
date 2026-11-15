@@ -25,6 +25,11 @@ locale = "ja-JP"
 # CG・回想の一覧。ボタンが多く、総当たりに時間がかかるので、ほかの画面より押されにくくする
 weight = 0.5
 
+[screens.SaveLoadUI]
+# 押しても反応しないのが仕様のボタンの name（例: セーブ画面のオートセーブの枠）。ハーネスは押して、作用しないことを確かめる。
+# 反応しなくても S-05・「一度も反応しなかったボタン」に数えない
+silent = ["SaveLoadAutoSlot (Clone)"]
+
 [rules.L-01]
 # 既知で無害なエラー。直したら消す
 ignore_patterns = []

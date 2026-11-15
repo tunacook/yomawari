@@ -432,6 +432,9 @@ class ButtonNoResponseDetector(Detector):
         target = str(d.get("target"))
         if d.get("type") in self.ignore_types or any(p.search(target) for p in self.ignore):
             return []
+        if d.get("expected_silent") and not d.get("responded"):
+            # 反応しなくて正しい押下（プロファイルの silent、選ばれている設定の値を押した）。作用しないことを確かめた
+            return []
         if d.get("quiet") and not d.get("responded"):
             # 押した時点で暗い・空に見えていた（反応しないのが仕様と見込んだ）ボタン。セーブ画面では反応した
             # 空のスロットが、ロード画面で反応しないのは正常なので、数えない

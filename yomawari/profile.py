@@ -17,7 +17,7 @@ from .config import GUARD_KINDS, GUARD_ROLE_DEFAULTS, BuildConfig, Config, Confi
 from .detect.engine import Rule
 from .fuzz.flow import Flow, parse_flows
 
-SCREEN_KEYS = ("weight",)
+SCREEN_KEYS = ("weight", "silent")
 PROFILE_SECTIONS = ("guard", "screens", "rules", "flow", "locale")
 
 
@@ -26,6 +26,8 @@ class GameSpec:
     guard_buttons: dict[str, list[str]] = field(default_factory=lambda: {k: [] for k in GUARD_KINDS})
     guard_roles: dict[str, str] = field(default_factory=lambda: dict(GUARD_ROLE_DEFAULTS))
     screen_weights: dict[str, float] = field(default_factory=dict)
+    # 押しても反応しないのが仕様のボタン（[screens.<menu>] silent）。"<menu>/<ボタンの name>"
+    silent_buttons: set[str] = field(default_factory=set)
     rules: dict[str, dict[str, Any]] = field(default_factory=dict)  # ルールID → params の上書き
     flows: list[Flow] = field(default_factory=list)  # ゲームの流れ（[[flow]]）
     # プロファイルの言語（ゲームの言語のタグ。例: ja-JP）。正解の文字などを書いた言語。ハーネスはゲームの言語をこれに合わせ、
@@ -91,6 +93,11 @@ def build_spec(profile: dict[str, Any], local: dict[str, Any], profile_path: Pat
             if not isinstance(w, int | float) or w < 0:
                 raise ConfigError(f"screens.{menu}.weight は 0 以上の数にしてください")
             spec.screen_weights[menu] = float(w)
+        if "silent" in raw:
+            names = raw["silent"]
+            if not isinstance(names, list) or not all(isinstance(n, str) and n for n in names):
+                raise ConfigError(f"screens.{menu}.silent はボタンの name（GameObject の名前）の文字列の配列にしてください")
+            spec.silent_buttons |= {f"{menu}/{n}" for n in names}
 
     for rid, params in doc.get("rules", {}).items():
         if not isinstance(params, dict):

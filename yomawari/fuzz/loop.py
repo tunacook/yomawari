@@ -103,6 +103,14 @@ class FuzzRun:
     # 押すと切り替わる操作（トグル、押すと設定の値だけが変わるもの）。オンになったあとは、もう一度押しても何も起きない
     # ことがあるので、応答確認に使わない（run 2026-11-14_2214: 押してロードに切り替えたタブを応答確認で押し直し、S-01 にした）
     switches: set[str] = field(default_factory=set)
+    # 押すと設定の値だけが変わったボタン（label）→ 変わった設定と、押したあとの値。同じ値のときに押して反応しないのは、
+    # 「選ばれている値を押しても作用しない」ことを確かめた押下で、不具合としない（run 2026-11-14_2214: 選ばれている
+    # 言語・文字の速さの選択肢を押して S-05 にした）
+    setting_effects: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # プロファイルの [screens.<menu>] silent（押しても反応しないのが仕様のボタン）。"<menu>/<ボタンの name>"
+    silent_spec: set[str] = field(default_factory=set)
+    # 反応しなくて正しい押下を確かめた回数（理由, label）。ハーネスの記録に、ボタンごとに最初の1回を書く
+    expected_silent: Counter[tuple[str, str]] = field(default_factory=Counter)
     last_press: tuple[str, float] | None = None  # 最後に押したボタンの label と時刻（役割の確定に使う）
     # 押したあともゲームが動き続けた（同じ起動のうちに次の操作をした）ボタンの label。終了ボタンとはみなさない
     survived: set[str] = field(default_factory=set)
@@ -1695,6 +1703,30 @@ class FuzzSession:
         return {label for label in run.answered | run.experience.progressed_targets()
                 if run.miss_streak[label] < limit}
 
+    def _expected_silent(self, t: Target | None) -> str | None:
+        """押しても反応しないのが正しい押下か。プロファイルの silent に書いたボタンは profile、押すと設定の値だけが
+        変わるボタンで、その値がもう選ばれているときは already_set。押すのはやめない（作用しないことを確かめる）。"""
+        if t is None or t.kind != "button":
+            return None
+        if t.key in self.run.silent_spec:
+            return "profile"
+        effect = self.run.setting_effects.get(t.label)
+        now = self.state.settings or {}
+        if effect and all(now.get(k) == v for k, v in effect.items()):
+            return "already_set"
+        return None
+
+    def _confirm_silent(self, reason: str, t: Target) -> None:
+        run = self.run
+        run.expected_silent[(reason, t.label)] += 1
+        if run.expected_silent[(reason, t.label)] > 1:
+            return
+        why = ("プロファイルの silent に書いてある" if reason == "profile"
+               else "押すと選ばれる設定の値（" + "、".join(f"{k}={v}" for k, v in run.setting_effects[t.label].items())
+               + "）がもう選ばれていた")
+        run.notes.append(f"`{t.label}` は{why}ので、押して作用しないことを確かめた（反応しなくても検出しない。"
+                         f"起動 #{self.launch}）")
+
     def _quiet(self) -> set[str]:
         """押しても反応しないと見込んでいるボタン（暗い、文字で空と分かる、押しても一度も反応しなかったもの・それと
         同じ見た目のもの）の label。一度も反応しなかったボタンは S-05 の対象でないので、押し直しても待つ時間は短くてよい。"""
@@ -2096,9 +2128,11 @@ class FuzzSession:
         saves_before = self.state.saves
         commands_before = self.state.commands
         settings_before = self.state.settings_changes
-        locale_before = (self.state.settings or {}).get("locale")
+        values_before = dict(self.state.settings or {})
+        locale_before = values_before.get("locale")
+        expected = self._expected_silent(op.target)
         # 反応しないと見込んでいるボタンは、何も起きないことを確かめるだけなので、待つ時間を短くする
-        quiet = op.target is not None and op.target.label in self._quiet()
+        quiet = op.target is not None and (op.target.label in self._quiet() or expected is not None)
         started = time.monotonic()
         press = Press(key, op.label, started)
         self.run.presses.append(press)
@@ -2145,11 +2179,17 @@ class FuzzSession:
             if op.target is not None and (op.target.type == "toggle" or (
                     self.state.settings_changes != settings_before and not screen_changed)):
                 self.run.switches.add(op.label)
+            if op.target is not None and self.state.settings_changes != settings_before and not screen_changed:
+                now = self.state.settings or {}
+                self.run.setting_effects[op.target.label] = {
+                    k: v for k, v in now.items() if k != "locales" and values_before.get(k) != v}
         else:
             self.run.stats["no_response"] += 1
         if op.target is not None:
             self._verify_behind(op.target, responded)
-        if op.target is not None and op.target.kind == "button":
+        if expected is not None and not responded and op.target is not None:
+            self._confirm_silent(expected, op.target)
+        elif op.target is not None and op.target.kind == "button":
             (self.run.silent.discard if responded else self.run.silent.add)(op.target.label)
             self._note_silent(op.target, responded)
             if responded:
@@ -2212,6 +2252,9 @@ class FuzzSession:
                     # 待っているあいだに、スクリプトのコマンドが進んだ（本文のない演出の途中。S-01 はゲームが止まったとしない）
                     "commands_ran": commands_ran,
                     "quiet": quiet,
+                    # 反応しなくて正しい押下（profile: プロファイルの silent、already_set: 選ばれている設定の値）。
+                    # 反応がなくても S-05・「一度も反応しなかったボタン」に数えない
+                    "expected_silent": expected,
                     # 画面の並びは変わらなかったが、同じ画面のボタンの文字が変わった（ページ送り・タブの切り替えなど）
                     "texts_changed": texts_changed,
                     "responded": responded,

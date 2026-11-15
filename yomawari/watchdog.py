@@ -428,6 +428,7 @@ class Harness:
                 response_checks=int(self.rules["S-01"].params.get("checks", 1)),
                 run_sec=opts.hours * 3600,
                 screen_weights=self.spec.screen_weights,
+                silent_spec=set(self.spec.silent_buttons),
                 flow=FlowTracker(self.spec.flows),
                 locale=self.spec.locale,
                 inactive_words=load_inactive_words(self.rules_path),
