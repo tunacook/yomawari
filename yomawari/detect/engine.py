@@ -8,7 +8,6 @@ R 系（パフォーマンス）は detect/perf.py の PerfMonitor でまとめ�
 from __future__ import annotations
 
 import re
-import statistics
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -597,6 +596,12 @@ _SCRIPTS = {
 }
 
 
+def _median(values: list[float]) -> float:
+    s = sorted(values)
+    n = len(s)
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
 def _plain(text: Any) -> str:
     """本文からタグ（<ruby=...> など）と空白を除いたもの。"""
     return re.sub(r"\s", "", _TAG.sub("", str(text or "")))
@@ -666,8 +671,8 @@ class RevealSpeedDetector(Detector):
             if (slow, fast) in self.judged:
                 continue
             self.judged.add((slow, fast))
-            ms_slow = statistics.median(self.samples[slow][: self.min_samples])
-            ms_fast = statistics.median(self.samples[fast][: self.min_samples])
+            ms_slow = _median(self.samples[slow][: self.min_samples])
+            ms_fast = _median(self.samples[fast][: self.min_samples])
             if ms_slow < self.min_ms or ms_fast <= ms_slow * (1 - self.margin):
                 continue
             out.append(self.issue(
