@@ -268,6 +268,81 @@ class LogWarningDetector(Detector):
         ]
 
 
+def _log_head(ev: Event) -> str:
+    msg = str(ev.data.get("message") or "")
+    return msg.splitlines()[0] if msg else ""
+
+
+class _LogPatternDetector(Detector):
+    """ゲームが出すログ（log_error / log_warning）のうち、patterns のどれかに当たるもの。"""
+
+    kinds = ("log_error", "log_warning")
+
+    def __init__(self, rule: Rule) -> None:
+        super().__init__(rule)
+        self.patterns = [re.compile(p) for p in rule.param("patterns")]
+
+    def match(self, ev: Event) -> re.Match[str] | None:
+        if ev.source != "game" or ev.kind not in self.kinds:
+            return None
+        head = _log_head(ev)
+        return next((m for m in (p.search(head) for p in self.patterns) if m), None)
+
+    def claims(self, ev: Event) -> bool:
+        """このログをこのルールで判定する。True なら L-01・L-06 では数えない。"""
+        return self.match(ev) is not None
+
+
+class MissingGlyphDetector(_LogPatternDetector):
+    """L-02: TextMeshPro の、フォントにない文字の警告。フォントと文字の組ごとに1件。
+    文字ごとの警告は L-06 では数えない（同じ文面の名前と数値だけが違う警告が、文字の数だけ並ぶため）。"""
+
+    kinds = ("log_warning",)
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        m = self.match(ev)
+        if m is None:
+            return []
+        g = m.groupdict()
+        code, font, obj = g.get("code") or "", g.get("font") or "?", g.get("object")
+        try:
+            char = chr(int(code, 16))
+        except ValueError:
+            char = ""
+        shown = f"「{char}」（U+{code.upper()}）" if char else f"（{code}）"
+        where = f"（テキスト {obj}）" if obj else ""
+        return [
+            self.issue(
+                f"フォント {font} にない文字{shown}を表示しようとしました{where}",
+                key=f"{font}|{code.upper()}", launch=ev.launch, t=ev.t, wall=ev.wall,
+                font=font, char=char, code=code.upper(), object=obj, message=_log_head(ev),
+            )
+        ]
+
+
+class ResourceLoadDetector(_LogPatternDetector):
+    """L-03: リソースの読み込みに失敗した（ログの文面のパターン）。読み込めなかったものごとに1件。
+    同じログを L-01・L-06 では数えない。"""
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        m = self.match(ev)
+        if m is None:
+            return []
+        g = m.groupdict()
+        name = g.get("name")
+        head = _log_head(ev)
+        what = f"{name}" + (f"（{g['type']}）" if g.get("type") else "") if name else head[:200]
+        level = "エラー" if ev.kind == "log_error" else "警告"
+        return [
+            self.issue(
+                f"リソースを読み込めませんでした: {what}（{level}）",
+                key=name or head[:120], launch=ev.launch, t=ev.t, wall=ev.wall,
+                name=name, type=g.get("type"), message=head,
+                log="\n".join(x for x in (str(ev.data.get("message") or ""), str(ev.data.get("stack") or "")) if x),
+            )
+        ]
+
+
 class ExitTimeoutDetector(Detector):
     """C-04: 終了を期待する操作（[guard.buttons] expect_exit）から、一定時間たってもプロセスが残る。"""
 
@@ -514,6 +589,8 @@ DETECTORS: dict[str, Callable[[Rule], Detector]] = {
     "V-07": DimButtonRespondedDetector,
     "L-01": LogErrorDetector,
     "L-06": LogWarningDetector,
+    "L-02": MissingGlyphDetector,
+    "L-03": ResourceLoadDetector,
 }
 
 
@@ -531,7 +608,12 @@ class Engine:
 
     def feed(self, ev: Event) -> list[Issue]:
         out: list[Issue] = []
+        # L-02・L-03 で判定するログは、L-01・L-06 では数えない（同じログを2件にしない）
+        claimed = ev.kind in ("log_error", "log_warning") and any(
+            isinstance(d, _LogPatternDetector) and d.claims(ev) for d in self.detectors)
         for d in self.detectors:
+            if claimed and isinstance(d, (LogErrorDetector, LogWarningDetector)):
+                continue
             out.extend(d.on_event(ev))
         return out
 
