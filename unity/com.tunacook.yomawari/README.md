@@ -7,11 +7,11 @@
 | ev | 出すタイミング |
 |---|---|
 | `boot` | 起動直後（`version`, `build_type`, `build_guid`, `unity`） |
-| `heartbeat` | 1 秒ごと（`fps`, `frame_max`, `gc_mem`, `mem_total`, `mem_gfx`。`mem_*` は `ProfilerRecorder` で読めるときだけ） |
+| `heartbeat` | 1 秒ごと（`fps`, `frame_max`, `gc_mem`, `mem_total`, `mem_gfx`, `audio_db`。`mem_*` は `ProfilerRecorder` で読めるときだけ。`audio_db` はその 1 秒の最終出力の大きさ（dBFS。無音は -100）） |
 | `log_error` | Error / Exception / Assert のログ（`type`, `message`, `stack`） |
 | `resolution` | 起動直後と、解像度か画面モードが変わったとき（`w`, `h`, `mode`） |
 
-Naninovel 1.21 以上が入っていると、`Yomawari.Naninovel` が `scene` / `line` / `line_done` / `choices` / `choices_done` / `menu` / `menu_close` / `transition` / `save` / `load` / `command`（本文以外のコマンドの実行）/ `settings`（言語と使える言語の一覧・本文の出る速さ・音量。起動直後と変わったとき）/ `selected`（フォーカスがあるボタン。変わったとき）も出す。ゲームへの組み込み手順はリポジトリの `docs/game-integration.md`。
+Naninovel 1.21 以上が入っていると、`Yomawari.Naninovel` が `scene` / `line` / `line_done` / `choices` / `choices_done` / `menu` / `menu_close` / `transition` / `save` / `load` / `command`（本文以外のコマンドの実行）/ `settings`（言語と使える言語の一覧・本文の出る速さ・音量。起動直後と変わったとき）/ `selected`（フォーカスがあるボタン。変わったとき）/ `bgm_play` / `bgm_stop` / `voice` / `voice_stop`（実際に鳴っている BGM・ボイスが変わったとき）も出す。ゲームへの組み込み手順はリポジトリの `docs/game-integration.md`。
 
 ## ボタンについて出すこと
 

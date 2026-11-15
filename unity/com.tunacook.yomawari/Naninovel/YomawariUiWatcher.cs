@@ -16,6 +16,7 @@ namespace Yomawari
      * - transition: ISceneTransitionUI / ILoadingUI の表示（start）と非表示（end）
      * - choices: 表示中の選択肢ボタン（id, text, rect, locked）
      * - selected: EventSystem のフォーカスがあるボタン（menu, name, nth）。Enter で押されるのはこのボタン
+     * - bgm_play / bgm_stop / voice / voice_stop: IAudioManager で実際に鳴っている BGM・ボイス（id はリソースのパス）
      * ボタンの位置はホバーの拡大などで少し動くので、変化の判定は 1/20 単位に丸めて行う（出す値は丸めない）
      * </summary>
      */
@@ -46,6 +47,9 @@ namespace Yomawari
         string choicesSignature = ""; // 空 = 選択肢なし。起動直後に空の choices を出さない
         string settingsSignature; // 最後に出した settings。null = まだ出していない
         string selectedSignature = ""; // 最後に出した selected。空 = フォーカスのあるボタンなし（起動直後は出さない）
+        HashSet<string> bgmShown = new(); // 最後に鳴っていると出した BGM
+        HashSet<string> bgmNow = new();
+        string voiceShown; // 最後に鳴っていると出したボイス
         float elapsed;
 
         // choices_done の index（直近に出した choices の中での順番）。見つからなければ -1
@@ -70,6 +74,29 @@ namespace Yomawari
             ScanChoices();
             ScanSettings();
             ScanSelected();
+            ScanAudio();
+        }
+
+        // 実際に鳴っている BGM とボイスを見て、鳴り始めた・止まったときに出す。IAudioManager の OnPlayBgm などは再生・停止を
+        // 頼まれたときに来るイベントで、ボイスが最後まで鳴って終わったときには来ないので、鳴っているかどうかを見に行く。
+        // ハーネスは、BGM が重なったまま鳴り続ける（A-01）、タイトルに戻ってもボイスが鳴り続ける（A-02）を見る。
+        // 0.2 秒より短いあいだ止まってまた鳴ったもの（同じ曲をすぐ鳴らし直したなど）は、続けて鳴っていたものとして扱う
+        void ScanAudio()
+        {
+            if (!Engine.TryGetService<IAudioManager>(out var audio)) return;
+            bgmNow.Clear();
+            audio.CollectPlayedBgm(bgmNow);
+            foreach (var path in bgmShown)
+                if (!bgmNow.Contains(path)) YomawariLog.Emit("bgm_stop", "\"id\":" + YomawariFormat.Str(path));
+            foreach (var path in bgmNow)
+                if (!bgmShown.Contains(path)) YomawariLog.Emit("bgm_play", "\"id\":" + YomawariFormat.Str(path));
+            (bgmShown, bgmNow) = (bgmNow, bgmShown);
+
+            var voice = audio.GetPlayedVoice();
+            if (voice == voiceShown) return;
+            if (voiceShown != null) YomawariLog.Emit("voice_stop", "\"id\":" + YomawariFormat.Str(voiceShown));
+            if (voice != null) YomawariLog.Emit("voice", "\"id\":" + YomawariFormat.Str(voice));
+            voiceShown = voice;
         }
 
         // EventSystem のフォーカスがあるボタン（selected）を、変わったときだけ出す。Enter・Space で押されるのはこのボタンで、

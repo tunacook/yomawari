@@ -7,6 +7,7 @@ R 系（パフォーマンス）は detect/perf.py の PerfMonitor でまとめ�
 
 from __future__ import annotations
 
+import math
 import re
 from collections import deque
 from collections.abc import Callable
@@ -660,6 +661,195 @@ class WindowLostDetector(Detector):
         )]
 
 
+class BgmOverlapDetector(Detector):
+    """A-01: BGM が 2 つ以上、min_sec 以上重なって鳴り続ける（前の BGM を止めずに次の BGM を鳴らした）。
+    パッケージが実際に鳴っている BGM を見て出す bgm_play / bgm_stop で数える。止めて次へ移るフェードの重なりは、
+    止めた時点（bgm_stop）で外れるので数えない。重なった組ごとに起動につき 1 件。"""
+
+    def __init__(self, rule: Rule) -> None:
+        super().__init__(rule)
+        self.min_sec = float(rule.param("min_sec"))
+        self.playing: dict[str, float] = {}  # id → 鳴り始めた時刻
+        self.since: tuple[float, str] | None = None  # 2 つ以上になった時刻
+        self.reported: set[tuple[int, tuple[str, ...]]] = set()
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        if ev.kind in ("launch", "proc_exit"):
+            self.playing.clear()
+            self.since = None
+        elif ev.kind == "bgm_play" and ev.data.get("id"):
+            self.playing[str(ev.data["id"])] = ev.t
+            if len(self.playing) >= 2 and self.since is None:
+                self.since = (ev.t, ev.wall)
+        elif ev.kind == "bgm_stop":
+            self.playing.pop(str(ev.data.get("id")), None)
+            if len(self.playing) < 2:
+                self.since = None
+        return []
+
+    def on_tick(self, now: float, launch: int) -> list[Issue]:
+        if self.since is None or now - self.since[0] < self.min_sec:
+            return []
+        ids = tuple(sorted(self.playing))
+        if (launch, ids) in self.reported:
+            return []
+        self.reported.add((launch, ids))
+        names = "、".join(f"`{i}`" for i in ids)
+        return [self.issue(
+            f"BGM が {len(ids)} つ重なったまま {self.min_sec:g} 秒以上鳴っています: {names}。前の BGM を止めずに次の BGM を"
+            "鳴らしていないか、スクリプトを確かめてください（意図して重ねているなら、rules.yaml で外す）",
+            key="|".join(ids), launch=launch, t=now, wall=self.since[1], bgm=list(ids),
+        )]
+
+
+class TitleVoiceDetector(Detector):
+    """A-02: タイトルに戻ったあとも、戻る前に鳴り始めたボイスが min_sec 以上鳴り続ける。
+    タイトルは、起動して最初にボタンを持って出た menu（GameState と同じ決め方）。それが閉じたあと、また出たらタイトルに
+    戻ったとする。BGM の重なりは A-01 で見る。起動につき 1 件。"""
+
+    def __init__(self, rule: Rule) -> None:
+        super().__init__(rule)
+        self.min_sec = float(rule.param("min_sec"))
+        self._reset()
+
+    def _reset(self) -> None:
+        self.title: str | None = None
+        self.title_open = False
+        self.voice: tuple[str, float] | None = None  # 鳴っているボイスと、鳴り始めた時刻
+        self.returned: tuple[float, str] | None = None  # タイトルに戻った時刻
+        self.reported = False
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        d = ev.data
+        if ev.kind in ("launch", "proc_exit"):
+            self._reset()
+        elif ev.kind == "menu" and d.get("name"):
+            name = str(d["name"])
+            if self.title is None and d.get("buttons"):
+                self.title, self.title_open = name, True
+            elif name == self.title and not self.title_open:
+                self.title_open = True
+                self.returned = (ev.t, ev.wall)
+        elif ev.kind == "menu_close" and d.get("name") == self.title:
+            self.title_open = False
+            self.returned = None
+        elif ev.kind == "voice" and d.get("id"):
+            self.voice = (str(d["id"]), ev.t)
+        elif ev.kind == "voice_stop":
+            self.voice = None
+        return []
+
+    def on_tick(self, now: float, launch: int) -> list[Issue]:
+        if self.reported or self.returned is None or self.voice is None:
+            return []
+        at, wall = self.returned
+        if self.voice[1] >= at or now - at < self.min_sec:
+            return []
+        self.reported = True
+        return [self.issue(
+            f"タイトルに戻ってから {self.min_sec:g} 秒たっても、戻る前に鳴り始めたボイス `{self.voice[0]}` が鳴り続けています",
+            key=self.title or "", launch=launch, t=now, wall=wall, voice=self.voice[0], title=self.title,
+        )]
+
+
+class VolumeEffectDetector(Detector):
+    """A-03: 音量の設定（master_volume・bgm_volume）を変えたのに、出力の大きさ（heartbeat の audio_db）が見込みほど
+    変わらない。見込みは 20·log10(後の値 / 前の値) dB（0 は min_volume として数える）。見込みが min_change_db 以上のときだけ、
+    変える前の window_sec と、変えて settle_sec たってからの window_sec の中央値を比べ、変わった量が見込みの effect_ratio
+    未満なら出す。比べるあいだに BGM が変わった・ボイスが鳴った・ほかの設定を変えた・音が小さすぎる（silent_db 未満）・
+    heartbeat が min_samples に足りないときは判定しない。効果音・ボイスの音量は、ほかの音と分けられないので見ない。"""
+
+    KEYS = ("master_volume", "bgm_volume")
+
+    def __init__(self, rule: Rule) -> None:
+        super().__init__(rule)
+        p = rule.param
+        self.min_change = float(p("min_change_db"))
+        self.window = float(p("window_sec"))
+        self.settle = float(p("settle_sec"))
+        self.ratio = float(p("effect_ratio"))
+        self.silent = float(p("silent_db"))
+        self.min_samples = int(p("min_samples"))
+        self.min_volume = float(p("min_volume"))
+        self.levels: list[tuple[float, float]] = []  # (時刻, audio_db)
+        self.marks: list[float] = []  # BGM・ボイスが変わった時刻（比べるあいだにあれば判定しない）
+        self.voice = False
+        self.settings: dict[str, float] = {}
+        self.changes: list[float] = []  # 設定を変えた時刻
+        self.pending: list[tuple[float, str, str, float, float]] = []  # (時刻, wall, key, 前, 後)
+        self.reported: set[tuple[int, str]] = set()
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        d = ev.data
+        if ev.kind in ("launch", "proc_exit"):
+            self.levels.clear()
+            self.marks.clear()
+            self.pending.clear()
+            self.settings.clear()
+            self.voice = False
+        elif ev.kind == "heartbeat" and isinstance(d.get("audio_db"), (int, float)):
+            self.levels.append((ev.t, float(d["audio_db"])))
+            if self.voice:
+                self.marks.append(ev.t)
+            cut = ev.t - 3 * (self.window + self.settle)
+            self.levels = [x for x in self.levels if x[0] >= cut]
+        elif ev.kind in ("bgm_play", "bgm_stop", "voice"):
+            self.marks.append(ev.t)
+            self.voice = self.voice or ev.kind == "voice"
+        elif ev.kind == "voice_stop":
+            self.marks.append(ev.t)
+            self.voice = False
+        elif ev.kind == "settings":
+            changed = False
+            for key in self.KEYS:
+                v = d.get(key)
+                if not isinstance(v, (int, float)):
+                    continue
+                old = self.settings.get(key)
+                self.settings[key] = float(v)
+                if old is not None and old != v:
+                    changed = True
+                    self.pending.append((ev.t, ev.wall, key, old, float(v)))
+            if changed or self.changes:
+                self.changes.append(ev.t)  # settings は値が変わったときだけ出る（最初の 1 回を除く）
+        return []
+
+    def _expected(self, old: float, new: float) -> float:
+        return 20 * math.log10(max(new, self.min_volume) / max(old, self.min_volume))
+
+    def on_tick(self, now: float, launch: int) -> list[Issue]:
+        out = []
+        for item in list(self.pending):
+            t, wall, key, old, new = item
+            if now < t + self.settle + self.window:
+                continue
+            self.pending.remove(item)
+            expected = self._expected(old, new)
+            lo, hi = t - self.window, t + self.settle + self.window
+            if abs(expected) < self.min_change or (launch, key) in self.reported:
+                continue
+            if any(lo <= m <= hi for m in self.marks) or any(lo <= c <= hi and c != t for c in self.changes):
+                continue
+            before = [db for at, db in self.levels if lo <= at < t]
+            after = [db for at, db in self.levels if t + self.settle <= at <= hi]
+            if len(before) < self.min_samples or len(after) < self.min_samples:
+                continue
+            b, a = _median(before), _median(after)
+            if max(a, b) < self.silent:
+                continue
+            observed = a - b
+            if observed / expected >= self.ratio:
+                continue
+            self.reported.add((launch, key))
+            out.append(self.issue(
+                f"{key} を {old:g} から {new:g} に変えましたが、出力の大きさが {observed:+.1f} dB しか変わりません"
+                f"（見込みは {expected:+.1f} dB。前 {b:.1f} dB、後 {a:.1f} dB）。設定の値が音に効いていない見込みです",
+                key=key, launch=launch, t=now, wall=wall, setting=key, old=old, new=new,
+                expected_db=round(expected, 1), observed_db=round(observed, 1),
+            ))
+        return out
+
+
 class ResponseCheckDetector(Detector):
     """S-01: イレギュラー操作の次の通常の操作（応答確認）に、画面が反応しない（ハートビートは生存）。
 
@@ -1109,6 +1299,9 @@ DETECTORS: dict[str, Callable[[Rule], Detector]] = {
     "V-07": DimButtonRespondedDetector,
     "V-03": WindowLostDetector,
     "V-04": ResolutionMismatchDetector,
+    "A-01": BgmOverlapDetector,
+    "A-02": TitleVoiceDetector,
+    "A-03": VolumeEffectDetector,
     "F-03": SettingsPersistDetector,
     "V-08": RevealSpeedDetector,
     "V-09": LocaleTextDetector,
