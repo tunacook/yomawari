@@ -58,7 +58,7 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 ### システムごとの担当
 | システム | 中身 |
 |---|---|
-| macOS標準機能 | `launchd`（時刻起動）、`caffeinate`（スリープ防止）、画面収録・入力API |
+| macOS標準機能 | `caffeinate`（スリープ防止）、画面収録・入力API |
 | Unityビルド（C#） | ゲーム本体、`com.tunacook.yomawari` パッケージ（`[YOMAWARI]` 行の出力） |
 | Pythonハーネス | ウォッチドッグ（別プロセス）、ハーネス本体（センサー、ファジング、検出器、後処理） |
 | Ollama（ローカル） | テキストモデル（操作選択・任意）、画像対応モデル（画面判定・誤検知除去・再現手順の文章化） |
@@ -67,7 +67,7 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 ### システム間のやりとり
 | 経路 | 手段 |
 |---|---|
-| launchd → ウォッチドッグ | 時刻起動（`caffeinate` でラップ） |
+| 人 → ウォッチドッグ | `yomawari run`（ラン中は `caffeinate` でスリープを防ぐ） |
 | ウォッチドッグ → ゲーム | プロセス起動（`-yomawari`、`-logFile` を自動付与） |
 | ゲーム → ハーネス | `YomawariLog` → Player.log → センサーがtail |
 | ハーネス → ゲーム | OS入力（`pyautogui`） |
@@ -248,7 +248,6 @@ yomawari inspect [--build NAME] [--seconds 60] [--click MENU/BUTTON ...]   # 画
 yomawari experience report [--build NAME] [--out PATH]   # 経験の蓄積から体験レポート（Markdown）を出す（§9「経験の蓄積」）
 yomawari experience forget [--build NAME | --game NAME] [--roles] [--progress] [--flow-wrong] [--flow-right] [--yes]   # 覚えたことを消す（§9「経験の蓄積」）
 yomawari doctor
-yomawari schedule install --at 01:00 | uninstall
 yomawari prune [--days N] [--dry-run]   # 古いランを消す（§12「runs/ 構成」）。run も始めるときに同じことをする
 yomawari restore
 ```
@@ -264,7 +263,6 @@ yomawari restore
 - 検証: 存在するか / `.app` なら `Contents/Info.plist` の `CFBundleExecutable` を解決できるか / 今の OS で実行できる形式か / 起動して `boot` 行が出るか（出なければ保存はするが警告）
 - 名前を尋ね（デフォルトはアプリ名の小文字）、`yomawari.toml` に保存する。`default_build` 未設定ならそれにする
 - 標準入力が端末でない（launchd 等）ときは、入力を待たず終了コード2で終わる
-- `schedule install` でビルド未登録なら、そこで登録を促す
 - 表示は `rich` の `Prompt` / `Confirm`
 
 ### 実行中の表示
@@ -1289,10 +1287,10 @@ runs/
 
 1. 骨組み: `pyproject.toml`、CLI（`run`/`builds`/`doctor`）、`yomawari.toml` と対話登録、ランチャ（`.app` 解決）、Player.log tail、`boot`/`heartbeat` の受信、C-01〜03・H-01・L-01、最小限の `report.md`、セーブ退避と復元
 2. ファジング: イベントバス・状態トラッカー、`InputDriver`（マウス・キーボード）、座標変換、UI操作カタログ、`random` Decider、ガード、応答確認、S系ルール、`rules.yaml` エンジン。続けて、ゲーム固有の仕様の3層（パッケージの自動読み取り、押した結果から役割を覚える、ゲームのプロファイル）と、経験の蓄積・体験レポート
-3. 画面とOS操作: `mss` キャプチャとリングバッファ、V-01〜05、OS操作カタログ、F系・A系ルール（R系（パフォーマンス）、L-02〜L-05、V-03〜V-05・V-08・V-09、F-01・F-03 はフェーズ2の途中で先に入れた。フェーズ3に残るルールは V-01・V-02、F-02・F-04、A-01・A-02）
+3. 画面とOS操作: `mss` キャプチャとリングバッファ、V-01〜05、OS操作カタログ、F系・A系ルール（R系（パフォーマンス）、L-02〜L-05、V-03〜V-05・V-08・V-09、F-01・F-03、A-01〜A-03 はフェーズ2の途中で先に入れた。フェーズ3に残るルールは V-01・V-02、F-02・F-04）
 4. 再現: `events.jsonl` からの `replay`、`minimize`、前回比較、重複排除・統合（前回比較と、重複排除・統合（「やること」の項目へのまとめ）は先に入れた）
 5. 画像判定: Ollama Judge、V-06、誤検知除去、要目視欄、再現手順の文章化、ボタンの見た目からの役割の推定（§9）
-6. 無人運転: ウォッチドッグの別プロセス化、`schedule install`（launchd plist生成）、`caffeinate`、古いランの削除（`caffeinate` と古いランの削除、ウォッチドッグの別プロセス化は先に入れた。残るのは `schedule install`）
+6. 無人運転: ウォッチドッグの別プロセス化、`schedule install`（launchd plist生成）、`caffeinate`、古いランの削除（`caffeinate` と古いランの削除、ウォッチドッグの別プロセス化は先に入れた。`schedule install` は入れないことにした）
 7. 後日: Windows対応、`local`/`jev` Decider、ゲームパッド（`InputDriver` 追加と `ui_focus`/`input_device` イベント）
 
 各フェーズで、ゲームなしでも動くテスト（Player.log のサンプルを流し込むモックゲーム）を用意する。
