@@ -9,6 +9,7 @@ from typing import Any
 
 from ..config import FUZZ_DEFAULTS
 from ..events import SEVERITIES, Issue
+from .coverage import render as render_coverage
 from .digest import build_items, render_top
 from .stalls import load_events
 
@@ -114,6 +115,8 @@ def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
         ]
         out += [f"| `{k}` | {n} |" for k, n in sorted(summary.silent_buttons.items())]
         out.append("")
+
+    out += render_coverage(events, cfg)
 
     out += ["## 実行環境", ""]
     out += [f"- {k}: {v}" for k, v in summary.env.items()]

@@ -166,6 +166,7 @@ report_timeline_lines = 40       # 1 項目の「経過」の行数の上限
 report_timeline_commands = ["stop", "goto", "gosub", "return"]  # 「経過」に載せるコマンド（ほかに大文字で始まる名前も載せる）
 report_stall_item_sec = 900      # 進めなかった区間のうち、この秒数以上のものは 1 つずつ項目にする（短いものはまとめる）
 report_text_change_ratio = 0.5   # 反応しないと検出したボタンで、押したあと同じ画面のボタンのこの割合以上の文字が変われば誤検知の見込みとする
+report_coverage_rows = 30       # レポートの「カバレッジ」: scene・画面・状態の表に載せる行数の上限（残りは「ほか n 個」）
 
 [fuzz.weights]                # 通常の操作の重み
 advance = 20

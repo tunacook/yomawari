@@ -701,7 +701,8 @@ def test_harness_random_mode_clicks_mock_game(tmp_path, mock_app, fake_platform)
     assert not [i for i in r.issues if i.rule_id == "S-05"], [i.detail for i in r.issues]
     report = r.report_path.read_text()
     assert "## 一度も反応しなかったボタン" in report and "`TitleUI/SettingsButton`" in report
-    assert "NewGameButton" not in report
+    # deny は押さないので、反応しなかったボタンには出ない（カバレッジの「押していないボタン」には出る）
+    assert "NewGameButton" not in report.split("## 一度も反応しなかったボタン")[1].split("\n## ")[0]
     assert "操作: 通常" in report
     assert (fake_platform.save / "slot1.dat").read_text() == "original"
 
