@@ -1063,3 +1063,50 @@ def test_window_fit_is_recorded_as_event_and_note():
     notes = [n for n in run.notes if "はみ出して" in n]
     assert len(notes) == 1 and "800x478 ポイント" in notes[0] and "戻した" in notes[0]
     assert s.pointer.fits == []
+
+
+def test_enter_is_not_sent_while_focus_is_on_guarded_button():
+    # run 2026-11-14_2214: 方向キーで右クリックメニューの終了ボタンにフォーカスを移し、Enter でゲームを終了した（C-01）。
+    # Enter・Space はフォーカスがあるボタン（selected）を押すので、区分のあるボタンにフォーカスがあるあいだは送らない
+    st = GameState()
+    st.feed(Event("game", "menu", {"name": "Menu", "modal": True, "buttons": [
+        {"name": "Save", "rect": [0.1, 0.1, 0.3, 0.2]}, {"name": "Item", "rect": [0.1, 0.3, 0.3, 0.4]},
+        {"name": "Item", "rect": [0.1, 0.5, 0.3, 0.6]}, {"name": "Title", "rect": [0.1, 0.7, 0.3, 0.8]},
+        {"name": "Quit", "rect": [0.5, 0.1, 0.7, 0.2]}]}, 0))
+    guard = Guard({"expect_exit": ["Menu/Quit"], "irregular_only": ["Menu/Title"]})
+    weights = FUZZ_DEFAULTS["weights"]
+
+    def keys():
+        normal = {op.label for op in normal_candidates(st, guard, weights, True) if op.kind == "key"}
+        rapid = {op.label for op in irregular_candidates(st, guard, 10) if op.kind == "rapid_key"}
+        return "key enter" in normal, rapid == {"rapid_key enter", "rapid_key space"}
+
+    assert st.selected is None and keys() == (True, True)  # フォーカスが分からないときは、これまでどおり送る
+    st.feed(Event("game", "selected", {"menu": "Menu", "name": "Quit", "nth": 0}, 0))
+    assert st.selected == "Menu/Quit" and st.selected_target().name == "Quit"
+    assert keys() == (False, False)
+    st.feed(Event("game", "selected", {"menu": "Menu", "name": "Title", "nth": 0}, 0))
+    assert keys() == (False, True)  # イレギュラー操作でだけ押すボタンは、連打でなら押してよい
+    st.feed(Event("game", "selected", {"menu": "Menu", "name": "Item", "nth": 1}, 0))
+    assert st.selected_target().label == "Menu/Item#1" and keys() == (True, True)
+    st.feed(Event("game", "selected", {"menu": None, "name": None}, 0))
+    assert st.selected is None and keys() == (True, True)
+    st.feed(Event("game", "selected", {"menu": "Gone", "name": "Quit", "nth": 0}, 0))
+    assert st.selected_target() is None and keys() == (True, True)  # 閉じた画面のボタンは押されない
+
+
+def test_selected_line_from_player_log():
+    # パッケージ（0.12.0）が出す selected 行を、Player.log から読んで状態にする
+    from yomawari.sensors.logtail import LogParser
+
+    st = GameState()
+    st.feed(Event("game", "menu", {"name": "Menu", "modal": True, "buttons": [
+        {"name": "Quit", "rect": [0.5, 0.1, 0.7, 0.2]}]}, 0))
+    recs = LogParser().feed(
+        b'[YOMAWARI] {"seq":9,"t":1.0,"f":60,"ev":"selected","menu":"Menu","name":"Quit","nth":0}\n'
+        b'[YOMAWARI] {"seq":10,"t":1.2,"f":72,"ev":"selected","menu":null,"name":null}\n')
+    labels = []
+    for r in recs:
+        st.feed(Event("game", r.data["ev"], r.data, 0))
+        labels.append(st.selected)
+    assert labels == ["Menu/Quit", None]

@@ -115,7 +115,7 @@ def normal_candidates(
     top = state.top_modal()
     if top is not None and top.buttons:
         # 見えているボタンがない・すべて押せないときも、動かす・抜ける操作は試す
-        return ops + modal_candidates(top.area, weights)
+        return ops + modal_candidates(top.area, weights, submit_ok(state, guard, False))
     if targets and not state.reading_with_buttons():
         return ops
     if top is not None:
@@ -133,17 +133,30 @@ def reading_candidates(weights: dict[str, float]) -> list[Op]:
     ]
 
 
+def submit_ok(state: GameState, guard: Guard, irregular: bool) -> bool:
+    """Enter・Space を押してよいか。キーで押されるのはフォーカスがあるボタンなので、そのボタンを通常の操作で押さない
+    もの（終了・外部を開く・押さない、など。ガードの区分）なら押さない。イレギュラー操作では、イレギュラー操作でだけ
+    押すボタン（irregular_only）は押してよい（run 2026-11-14_2214: 方向キーで右クリックメニューの終了ボタンに
+    フォーカスを移し、Enter でゲームを終了した）。フォーカスが分からないときは押してよい。"""
+    t = state.selected_target()
+    if t is None:
+        return True
+    kind = guard.kind_of(t)
+    return kind is None or (irregular and kind == "irregular_only")
+
+
 def modal_candidates(
-    area: tuple[float, float, float, float] | None, weights: dict[str, float],
+    area: tuple[float, float, float, float] | None, weights: dict[str, float], submit: bool = True,
 ) -> list[Op]:
-    """ボタンのあるモーダルな画面で、ボタンを押す以外に試す操作（動かす・抜ける）。"""
+    """ボタンのあるモーダルな画面で、ボタンを押す以外に試す操作（動かす・抜ける）。submit が False なら Enter を入れない。"""
     x0, y0, x1, y1 = area or (0.0, 0.0, 1.0, 1.0)
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     move, leave = float(weights["move"]), float(weights["leave"])
     ops = [Op("drag", arg=d, weight=move, novelty=True, group="move", point=(cx, cy))
            for d in ("up", "down", "left", "right")]
     ops += [Op(k, arg=3, weight=move, novelty=True, group="move", point=(cx, cy)) for k in ("wheel_down", "wheel_up")]
-    ops += [Op("key", arg=k, weight=move, novelty=True, group="move") for k in ("down", "up", "right", "left", "enter")]
+    keys = ("down", "up", "right", "left") + (("enter",) if submit else ())
+    ops += [Op("key", arg=k, weight=move, novelty=True, group="move") for k in keys]
     ops += [Op("key", arg="esc", weight=leave, novelty=True, group="leave"),
             Op("right_click", weight=leave, novelty=True, group="leave")]
     return ops
@@ -158,10 +171,11 @@ def irregular_candidates(state: GameState, guard: Guard, rapid_count: int, rollb
     """イレギュラー操作の候補。暗転中・セーブ中でも作る（そのときこそ差し込みたい）。
 
     rollback: 巻き戻しの操作を覚えていれば、巻き戻し（1回・続けて・戻ってすぐ送る）も候補にする（fuzz/rollback.py）。"""
+    submit = submit_ok(state, guard, True)
     ops = [
         Op("rapid_click", arg=rapid_count, irregular=True, novelty=True),
-        Op("rapid_key", arg="enter", irregular=True, novelty=True),
-        Op("rapid_key", arg="space", irregular=True, novelty=True),
+        *([Op("rapid_key", arg="enter", irregular=True, novelty=True),
+           Op("rapid_key", arg="space", irregular=True, novelty=True)] if submit else []),
         Op("right_click", irregular=True, novelty=True),
         Op("key", arg="esc", irregular=True, novelty=True),
         Op("wheel_up", arg=3, irregular=True, novelty=True),

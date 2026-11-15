@@ -156,6 +156,9 @@ class GameState:
     # 出し直された menu にも引き継ぐ。閉じたら忘れる（ボタンの名前は並びの番号なので、次に開いたときは中身が違うことがある）
     read_text: dict[str, str] = field(default_factory=dict)
     closed: set[str] = field(default_factory=set)  # 閉じた menu（ハーネスが、その画面で読んだ文字の記録を捨てるため）
+    # エンジンのフォーカス（EventSystem の選択）があるボタンの label（selected イベント）。Enter で押されるのはこのボタン。
+    # 何も選ばれていない・menu の外のものが選ばれている・パッケージが知らせない（0.12.0 より前）ときは None
+    selected: str | None = None
     _played_since_title: bool = False
     _order: int = 0
 
@@ -188,6 +191,21 @@ class GameState:
         if self.settings is not None and values != self.settings:
             self.settings_changes += 1
         self.settings = values
+
+    def _on_selected(self, d: dict[str, Any], t: float) -> None:
+        menu, name = d.get("menu"), d.get("name")
+        if not menu or not name:
+            self.selected = None
+            return
+        nth = int(d.get("nth") or 0)
+        self.selected = f"{menu}/{name}#{nth}" if nth else f"{menu}/{name}"
+
+    def selected_target(self) -> Target | None:
+        """フォーカスがあるボタン（Enter で押されるもの）。menu が出ていなければ None。"""
+        if self.selected is None:
+            return None
+        menu = self.menus.get(self.selected.split("/", 1)[0])
+        return next((b for b in menu.buttons if b.label == self.selected), None) if menu else None
 
     def _on_scene(self, d: dict[str, Any], t: float) -> None:
         self.scene = d.get("name")

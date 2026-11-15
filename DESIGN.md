@@ -128,6 +128,7 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 | `transition` | `phase: start/end`, `name` | 操作待ち、進行不能判定 |
 | `resolution` | `w`, `h`, `mode` | 起動直後と変化時（`Update` で監視）。描画領域の位置と Retina 倍率の計算（§8）、解像度テスト |
 | `settings` | `locale`, `locales`, `reveal_speed`, `auto_delay`, `master_volume`, `bgm_volume`, `sfx_volume`, `voice_volume` | 起動直後と変化時（0.2 秒ごとに監視、値は小数第 3 位まで）。ゲームの設定。Naninovel では `ILocalizationManager.SelectedLocale`（`locales` は使える言語の一覧 `AvailableLocales`。0.11.0 から）、`ITextPrinterManager.BaseRevealSpeed` / `BaseAutoDelay`、`IAudioManager` の各音量（0〜1）。設定画面がゲーム独自の部品でも、値はエンジンの標準のサービスから読める。ハーネスは、押して値が変われば反応ありとする（設定画面の選択肢・スライダーは、押しても画面の並びが変わらない）。ウィンドウの大きさは `resolution`。パッケージ 0.10.0 から |
+| `selected` | `menu`, `name`, `nth` | 変化時（0.2 秒ごとに監視）。エンジンのフォーカス（`EventSystem.current.currentSelectedGameObject`）があるボタン。Enter・Space で押されるのはこのボタン。`menu` はそのボタンを含む表示中の `menu` のうちいちばん内側のもの、`nth` は `menu` の `buttons` と同じ数え方で、同じ名前のボタンの何番目か（0 から）。`menu` の外のもの・押せないものにフォーカスがあるときは `menu` と `name` を `null` にする。ハーネスは、通常の操作で押さないボタン（ガードの区分が `expect_exit` / `external` / `deny` など）にフォーカスがあるあいだ、Enter を押さない（§9「ガード」）。パッケージ 0.12.0 から |
 | `save` / `load` | `slot`, `type`, `phase: start/end` | セーブ検証、分岐の巻き戻し |
 | `bgm_play` / `bgm_stop` / `voice` | `id` | 音声の整合性 |
 | `error_shown` | `kind` | ゲームがエラー表示を出した（セーブ失敗等） |
@@ -584,6 +585,7 @@ class Decider(Protocol):
 - `expect_exit` は `exit_min_interval_sec` に1回まで押す。長いランでは、間隔をランの長さの `exit_interval_ratio` 倍まで延ばす（起動し直すとタイトルから遊び直すことが多く、短い間隔で終わらせると、そのたびに進行が戻る）。終了後の再起動は `max_restarts` に数えない。押す前にセーブする（§9「終了を試す前にセーブする」）
 - `external` の結果（前面のアプリが切り替わったか、ゲームを前面に戻せたか）は、レポートの「ハーネスの記録」に書く
 - タイトルの「ニューゲーム」は本編に入る唯一の道なので、`irregular_only` にしない（`random` で本編に進めなくなる）
+- Enter・Space は、エンジンのフォーカスがあるボタン（`selected`。§3）を押す。区分のあるボタンにフォーカスがあるあいだは、通常の操作の Enter を候補に入れない。イレギュラー操作の Enter・Space の連打は、`irregular_only` のボタンにフォーカスがあるときだけ入れる（run 2026-11-14_2214: 方向キーで右クリックメニューの終了ボタンにフォーカスを移し、Enter でゲームを終了して C-01 にした）。フォーカスが分からないとき（パッケージ 0.12.0 より前）は、これまでどおり入れる
 
 - セーブの削除や上書きは指定しなくてよい（ラン前に退避し、ラン後に戻すため）
 - 押す直前に、押す位置の要素が最新の状態に含まれているか確認する
