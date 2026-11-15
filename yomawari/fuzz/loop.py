@@ -100,6 +100,9 @@ class FuzzRun:
     labels: set[str] = field(default_factory=set)
     recent: deque[str] = field(default_factory=lambda: deque(maxlen=10))
     responsive: set[tuple[str, str]] = field(default_factory=set)  # (状態, 操作) のうち、反応があったもの
+    # 押すと切り替わる操作（トグル、押すと設定の値だけが変わるもの）。オンになったあとは、もう一度押しても何も起きない
+    # ことがあるので、応答確認に使わない（run 2026-11-14_2214: 押してロードに切り替えたタブを応答確認で押し直し、S-01 にした）
+    switches: set[str] = field(default_factory=set)
     last_press: tuple[str, float] | None = None  # 最後に押したボタンの label と時刻（役割の確定に使う）
     # 押したあともゲームが動き続けた（同じ起動のうちに次の操作をした）ボタンの label。終了ボタンとはみなさない
     survived: set[str] = field(default_factory=set)
@@ -2023,10 +2026,12 @@ class FuzzSession:
         画面を動かす操作（方向キー・Enter・ドラッグ・ホイール。一覧を探す操作も）は、フォーカスやスクロール位置で
         結果が変わるので使わない。いま押しても反応しないと見込んでいるボタン（暗い、文字で空と分かる）と、
         この応答確認ですでに反応がなかった操作も使わない（run 2026-11-12_0959: セーブで反応したスロットを、
-        ロードの画面で空きのスロットとして押して S-01 にした）。"""
+        ロードの画面で空きのスロットとして押して S-01 にした）。押すと切り替わるもの（トグル、押すと設定の値だけが
+        変わるもの）も使わない。すでにオンなら、押しても何も起きない（run 2026-11-14_2214）。"""
         quiet = self._quiet()
         return [op for op in cands
                 if op.group not in ("move", "list", "search") and (key, op.label) in self.run.responsive
+                and op.label not in self.run.switches and not (op.target is not None and op.target.type == "toggle")
                 and op.label not in self._verify_tried and not (op.target is not None and op.target.label in quiet)]
 
     def _recheck(self, op: Op, key: str, verify: bool, responded: bool, commands_ran: bool, interfered: bool) -> bool:
@@ -2100,6 +2105,9 @@ class FuzzSession:
                 self._maybe_edge("answer")
         if responded:
             self.run.responsive.add((key, op.label))
+            if op.target is not None and (op.target.type == "toggle" or (
+                    self.state.settings_changes != settings_before and not screen_changed)):
+                self.run.switches.add(op.label)
         else:
             self.run.stats["no_response"] += 1
         if op.target is not None:
