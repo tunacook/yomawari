@@ -183,7 +183,8 @@ yomawari/
 │   ├─ cli.py            # typer エントリポイント
 │   ├─ config.py         # yomawari.toml の読み書き、ビルド解決、対話登録
 │   ├─ profile.py        # ゲームのプロファイルと yomawari.toml の [guard] / [screens] / [rules] を重ねる
-│   ├─ watchdog.py       # 別プロセス。ハーネス本体とゲームの起動・再起動・時間予算・復元
+│   ├─ supervisor.py     # 見張り役（ウォッチドッグ）。ハーネス本体を子プロセスで動かし、落ちたら後始末する
+│   ├─ watchdog.py       # ハーネス本体。ゲームの起動・再起動・時間予算・復元
 │   ├─ launcher.py       # ビルド起動、.app の実行ファイル解決、引数付与
 │   ├─ bus.py            # asyncio イベントバス
 │   ├─ state.py          # 状態トラッカー
@@ -270,7 +271,7 @@ yomawari restore
 [01:23:45] mac_dev  ops 3,412  restarts 2  issues: C1 M4 m7
            last: fullscreen_toggle @ ch2_park_03
 ```
-Ctrl+C でも、ゲーム終了・セーブ復元・途中までのレポート出力をしてから終わる。終了処理中に届いた 2 回目以降の Ctrl+C と SIGTERM は受け流す（打ち切るとレポートが出ない）。待てないときは Ctrl+\ で強制終了し、セーブは `yomawari restore` で戻す。中断されたランは、サマリの「終わり方」に手動か外からの停止かを書く。
+Ctrl+C でも、ゲーム終了・セーブ復元・途中までのレポート出力をしてから終わる。終了処理中に届いた 2 回目以降の Ctrl+C と SIGTERM は受け流す（打ち切るとレポートが出ない）。待てないときは Ctrl+\ で、ハーネス本体を待たずに止める。そのあと見張り役（§7）が、ゲームの終了・セーブの復元・記録からのレポートの作り直しをする（見張り役を使わない `--no-watchdog` では、セーブは `yomawari restore` で戻す）。中断されたランは、サマリの「終わり方」に手動か外からの停止かを書く。
 
 ### 終了コード
 | コード | 意味 |
@@ -306,6 +307,8 @@ purpose = "play"             # ランの目的（§9「ランの目的」）。-
 seed = "auto"
 open_report = true
 keep_runs_days = 14
+watchdog = true              # 見張り役（§7）。ハーネス本体を子プロセスで動かし、落ちたら後始末する。--no-watchdog で使わない
+watchdog_hang_sec = 300      # ハーネス本体の記録（events.jsonl）がこの秒数増えなければ、固まったとみなして止める
 
 [expect]                      # Player Settings の期待値（判定に使う）
 run_in_background = false
@@ -427,8 +430,18 @@ role_min_confidence = 0.7    # ボタンの見た目からの役割の推定（�
 4. 終了処理: ゲーム終了、クラッシュダンプ回収、セーブ・設定の復元
 5. 後処理: 集約・最小化・画像判定・Markdown生成・`open`
 
-ウォッチドッグ（別プロセス）がすること:
-- ハーネス本体とゲームの起動・再起動（ハーネス自体の異常もレポートに記録）
+見張り役（ウォッチドッグ。`supervisor.py`）: `yomawari run` は、同じコマンドをハーネス本体として子プロセスで起動し、終わるまで見張る（`run.watchdog`。`--no-watchdog` なら、このプロセスでハーネス本体を動かす）
+- ハーネス本体が終了処理まで進まずに終わった（例外・kill -9・Ctrl+\）か、`events.jsonl` が `run.watchdog_hang_sec`（300 秒）増えなくなった（固まった。止めるときは SIGTERM、`quit_timeout_sec` + 20 秒待って SIGKILL）ら、見張り役が後始末をする
+  - 記録で、起動して終了（`proc_exit`）していないゲームを終了させる。実行ファイルが同じか、起動した時刻が記録と 10 秒以内のプロセスだけ（pid の使い回しで、別のプロセスを止めないため）
+  - 退避したセーブと設定を戻す（`restore_pending.json`）
+  - 記録からレポートを作り直す（§12「レポート構成」の `yomawari report` と同じ）。何が起きて何をしたかと、ハーネス本体の例外（全文は `runs/<id>/harness_error.txt`）を「ハーネスの記録」の先頭に書く。終了コードは 2
+- ハーネス本体は別のセッション（プロセスグループ）で動かす。端末の Ctrl+C は見張り役だけに届き、見張り役が子に 1 回ずつ渡す。SIGTERM・SIGHUP は SIGTERM にして渡す。Ctrl+\（SIGQUIT）では、子をすぐ止め（SIGKILL）、後始末をする
+- ハーネス本体は、環境変数 `YOMAWARI_WATCHDOG_STATE` が指すファイル（`runs/_watchdog/<見張り役の pid>.json`）に、ランのディレクトリと pid、終わる前に出た例外を書く。見張り役は、ランを始めていなければ（ビルドの登録で終わったなど）後始末をしない
+- ハーネス本体は端末から入力できないので、ビルドが未登録なら、見張り役が対話登録をしてから子を起動する
+- ハーネス本体がしていること（下の項目）は変わらない。見張り役は、ハーネス本体を起動し直してランを続けることはしない
+
+ハーネス本体がすること:
+- ゲームの起動・再起動（ハーネス自体の異常もレポートに記録）
 - 時間予算、同じ箇所で続けてクラッシュしたときの打ち切り
 - 終了時のセーブ・設定の復元。異常終了したら、次回起動時に未復元を検出して復元する
 - `caffeinate -dimsu -w <ハーネスの pid>` で、ランのあいだ画面とシステムのスリープを防ぐ（`platform` の `keep_awake`）
@@ -1268,7 +1281,7 @@ runs/
 3. 画面とOS操作: `mss` キャプチャとリングバッファ、V-01〜05、OS操作カタログ、F系・A系ルール（R系（パフォーマンス）、L-02〜L-05、V-03〜V-05・V-08・V-09、F-01・F-03 はフェーズ2の途中で先に入れた。フェーズ3に残るルールは V-01・V-02、F-02・F-04、A-01・A-02）
 4. 再現: `events.jsonl` からの `replay`、`minimize`、前回比較、重複排除・統合
 5. 画像判定: Ollama Judge、V-06、誤検知除去、要目視欄、再現手順の文章化、ボタンの見た目からの役割の推定（§9）
-6. 無人運転: ウォッチドッグの別プロセス化、`schedule install`（launchd plist生成）、`caffeinate`、古いランの削除（`caffeinate` と古いランの削除は先に入れた）
+6. 無人運転: ウォッチドッグの別プロセス化、`schedule install`（launchd plist生成）、`caffeinate`、古いランの削除（`caffeinate` と古いランの削除、ウォッチドッグの別プロセス化は先に入れた。残るのは `schedule install`）
 7. 後日: Windows対応、`local`/`jev` Decider、ゲームパッド（`InputDriver` 追加と `ui_focus`/`input_device` イベント）
 
 各フェーズで、ゲームなしでも動くテスト（Player.log のサンプルを流し込むモックゲーム）を用意する。

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import platform as pyplatform
 import shlex
 import shutil
@@ -37,6 +38,7 @@ from .purpose import MODES, PurposeError
 from .purpose import resolve as resolve_purpose
 from .runs import PruneResult, prune_runs
 from .savestate import SaveState, resolve_target
+from .supervisor import Supervisor, child_state_path, write_child_state
 from .sensors.window import ClientArea
 from .state import GameState
 from .watchdog import Harness, RunOptions
@@ -172,6 +174,25 @@ def _status_text(s: dict[str, Any]) -> Text:
     return Text(line)
 
 
+def _supervise(cfg: Config, build: str | None, build_path: Path | None, no_open: bool) -> int:
+    """見張り役として、同じコマンドをハーネス本体として子プロセスで動かす（supervisor.py）。"""
+    if build_path is None and cfg.resolve_build(build, None) is None:
+        # ハーネス本体は別のセッションで動くので端末から入力できない。登録はここで済ませる
+        register_interactive(cfg, get_platform(), load_rules(cfg.rules_path))
+    rc = cfg.run
+    sup = Supervisor([sys.executable, "-m", "yomawari", *sys.argv[1:]], cfg.runs_dir, cfg.rules_path,
+                     float(rc["watchdog_hang_sec"]), float(rc["quit_timeout_sec"]))
+    code, report = sup.run()
+    if report is not None:
+        err.print("[yellow]ハーネス本体が終了処理まで進まなかったため、見張り役が後始末をしました[/]")
+        for n in sup.notes:
+            err.print(f"  {n}", markup=False)
+        console.print(f"レポート: {report}")
+        if rc["open_report"] and not no_open:
+            get_platform().open_file(report)
+    return code
+
+
 @app.command()
 def run(
     ctx: typer.Context,
@@ -189,6 +210,10 @@ def run(
     ),
     seed: str | None = typer.Option(None, "--seed", help="乱数シード。既定は yomawari.toml の run.seed"),
     no_open: bool = typer.Option(False, "--no-open", help="終了後にレポートを開かない"),
+    no_watchdog: bool = typer.Option(
+        False, "--no-watchdog",
+        help="見張り役（ウォッチドッグ）を使わず、ハーネス本体をこのプロセスで動かす。既定は yomawari.toml の run.watchdog（true）",
+    ),
     cont: bool | None = typer.Option(
         None, "--continue/--from-start",
         help="ランの最初の起動から、前のランのセーブの続きを遊ぶ（タイトルの「続きから」といちばん新しいセーブを選ぶ）。"
@@ -209,6 +234,8 @@ def run(
         err.print(f"[red]--mode が不正です: {mode}[/]")
         raise typer.Exit(EXIT_HARNESS_ERROR)
     cfg = _config(ctx)
+    if child_state_path() is None and cfg.run["watchdog"] and not no_watchdog:
+        raise typer.Exit(_supervise(cfg, build, build_path, no_open))
     try:
         goal = resolve_purpose(str(purpose or cfg.run["purpose"]), cfg.purposes)
     except PurposeError as e:
@@ -275,6 +302,7 @@ def run(
         roles=roles,
         judge_cfg=cfg.judge,
     )
+    harness.on_run_dir = lambda d: write_child_state(run_dir=str(d), pid=os.getpid())
     if forget_note:
         harness.notes.append(forget_note)  # レポートの「ハーネスの記録」に、学習を消してから回したことを残す
     keep_days = float(rc["keep_runs_days"])
@@ -656,4 +684,5 @@ def main() -> None:
     except Exception:
         err.print("[red]ハーネス自体のエラーで終了しました[/]")
         err.print(traceback.format_exc(), markup=False)
+        write_child_state(error=traceback.format_exc())  # 見張られていれば、後始末のレポートに載せる
         sys.exit(EXIT_HARNESS_ERROR)
