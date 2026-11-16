@@ -54,6 +54,10 @@ def test_merge_order_and_arrays(tmp_path):
     {"screens": {"ListUI": {"no_response_ok": ["Slot"]}}},  # 古い名前。silent に書く
     {"screens": {"ListUI": {"silent": "Slot"}}},
     {"screens": {"ListUI": {"silent": [""]}}},
+    {"settings": ["locale"]},
+    {"settings": {"offered": "locale"}},
+    {"settings": {"offered": ["window_size"]}},  # パッケージの settings にない名前
+    {"settings": {"removed": ["auto_delay"]}},
 ])
 def test_invalid_profile_is_rejected(profile):
     with pytest.raises(ConfigError):
@@ -156,3 +160,12 @@ def test_hidden_buttons_keep_numbering():
     ], name="ListUI", modal=True)
     assert [t.label for t in st.targets()] == ["ListUI/Slot", "ListUI/Slot#2"]
     assert st.targets()[0].type == "button"
+
+
+def test_settings_offered():
+    # ゲームがプレイヤーに変えさせる設定。yomawari.toml の分と足し合わせ、重複は除く。書かなければ None
+    spec = build_spec({"settings": {"offered": ["locale", "reveal_speed"]}},
+                      {"settings": {"offered": ["reveal_speed", "resolution"]}})
+    assert spec.settings_offered == ["locale", "reveal_speed", "resolution"]
+    assert build_spec({}, {}).settings_offered is None
+    assert build_spec({"settings": {}}, {}).settings_offered is None

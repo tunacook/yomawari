@@ -448,7 +448,9 @@ class Harness:
                 experience=Experience(self.roles.path),
                 tour=SettingsTour(float(self.fuzz_cfg["settings_tour_interval_sec"]),
                                   float(self.fuzz_cfg["settings_tour_timeout_sec"]),
-                                  float(self.fuzz_cfg["settings_tour_factor"])),
+                                  float(self.fuzz_cfg["settings_tour_factor"]),
+                                  offered=(frozenset(self.spec.settings_offered)
+                                           if self.spec.settings_offered is not None else None)),
             )
             if "A-03" in self.rules:
                 a03 = self.rules["A-03"]
@@ -521,6 +523,7 @@ class Harness:
             focus=list(opts.purpose.focus) if opts.purpose else [],
             planned_hours=opts.hours,
             rules_path=str(self.rules_path),
+            settings_offered=self.spec.settings_offered,
             env={
                 "yomawari": __version__,
                 "Python": f"{sys.version.split()[0]} ({pyplatform.machine()})",

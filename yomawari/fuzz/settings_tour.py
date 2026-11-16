@@ -24,6 +24,26 @@ from typing import Any
 from .ops import Op
 
 
+# Naninovel の標準の設定画面にある項目: パッケージの settings の値の名前 → レポートに出す名前（並びはレポートの表の順）。
+# ゲームがどれをプレイヤーに変えさせるかは、プロファイルの [settings] offered に書く（DESIGN.md §9「設定を変えに行く」）
+SETTING_ITEMS = {
+    "locale": "言語",
+    "reveal_speed": "本文の出る速さ",
+    "auto_delay": "オートの待ち時間",
+    "skip_mode": "スキップの方式",
+    "master_volume": "全体の音量",
+    "bgm_volume": "BGM の音量",
+    "sfx_volume": "効果音の音量",
+    "voice_volume": "ボイスの音量",
+    "voice_locale": "ボイスの言語",
+    "font": "フォント",
+    "font_size": "文字の大きさ",
+    "quality": "画質",
+    "screen_mode": "画面モード",
+    "resolution": "解像度",
+}
+
+
 def _menu(label: str) -> str:
     return label.split("/", 1)[0]
 
@@ -42,6 +62,8 @@ class SettingsTour:
     reached: Counter[str] = field(default_factory=Counter)  # 変えに行って変えた設定
     entries: Counter[str] = field(default_factory=Counter)  # 変えに行って変えたときの、設定の画面の入り口
     gave_up: Counter[str] = field(default_factory=Counter)  # 変えに行ったが、時間のうちに変えられなかった設定
+    # プロファイルの [settings] offered: ゲームがプレイヤーに変えさせる設定。None（書いていない）なら、ゲームが出した設定すべて
+    offered: frozenset[str] | None = None
 
     @property
     def enabled(self) -> bool:
@@ -76,7 +98,7 @@ class SettingsTour:
             return
         if now < self.next_t:
             return
-        known = {k for eff in buttons.values() for k in eff}
+        known = self._offered({k for eff in buttons.values() for k in eff})
         if not known:
             return  # 設定を変えるボタンをまだ知らない（ランダムに押すうちに覚える）
         least = min(self.changes[k] for k in known)
@@ -107,6 +129,9 @@ class SettingsTour:
             out.append(op)
         return out
 
+    def _offered(self, keys: set[str]) -> set[str]:
+        return keys if self.offered is None else keys & self.offered
+
     def notes(self, buttons: dict[str, dict[str, Any]]) -> list[str]:
         if not self.keys:
             return []
@@ -123,10 +148,15 @@ class SettingsTour:
         if changed:
             out.append("このランで変わった設定: " + "、".join(f"{k} {self.changes[k]} 回" for k in changed))
         known = {k for eff in buttons.values() for k in eff}
-        never = sorted(self.keys - set(changed))
+        # プロファイルで外した設定は、ボタンがなくて当然なので挙げない（変わったかは、レポートの「設定」の表で見る）
+        never = sorted(self._offered(self.keys) - set(changed))
         if never:
             out.append("このランで一度も変わらなかった設定: " + "、".join(
                 k + ("" if k in known else "（変えるボタンを見つけていない）") for k in never))
+        missing = sorted((self.offered or frozenset()) - self.keys)
+        if missing:
+            out.append("プロファイルの [settings] offered にあるのに、ゲームが値を出していない設定: " + "、".join(missing)
+                       + "（パッケージが古いか、名前の書き間違い）")
         return out
 
 

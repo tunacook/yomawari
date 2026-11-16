@@ -11,7 +11,7 @@
 | `log_error` | Error / Exception / Assert のログ（`type`, `message`, `stack`） |
 | `resolution` | 起動直後と、解像度か画面モードが変わったとき（`w`, `h`, `mode`） |
 
-Naninovel 1.21 以上が入っていると、`Yomawari.Naninovel` が `scene` / `line` / `line_done` / `choices` / `choices_done` / `menu` / `menu_close` / `transition` / `save` / `load` / `command`（本文以外のコマンドの実行）/ `settings`（言語と使える言語の一覧・本文の出る速さ・音量。起動直後と変わったとき）/ `selected`（フォーカスがあるボタン。変わったとき）/ `bgm_play` / `bgm_stop` / `voice` / `voice_stop`（実際に鳴っている BGM・ボイスが変わったとき）も出す。ゲームへの組み込み手順はリポジトリの `docs/game-integration.md`。
+Naninovel 1.21 以上が入っていると、`Yomawari.Naninovel` が `scene` / `line` / `line_done` / `choices` / `choices_done` / `menu` / `menu_close` / `transition` / `save` / `load` / `command`（本文以外のコマンドの実行）/ `settings`（Naninovel の標準の設定画面にある項目の値: 言語と使える言語の一覧・本文の出る速さ・オートの待ち時間・スキップの方式・音量・ボイスの言語・フォント・文字の大きさ・画質・画面モード・解像度。起動直後と変わったとき）/ `selected`（フォーカスがあるボタン。変わったとき）/ `bgm_play` / `bgm_stop` / `voice` / `voice_stop`（実際に鳴っている BGM・ボイスが変わったとき）も出す。ゲームへの組み込み手順はリポジトリの `docs/game-integration.md`。
 
 ## ボタンについて出すこと
 

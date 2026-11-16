@@ -157,8 +157,10 @@ namespace Yomawari
                    YomawariRect.TryGetScreen((RectTransform)s.transform, out _, out _);
         }
 
-        // ゲームの設定（言語・本文の出る速さ・音量）を、最初と変わったときだけ出す（settings）。どれも Naninovel の
-        // 標準のサービスの値なので、設定画面がゲーム独自の部品でも読める。ウィンドウの大きさは resolution で出す。
+        // ゲームの設定を、最初と変わったときだけ出す（settings）。Naninovel の標準の設定画面にある項目（言語・本文の出る速さ・
+        // オートの待ち時間・音量・スキップの方式・フォント・文字の大きさ・ボイスの言語・画質・画面モード・解像度）の値で、
+        // どれも Naninovel の標準のサービスか Unity の値なので、設定画面がゲーム独自の部品でも読める。ゲームがどの項目を
+        // プレイヤーに変えさせるかは、ここでは分からない（ハーネスのプロファイルに書く。DESIGN.md §9「設定を変えに行く」）。
         // 値は小数第 3 位まで（YomawariFormat.Num）で比べるので、スライダーの細かな揺れでは出し直さない
         void ScanSettings()
         {
@@ -180,7 +182,15 @@ namespace Yomawari
                        ",\"master_volume\":" + YomawariFormat.Num(audio.MasterVolume) +
                        ",\"bgm_volume\":" + YomawariFormat.Num(audio.BgmVolume) +
                        ",\"sfx_volume\":" + YomawariFormat.Num(audio.SfxVolume) +
-                       ",\"voice_volume\":" + YomawariFormat.Num(audio.VoiceVolume);
+                       ",\"voice_volume\":" + YomawariFormat.Num(audio.VoiceVolume) +
+                       ",\"voice_locale\":" + YomawariFormat.Str(audio.VoiceLocale) +
+                       ",\"screen_mode\":" + YomawariFormat.Str(Screen.fullScreenMode.ToString()) +
+                       ",\"resolution\":" + YomawariFormat.Str(Screen.width + "x" + Screen.height) +
+                       ",\"quality\":" + QualitySettings.GetQualityLevel();
+            if (Engine.TryGetService<IScriptPlayer>(out var player))
+                body += ",\"skip_mode\":" + YomawariFormat.Str(player.SkipMode.ToString());
+            if (Engine.TryGetService<IUIManager>(out var ui))
+                body += ",\"font\":" + YomawariFormat.Str(ui.FontName) + ",\"font_size\":" + ui.FontSize;
             if (body == settingsSignature) return;
             settingsSignature = body;
             YomawariLog.Emit("settings", body);

@@ -2,8 +2,8 @@
 
 ゲームのリポジトリに置く yomawari.profile.toml と、yomawari.toml の同じ節を、
 コードの既定値 → プロファイル → yomawari.toml の順に重ねる（あとのものが上書き。配列は足し合わせる）。
-扱う節は [guard.roles]、[guard.buttons]、[screens.<menu>]、[rules.<ID>]、[[flow]]（ゲームの流れ。fuzz/flow.py）と、
-プロファイルの言語（locale。正解の文字などを書いた言語）。
+扱う節は [guard.roles]、[guard.buttons]、[screens.<menu>]、[rules.<ID>]、[[flow]]（ゲームの流れ。fuzz/flow.py）、
+[settings]（ゲームがプレイヤーに変えさせる設定）と、プロファイルの言語（locale。正解の文字などを書いた言語）。
 """
 
 from __future__ import annotations
@@ -16,9 +16,11 @@ from typing import Any
 from .config import GUARD_KINDS, GUARD_ROLE_DEFAULTS, BuildConfig, Config, ConfigError
 from .detect.engine import Rule
 from .fuzz.flow import Flow, parse_flows
+from .fuzz.settings_tour import SETTING_ITEMS
 
 SCREEN_KEYS = ("weight", "silent")
-PROFILE_SECTIONS = ("guard", "screens", "rules", "flow", "locale")
+PROFILE_SECTIONS = ("guard", "screens", "rules", "flow", "locale", "settings")
+SETTINGS_KEYS = ("offered",)
 
 
 @dataclass
@@ -33,6 +35,9 @@ class GameSpec:
     # プロファイルの言語（ゲームの言語のタグ。例: ja-JP）。正解の文字などを書いた言語。ハーネスはゲームの言語をこれに合わせ、
     # 違う言語のあいだは正解と照らし合わせない（DESIGN.md §9「プロファイルの言語」）
     locale: str | None = None
+    # ゲームがプレイヤーに変えさせる設定（[settings] offered。パッケージの settings の値の名前）。None なら書いていない
+    # （ゲームが値を出した設定すべてを、変えさせるものとして扱う）。書かなかった標準の項目は、ゲームがあえて外したもの
+    settings_offered: list[str] | None = None
     profile_path: Path | None = None
 
 
@@ -109,7 +114,26 @@ def build_spec(profile: dict[str, Any], local: dict[str, Any], profile_path: Pat
         if not isinstance(loc, str) or not loc.strip():
             raise ConfigError("locale はゲームの言語のタグ（例: \"ja-JP\"）の文字列にしてください")
         spec.locale = loc.strip()
+    if "settings" in doc:
+        spec.settings_offered = _settings_offered(doc["settings"])
     return spec
+
+
+def _settings_offered(raw: Any) -> list[str] | None:
+    if not isinstance(raw, dict):
+        raise ConfigError("settings は表にしてください")
+    unknown = sorted(set(raw) - set(SETTINGS_KEYS))
+    if unknown:
+        raise ConfigError(f"settings: 知らない項目です: {', '.join(unknown)}（{', '.join(SETTINGS_KEYS)}）")
+    if "offered" not in raw:
+        return None
+    keys = raw["offered"]
+    if not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
+        raise ConfigError("settings.offered は設定の名前の文字列の配列にしてください")
+    bad = [k for k in keys if k not in SETTING_ITEMS]
+    if bad:
+        raise ConfigError(f"settings.offered に知らない設定があります: {', '.join(bad)}（{', '.join(SETTING_ITEMS)}）")
+    return list(dict.fromkeys(keys))
 
 
 def apply_rules(rules: dict[str, Rule], spec: GameSpec) -> dict[str, Rule]:

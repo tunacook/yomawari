@@ -9,9 +9,17 @@
 #   - 一覧の ScrollRect → パッケージが hidden / scroll を出し、ハーネスがドラッグ・方向キーを試す
 
 # プロファイルの言語（DESIGN.md §9「プロファイルの言語」）。下の answers の文字などを書いた言語のタグ（Naninovel の言語のタグ）。
-# ハーネスはゲームの言語をこれに合わせ、違う言語のあいだは正解と照らし合わせない。設定画面の項目（言語・音量など）は書かない
+# ハーネスはゲームの言語をこれに合わせ、違う言語のあいだは正解と照らし合わせない。設定の値（言語・音量など）は書かない
 # （パッケージが settings で値を出す）
 locale = "ja-JP"
+
+[settings]
+# ゲームがプレイヤーに変えさせる設定（DESIGN.md §9「設定を変えに行く」）。名前はパッケージの settings の値の名前:
+#   locale, reveal_speed, auto_delay, skip_mode, master_volume, bgm_volume, sfx_volume, voice_volume, voice_locale,
+#   font, font_size, quality, screen_mode, resolution（Naninovel の標準の設定画面にある項目）
+# 書かなかった項目は、ゲームがあえて外したものとして扱う（変えに行かず、ボタンを見つけていなくても挙げない）。
+# この節を書かなければ、ゲームが値を出した項目をすべて変えさせるものとして扱う
+offered = ["locale", "reveal_speed", "master_volume", "bgm_volume", "sfx_volume", "screen_mode", "resolution"]
 
 [guard.roles]
 # 役割ごとの区分を、既定値（DESIGN.md §9 ガード）から変えるときだけ書く。

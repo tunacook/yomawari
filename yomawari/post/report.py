@@ -12,6 +12,7 @@ from ..events import SEVERITIES, Issue
 from .compare import PrevRun, load_previous
 from .coverage import render as render_coverage
 from .digest import _cell, build_items, render_top
+from .settings import render as render_settings
 from .stalls import load_events
 
 SEVERITY_LABEL = {"critical": "Critical", "major": "Major", "minor": "Minor", "info": "Info"}
@@ -43,6 +44,7 @@ class RunSummary:
     planned_hours: float | None = None  # 予定していた時間
     # レポートの設定（[fuzz] の report_* と stall_report_sec）。ないもの（古い run.json・操作しないモード）は既定値
     report_cfg: dict[str, Any] = field(default_factory=dict)
+    settings_offered: list[str] | None = None  # プロファイルの [settings] offered（「設定」の節）。None は書いていない
 
 
 def _hms(sec: float) -> str:
@@ -120,6 +122,7 @@ def render(summary: RunSummary, issues: list[Issue], run_dir: Path) -> str:
         out += [f"| `{k}` | {n} |" for k, n in sorted(summary.silent_buttons.items())]
         out.append("")
 
+    out += render_settings(events, summary.settings_offered)
     out += render_coverage(events, cfg)
 
     out += ["## 実行環境", ""]
