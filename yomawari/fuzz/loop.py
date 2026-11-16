@@ -391,6 +391,11 @@ class FuzzSession:
         self._sig: Any = None
         self._sig_t = 0.0
         self._modal_since: float | None = None
+        # キーで出し入れする画面（UI を隠すキーなど）。ボタンのないモーダルが、出る直前に押したキーでしか閉じないことがある
+        self._key_ops: deque[tuple[float, str]] = deque(maxlen=5)  # 最近押したキー (押し終えた時刻, キー)
+        self._modal_open: set[str] = set()  # 開いているモーダル（menu・menu_close から）
+        self._toggle_keys: dict[str, str] = {}  # モーダル → それが出る直前（toggle_key_sec 以内）に押したキー
+        self._toggle_tried: set[str] = set()  # 抜けられないときに、出る直前に押したキーをもう一度押したモーダル
         self._trigger: asyncio.Task[None] | None = None
         self._exiting = False
         self._pressed: str | None = None  # この起動で最後に押したボタン（次のボタンを押せたら、押しても終わらなかったもの）
@@ -580,9 +585,37 @@ class FuzzSession:
                 self.run.flow.scene_changed()
         if ev.source != "game" or ev.launch != self.launch:
             return
+        self._track_toggle(ev)
         timing = edge_timing(ev.kind, ev.data)
         if timing is not None:
             self._maybe_edge(timing)
+
+    def _track_toggle(self, ev: Event) -> None:
+        """キーを押した直後に出たモーダルに、そのキーを覚える。ボタンがないまま抜けられなければ、同じキーをもう一度押す
+        （人も、キーを押して画面が変わったら、同じキーで戻そうとする。run 2026-11-16_1001: スペースで UI を隠す機能が、
+        スペースの連打のあと隠れたままになり、Esc・右クリック・本文送りでは戻らなかった）。"""
+        name = str(ev.data.get("name"))
+        if ev.kind == "menu_close":
+            self._modal_open.discard(name)
+            self._toggle_keys.pop(name, None)
+            self._toggle_tried.discard(name)
+        elif ev.kind == "menu" and not ev.data.get("modal"):
+            self._modal_open.discard(name)
+        elif ev.kind == "menu" and name not in self._modal_open:
+            self._modal_open.add(name)
+            now = time.monotonic()
+            keys = [k for t, k in self._key_ops if now - t <= float(self.cfg["toggle_key_sec"])]
+            if keys:
+                self._toggle_keys[name] = keys[-1]
+                self._toggle_tried.discard(name)
+
+    def _toggle_op(self, by: str) -> Op | None:
+        """いちばん上のボタンのないモーダルが、出る直前に押したキーで出ていれば、そのキーを押す操作。"""
+        top = self.state.top_modal()
+        if top is None or top.buttons:
+            return None
+        key = self._toggle_keys.get(top.name)
+        return Op("key", arg=key, by=by) if key is not None else None
 
     def _maybe_edge(self, timing: str) -> None:
         """壊れやすいタイミングに、狙って行うのが難しい操作（エッジケース）を差し込む。fuzz モード（ガチャプレイの区間など）は
@@ -679,6 +712,15 @@ class FuzzSession:
             self._modal_since = self._modal_since or now
             if now - self._modal_since >= float(self.cfg["stuck_modal_sec"]):
                 cands = escape_candidates()
+                toggle = self._toggle_op("escape")
+                if toggle is not None and top.name not in self._toggle_tried:
+                    # 出る直前に押したキーを、まず 1 回だけ押す。戻らなければ、ほかの抜け方と一緒に試す
+                    self._toggle_tried.add(top.name)
+                    self.run.notes.append(f"ボタンのないモーダル `{top.name}` から抜けられなかったので、出る直前に押したキー"
+                                          f" `{toggle.arg}` をもう一度押した（起動 #{self.launch}）")
+                    cands = [toggle]
+                elif toggle is not None:
+                    cands.append(toggle)
         else:
             self._modal_since = None
         key = state_key(self.state)
@@ -1523,6 +1565,9 @@ class FuzzSession:
         allow_exit = False
         cands = normal_candidates(self.state, self.run.guard, self.cfg["weights"], allow_exit, None, None)
         cands += [Op("key", arg="esc", by="recover"), Op("right_click", by="recover"), Op("advance", by="recover")]
+        toggle = self._toggle_op("recover")
+        if toggle is not None:
+            cands.append(toggle)
         seen: dict[str, Op] = {}
         for op in cands:
             if op.kind in ("click", "key", "right_click", "advance", "drag", "wheel_down", "wheel_up"):
@@ -2485,6 +2530,9 @@ class FuzzSession:
     async def _do(self, op: Op, trigger: str | None = None) -> bool:
         """op を実行して op イベントを出す。押せなければ op_error を出して False。"""
         blocked = False
+        if op.kind in ("key", "rapid_key") and op.arg is not None:
+            # 連打の途中で画面が出ることがあるので、押し始める前にも覚える（押し終えたら時刻を更新する）
+            self._key_ops.append((time.monotonic(), str(op.arg)))
         async with self._lock:
             try:
                 try:
@@ -2513,6 +2561,8 @@ class FuzzSession:
             self.publish(Event("harness", "input_resumed", {"reason": resumed[0], "sec": round(resumed[1], 1)},
                                self.launch))
         self.run.recent.append(op.label)
+        if op.kind in ("key", "rapid_key") and op.arg is not None:
+            self._key_ops.append((time.monotonic(), str(op.arg)))
         self._operated(op)
         if op.target is not None:
             self.run.labels.add(op.target.label)
