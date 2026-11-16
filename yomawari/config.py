@@ -58,6 +58,8 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "irregular_prob": 0.05,
     "rapid_count": 10,
     "stuck_modal_sec": 5.0,
+    # キーを押してからこの秒数のうちに出たモーダルは、そのキーで出たとみなす（抜けられないとき、同じキーをもう一度押す）
+    "toggle_key_sec": 2.0,
     "external_wait_sec": 3.0,
     "exit_min_interval_sec": 1800.0,
     # 終了ボタンを試す前にセーブする（起動し直したら続きから遊べるように）。セーブしてからこの秒数のうちなら終了を試す（0 で使わない）
