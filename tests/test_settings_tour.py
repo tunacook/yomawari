@@ -311,3 +311,19 @@ def test_volume_hold_skips_irregular_ops_and_is_off_by_default():
     run.volume_hold = VolumeHold(before=5, after=6.5, until=float("inf"))
     asyncio.run(s._irregular("random"))
     assert done == []
+
+
+def test_tour_and_notes_follow_profile_offered():
+    # プロファイルで外した設定は、変えに行かず、「変わらなかった設定」にも挙げない
+    tour = SettingsTour(interval=1, timeout=50, factor=20, next_t=0.0,
+                        offered=frozenset({"reveal_speed", "master_volume", "resolution"}))
+    tour.observe({"locale": "ja-JP", "reveal_speed": 0.5, "auto_delay": 0.5, "master_volume": 1, "voice_volume": 1})
+    buttons = {"SettingsUI/Option_a": {"reveal_speed": 1}, "SettingsUI/Voice": {"voice_volume": 0}}
+    for _ in range(5):
+        tour.target = None
+        tour.step(1.0, buttons, random.Random(1))
+        assert tour.target == "reveal_speed"
+    notes = tour.notes(buttons)
+    assert "このランで一度も変わらなかった設定: master_volume（変えるボタンを見つけていない）、reveal_speed" in notes
+    assert any("offered にあるのに、ゲームが値を出していない設定: resolution" in n for n in notes)
+    assert not any("auto_delay" in n or "voice_volume" in n for n in notes)
