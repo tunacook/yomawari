@@ -718,6 +718,26 @@ def test_s02_modal_muted_counts_until_advance_is_checked():
     assert [i.rule_id for i in engine.tick(t0 + idle, 0)] == ["S-02"]
 
 
+def test_s02_modal_check_holds_while_moving_between_modals():
+    """確かめたあと、ロード → メニュー → 設定のようにモーダルからモーダルへ移っても数え直さない。すべて閉じたら数え直す。"""
+    rules = scaled_rules(1.0)
+    idle = float(rules["S-02"].param("muted_idle_sec"))
+    engine = Engine(rules)
+    engine.feed(Event("game", "line", {"line_id": "a:5.0"}, 0, t=0.0))
+    engine.feed(Event("game", "input", {"muted": ["Continue"]}, 0, t=1.0))
+    engine.feed(Event("harness", "op_result", {"kind": "advance", "heartbeat_age": 0.5, "waited": 1.0,
+                                                 "state": {"top_modal": "SaveMenu"}}, 0, t=60.0))
+    for i, top in enumerate(("PopupMenu", "SettingsMenu")):
+        engine.feed(Event("harness", "op_result", {"kind": "click", "heartbeat_age": 0.5,
+                                                     "state": {"top_modal": top}}, 0, t=70.0 + i))
+    engine.feed(Event("game", "heartbeat", {}, 0, t=80.0 + idle))
+    assert engine.tick(80.0 + idle, 0) == []
+    engine.feed(Event("harness", "op_result", {"kind": "key", "heartbeat_age": 0.5,
+                                                 "state": {"top_modal": None}}, 0, t=100.0 + idle))
+    engine.feed(Event("game", "heartbeat", {}, 0, t=100.0 + 2 * idle))
+    assert [i.rule_id for i in engine.tick(100.0 + 2 * idle, 0)] == ["S-02"]
+
+
 def test_s02_modal_advance_that_progressed_is_not_a_check():
     """モーダルの上で押した本文送りで本文が進んだなら、確かめたことにしない。"""
     rules = scaled_rules(1.0)
