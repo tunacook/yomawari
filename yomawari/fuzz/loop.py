@@ -1719,9 +1719,14 @@ class FuzzSession:
         known = label in run.answered or label in run.experience.progressed_targets()
         limit = int(self.cfg["answered_miss_limit"]) if known else 1
         run.ledger.pressed(label, responded, run.miss_streak[label], limit)
-        for key, goal in list(run.ledger.goals.items()):
+        self._drop_list_goal(label)
+
+    def _drop_list_goal(self, label: str) -> None:
+        """押した項目が一覧の目標なら外す（次の目標は _list_ops で決め直す）。"""
+        goals = self.run.ledger.goals
+        for key, goal in list(goals.items()):
             if goal.label == label:
-                del run.ledger.goals[key]
+                del goals[key]
 
     def _list_ops(self, cands: list[Op]) -> list[Op]:
         """流れの外で、一覧ごとに目標を決め、そこへ向かう操作（DESIGN.md §9「一覧の台帳と目標」）。
@@ -2375,6 +2380,9 @@ class FuzzSession:
             self._verify_behind(op.target, responded)
         if expected is not None and not responded and op.target is not None:
             self._confirm_silent(expected, op.target)
+            # 反応しなくて正しい押下でも、一覧の目標なら押し終えたので外す。押せる・押せないは台帳に書かない
+            # （run 2026-11-17_1400: 選ばれている音量のスライダーを、明るくなった目標として 46 回押し続けた）
+            self._drop_list_goal(op.target.label)
         elif op.target is not None and op.target.kind == "button":
             (self.run.silent.discard if responded else self.run.silent.add)(op.target.label)
             self._note_silent(op.target, responded)
