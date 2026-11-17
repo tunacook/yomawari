@@ -646,6 +646,47 @@ def test_s02_counts_advances_until_progress():
     assert "10 回" in out[0].detail and "`wheel_down 3` → `key esc`" in out[0].detail
 
 
+
+def test_s02_skips_advances_while_continue_is_muted():
+    """ゲームが本文送りの入力を止めているあいだ（入力を止めた演出など）の本文送りは数えない。"""
+    engine = Engine(scaled_rules(1.0))
+    adv = {"kind": "advance", "label": "advance", "responded": False, "interfered": False,
+           "heartbeat_age": 0.5, "recent": [], "state": {"line_id": "a:1.0"}}
+    engine.feed(Event("game", "input", {"muted": ["Continue", "Skip"]}, 0, t=100.0))
+    out = []
+    for i in range(30):
+        out += engine.feed(Event("harness", "op_result", adv, 0, t=100.0 + i))
+        out += engine.feed(Event("game", "command", {"name": "wait"}, 0, t=100.5 + i))
+        out += engine.feed(Event("game", "heartbeat", {}, 0, t=100.5 + i))
+        out += engine.tick(101.0 + i, 0)
+    assert out == []
+    # 入力を戻したら、また数える
+    engine.feed(Event("game", "input", {"muted": []}, 0, t=140.0))
+    for i in range(9):
+        assert engine.feed(Event("harness", "op_result", adv, 0, t=141.0 + i)) == []
+    assert [i.rule_id for i in engine.feed(Event("harness", "op_result", adv, 0, t=150.0))] == ["S-02"]
+
+
+def test_s02_detects_input_left_muted():
+    """入力を止めたまま、スクリプトも進まない（戻し忘れ）ときは、時間で検出する。"""
+    rules = scaled_rules(1.0)
+    idle = float(rules["S-02"].param("muted_idle_sec"))
+    engine = Engine(rules)
+    engine.feed(Event("harness", "op_result", {"kind": "advance", "heartbeat_age": 0.5,
+                                                 "state": {"line_id": "a:5.0"}}, 0, t=0.0))
+    engine.feed(Event("game", "input", {"muted": ["Continue"]}, 0, t=1.0))
+    engine.feed(Event("game", "line", {"line_id": "a:6.0"}, 0, t=2.0))
+    engine.feed(Event("game", "heartbeat", {}, 0, t=1.0 + idle))
+    assert engine.tick(1.0 + idle, 0) == []  # 最後に本文が来てから、まだ muted_idle_sec たっていない
+    engine.feed(Event("game", "heartbeat", {}, 0, t=2.0 + idle))
+    out = engine.tick(2.0 + idle, 0)
+    assert [i.rule_id for i in out] == ["S-02"] and "入力が止められたまま" in out[0].detail
+    assert engine.tick(3.0 + idle, 0) == []  # 1 回だけ
+    # ゲームが固まっている（heartbeat が来ない）ときは出さない
+    engine.feed(Event("game", "line", {"line_id": "a:7.0"}, 0, t=10.0 + idle))
+    assert engine.tick(20.0 + 2 * idle, 0) == []
+
+
 # --- ハーネス全体（モックゲーム） ---
 
 
