@@ -18,6 +18,8 @@ _SKIP = {"locales", "seq", "t", "f", "ev"}
 def _value(v: Any) -> str:
     if v is None:
         return "—"
+    if v == "":
+        return "（空）"  # 空のコード（``）は、Markdown で記号のまま見える（Naninovel の既定のフォント名など）
     return f"`{_cell(str(v))}`"
 
 

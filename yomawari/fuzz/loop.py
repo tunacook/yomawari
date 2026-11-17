@@ -48,7 +48,7 @@ from .ops import (
 )
 from .flow import Answer, FlowTracker, matches, text_matches
 from .resume import SaveHints, newest_slots, older_than, stamp_key
-from .settings_tour import SettingsTour, VolumeHold
+from .settings_tour import GUARDED_KEYS, SettingsTour, VolumeHold
 from .rollback import EDGE_OPS, EDGE_TIMINGS, PATTERNS, RollbackWatch, Step, describe, edge_timing, step_of
 from .listing import (
     MASKED, NO, OK, UNKNOWN, Goal, Ledger, Row, blind_candidates, direction, distance, moves, stuck_rows,
@@ -962,7 +962,7 @@ class FuzzSession:
         if self._tour_paused():
             return
         target = run.tour.target
-        run.tour.step(now, run.experience.setting_buttons, run.rng)
+        run.tour.step(now, run.experience.setting_buttons, run.rng, run.guard.setting_labels())
         if run.tour.target is not None and run.tour.target != target:
             self.publish(Event("harness", "settings_tour", {"key": run.tour.target, "result": "start"}, self.launch))
         elif target is not None and run.tour.target is None:
@@ -973,9 +973,17 @@ class FuzzSession:
     def _apply_tour(self, cands: list[Op]) -> list[Op]:
         if self._tour_paused():
             return cands
-        exp = self.run.experience
-        return self.run.tour.apply(cands, set(self.state.menus), self.state.settings,
-                                   exp.setting_buttons, exp.setting_routes)
+        run, exp = self.run, self.run.experience
+        guarded = run.guard.setting_labels() if run.tour.target in GUARDED_KEYS else set()
+        if guarded and not self.state.busy:
+            # ガードがイレギュラー操作でだけ押す、画面の設定を変えるボタンも、変えに行くときは候補に入れる
+            present = {op.target.label for op in cands if op.target is not None}
+            w = float(self.cfg["weights"]["click"])
+            cands = cands + [Op("click", t, weight=w, novelty=True, group="button")
+                             for t in self.state.targets()
+                             if t.label in guarded and t.label not in present and not t.locked]
+        return run.tour.apply(cands, set(self.state.menus), self.state.settings,
+                              exp.setting_buttons, exp.setting_routes, guarded)
 
     def _apply_locale(self, cands: list[Op]) -> list[Op]:
         """ゲームの言語がプロファイルの言語と違うあいだ、その言語に切り替えたことのあるボタンと、その画面を開くボタンを
@@ -2298,7 +2306,7 @@ class FuzzSession:
             now = self.state.settings or {}
             changed = {k for k, v in now.items() if k != "locales" and values_before.get(k) != v}
             route = self._route(op.target.menu) if op.target is not None else []
-            self.run.tour.changed(changed, route[0] if route else None, time.monotonic())
+            self.run.tour.changed(changed, route[0] if route else None, time.monotonic(), now)
         if op.target is not None:
             self._verify_behind(op.target, responded)
         if expected is not None and not responded and op.target is not None:
