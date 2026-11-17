@@ -187,6 +187,8 @@ class FuzzRun:
     opened_via: dict[str, str] = field(default_factory=dict)
     # プレイの目的（random モード）。起動したとき・タイトルに戻ったときに選び直す
     intent: str | None = None
+    # 時間をかけても答えられなかった質問から離れて「画面を見て回る」にしている終わりの時刻（time.monotonic）
+    rest_until: float | None = None
     plays: int = 0
     stopped_reason: str | None = None
     # OS が入力を受け付けなかった（画面のロック・ゲームを前面にできない）。いま続いているもの (理由, 始まりの時刻)
@@ -761,6 +763,34 @@ class FuzzSession:
         self._play_start = len(run.experience.reached)
         self.publish(Event("harness", "intent", {"intent": intent, "play": run.plays, "why": why}, self.launch))
 
+    def _leave_question(self, now: float, timed_out: bool) -> None:
+        """時間をかけても答えられなかった質問に着いた。flow_question_rest_sec のあいだ、その質問から離れる。
+        「本編を進める」のプレイなら、先へ進めないので「画面を見て回る」に変える（ロードや画面の網羅で、ほかの場所を試す。
+        DESIGN.md §9「ゲームの流れ」）。"""
+        run = self.run
+        if timed_out:
+            run.rest_until = now + float(self.cfg["flow_question_rest_sec"])
+        if run.intent != "progress" or run.burst is not None:
+            return
+        self._set_intent("explore", "時間をかけても答えられなかった質問から離れる")
+
+    def _back_to_question(self) -> None:
+        """質問から離れる時間が過ぎた。その質問にもう一度、流れに沿って答える（思い出を読み進めて、答えが見つかることがある。
+        run 2026-11-16_2241: 44 分かけて答えられた質問があった）。"""
+        run = self.run
+        run.rest_until = None
+        run.flow.timed_out.clear()
+        if run.intent == "explore" and run.burst is None and float(self.cfg["intent_progress"]) > 0:
+            self._set_intent("progress", "質問から離れる時間が過ぎた")
+
+    def _set_intent(self, intent: str, why: str) -> None:
+        run = self.run
+        self._end_play()
+        run.plays += 1
+        run.intent = intent
+        self._play_start = len(run.experience.reached)
+        self.publish(Event("harness", "intent", {"intent": intent, "play": run.plays, "why": why}, self.launch))
+
     def _end_play(self) -> None:
         """プレイの目的と、そのあいだに新しく届いた本文・scene・選択肢の数を「ハーネスの記録」に書く。"""
         run = self.run
@@ -781,6 +811,8 @@ class FuzzSession:
         """
         run, cfg = self.run, self.cfg
         tracker = run.flow
+        if run.rest_until is not None and now >= run.rest_until:
+            self._back_to_question()
         if not tracker.flows or not cfg["use_flow"] or run.intent == "explore":
             return cands
         before = (tracker.active.name if tracker.active else None, tracker.index)
@@ -789,8 +821,16 @@ class FuzzSession:
         after = (tracker.active.name if tracker.active else None, tracker.index)
         if tracker.abandon(int(cfg["flow_exhausted_picks"])):
             step, after = None, (None, tracker.index)
+        timed_out = tracker.charge(now, float(cfg["flow_question_max_sec"]), float(cfg["flow_idle_sec"]))
+        if timed_out:
+            step, after = None, (None, tracker.index)
         if after != before:
             self._note_flow(before, after)
+        blocked, tracker.blocked = tracker.blocked, None
+        if timed_out or blocked is not None:
+            self._leave_question(now, timed_out)
+            if run.intent == "explore":
+                return cands
         self._judged()
         flow = tracker.active
         if flow is None:
