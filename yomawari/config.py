@@ -58,6 +58,9 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "irregular_prob": 0.05,
     "rapid_count": 10,
     "stuck_modal_sec": 5.0,
+    # モーダルな画面が開いていて、本文送りの入力が止められたままこの秒数たったら、1 回だけ本文送りを押して、進まないことを
+    # 確かめる（S-02 は、確かめたあとはモーダルが閉じるまで数えない。rules.yaml の S-02 muted_idle_sec より短くする）
+    "mute_check_sec": 60.0,
     # キーを押してからこの秒数のうちに出たモーダルは、そのキーで出たとみなす（抜けられないとき、同じキーをもう一度押す）
     "toggle_key_sec": 2.0,
     "external_wait_sec": 3.0,

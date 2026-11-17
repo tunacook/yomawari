@@ -117,3 +117,24 @@ def test_play_inserts_few_edges_and_not_on_every_line():
     # ガチャプレイの区間（fuzz）: 本文が出たときにも trigger_prob の確率で
     lines, scene, run = asyncio.run(run_events("fuzz", "trigger_prob", 1.0))
     assert lines is not None
+
+
+def test_mute_check_presses_advance_once_on_a_muted_modal():
+    """モーダルが開いて本文送りが止められたまま mute_check_sec たったら、1 回だけ本文送りを押す（S-02 が確かめに使う）。
+    閉じるか入力が戻ったら数え直す。"""
+    s, st, run, _ = _session(mute_check_sec=60)
+    _game(s, st, "menu", name="SaveMenu", modal=True,
+          buttons=[{"name": "Back", "rect": [0.1, 0.1, 0.2, 0.2], "type": "button"}])
+    assert s._mute_check(0.0) is None  # 入力が止められていない
+    _game(s, st, "input", muted=["Continue", "Skip"])
+    assert s._mute_check(10.0) is None
+    assert s._mute_check(69.0) is None
+    op = s._mute_check(70.0)
+    assert op is not None and op.kind == "advance" and op.by == "mute_check"
+    assert s._mute_check(200.0) is None  # 1 回だけ
+    _game(s, st, "menu_close", name="SaveMenu")
+    assert s._mute_check(201.0) is None
+    _game(s, st, "menu", name="SaveMenu", modal=True,
+          buttons=[{"name": "Back", "rect": [0.1, 0.1, 0.2, 0.2], "type": "button"}])
+    assert s._mute_check(202.0) is None
+    assert s._mute_check(262.0) is not None  # 開き直したら、また確かめる

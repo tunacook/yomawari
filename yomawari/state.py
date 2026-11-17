@@ -167,6 +167,8 @@ class GameState:
     slot_lines: dict[str, dict[str, Any]] = field(default_factory=dict)
     # 最後のロードで line を戻したか（ロードが始まったら False に戻す）
     line_restored: bool = False
+    # ゲームが止めている入力の名前（input イベントの muted。Continue があれば本文送りが止められている）
+    muted: frozenset[str] = frozenset()
     _played_since_title: bool = False
     _order: int = 0
 
@@ -201,6 +203,9 @@ class GameState:
         if self.settings is not None and values != self.settings:
             self.settings_changes += 1
         self.settings = values
+
+    def _on_input(self, d: dict[str, Any], t: float) -> None:
+        self.muted = frozenset(str(x) for x in d.get("muted") or [])
 
     def _on_selected(self, d: dict[str, Any], t: float) -> None:
         menu, name = d.get("menu"), d.get("name")

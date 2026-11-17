@@ -893,6 +893,10 @@ class AdvanceStallDetector(Detector):
     （run 2026-11-16_2241: 入力を止めたオープニングの演出で、コマンドが進んでいるのに検出した）。
     人もこのあいだにクリックすることはあるので、ハーネスは押すのをやめない。
     止めたまま戻し忘れる不具合は、入力が止められていて、スクリプトのコマンド・本文も muted_idle_sec 来ないときに検出する。
+    ただし、モーダルな画面が開いているあいだに本文送りを押して、進まないことを確かめたあとは、そのモーダルが閉じるまで数えない
+    （メニューを開いているあいだに本文送りを止めるのは仕様。run 2026-11-17_1204: ロード・設定の画面にいるだけで検出した）。
+    閉じたら、そこから数え直す。ハーネスは、モーダルが開いて入力が止められたまま mute_check_sec たつと本文送りを押す
+    （fuzz/loop.py の _mute_check）
     """
 
     PROGRESS = {"line", "choices", "scene"}
@@ -911,11 +915,15 @@ class AdvanceStallDetector(Detector):
         self.heartbeat_at: float | None = None
         self.state: dict | None = None  # 最後の操作のときのゲームの状態
         self.fired = False
+        self.progress_at: float | None = None  # 最後に line / choices / scene が来た時刻
+        # 入力が止められたモーダルの上で、本文送りを押しても進まないと確かめたモーダルの名前（閉じるまで数えない）
+        self.checked: str | None = None
 
     def on_event(self, ev: Event) -> list[Issue]:
         d = ev.data
         if ev.kind == "launch" or ev.kind == "proc_exit":
             self.count, self.muted, self.script_at, self.heartbeat_at, self.fired = 0, False, None, None, False
+            self.progress_at, self.checked = None, None
             return []
         if ev.source == "game":
             if ev.kind == "heartbeat":
@@ -923,7 +931,7 @@ class AdvanceStallDetector(Detector):
             elif ev.kind == "input":
                 muted = "Continue" in (d.get("muted") or [])
                 if muted != self.muted:
-                    self.muted, self.count, self.fired = muted, 0, False
+                    self.muted, self.count, self.fired, self.checked = muted, 0, False, None
                     self.script_at, self.script_wall = (ev.t, ev.wall) if muted else (None, "")
             elif ev.kind in self.SCRIPT:
                 if self.muted:
@@ -931,10 +939,20 @@ class AdvanceStallDetector(Detector):
                 # 選択肢が消えた知らせ（items が空の choices）は進んだことにしない
                 if ev.kind in self.PROGRESS and not (ev.kind == "choices" and not d.get("items")):
                     self.count = 0
+                    self.progress_at = ev.t
             return []
         if ev.kind != "op_result":
             return []
         self.state = d.get("state") or self.state
+        top = (d.get("state") or {}).get("top_modal")
+        if self.checked is not None and top != self.checked:
+            # 確かめたモーダルが閉じた: ここから数え直す
+            self.checked = None
+            if self.muted:
+                self.script_at, self.script_wall, self.fired = ev.t, ev.wall, False
+        if (d.get("kind") == "advance" and self.muted and top is not None and not d.get("interfered")
+                and (self.progress_at is None or self.progress_at < ev.t - float(d.get("waited") or 0))):
+            self.checked = str(top)  # 入力が止められたモーダルの上で、本文送りを押しても進まなかった
         if d.get("kind") != "advance" or d.get("interfered") or self.muted or not _alive(ev, self.alive):
             return []
         self.count += 1
@@ -954,6 +972,8 @@ class AdvanceStallDetector(Detector):
         ]
 
     def on_tick(self, now: float, launch: int) -> list[Issue]:
+        if self.checked is not None:
+            return []  # モーダルの上で、本文送りが進まないことを確かめた（閉じるまで数えない）
         if not self.muted or self.fired or self.script_at is None or now - self.script_at < self.idle:
             return []
         if self.heartbeat_at is None or now - self.heartbeat_at > self.alive:
