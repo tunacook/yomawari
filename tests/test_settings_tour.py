@@ -385,6 +385,20 @@ def test_tour_presses_guarded_screen_buttons_and_restores():
     assert run.tour.target is None
 
 
+def test_tour_restore_ends_when_value_is_already_back():
+    """元の値に戻しにいっている途中で起動し直すと、ゲームは元の値で立ち上がる。押して変わらなくても、戻し終えたとみなす。"""
+    tour = SettingsTour(interval=100, timeout=300, factor=20)
+    tour.observe({"resolution": "1280x720", "screen_mode": "Windowed"}, 0.0)
+    tour.target, tour.since = "resolution", 0.0
+    tour.changed({"resolution"}, None, 1.0, {"resolution": "1920x1080"})
+    assert tour.restoring
+    tour.observe({"resolution": "1920x1080", "screen_mode": "Windowed"}, 2.0)
+    assert tour.restoring  # まだ元の値ではない
+    tour.observe({"resolution": "1280x720", "screen_mode": "Windowed"}, 5.0)  # 起動し直した
+    assert tour.target is None and not tour.restoring and tour.restored == 1
+    assert tour.next_t == 105.0 and not tour.restore_failed
+
+
 def test_tour_avoids_buttons_that_change_other_settings():
     """押すとほかの設定もまとめて変わるボタン（リセットなど）は、ほかに押すものがないときだけ押す。"""
     st, run, s = _locale_session("ja-JP", _SOUND)

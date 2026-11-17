@@ -1022,7 +1022,7 @@ class FuzzSession:
 
     def _step_tour(self, now: float) -> None:
         run = self.run
-        run.tour.observe(self.state.settings)
+        run.tour.observe(self.state.settings, now)
         if self._tour_paused():
             return
         target = run.tour.target
