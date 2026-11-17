@@ -1264,6 +1264,11 @@ def test_pressing_already_selected_value_or_profile_silent_is_expected():
         assert not res["responded"] and res["expected_silent"] == "already_set"
     assert option.label not in run.silent and issues == []
     assert run.expected_silent[("already_set", option.label)] == 3
+    # 一覧の目標だったなら、反応しなくて正しい押下でも、押し終えたので外す（押し続けない）
+    from yomawari.fuzz.listing import Goal
+    run.ledger.goals["Menu/Option"] = Goal(option.label, "pick", "list")
+    assert press(option)["expected_silent"] == "already_set"
+    assert "Menu/Option" not in run.ledger.goals
     assert sum("locale=en-US" in n and "作用しない" in n for n in run.notes) == 1  # ボタンごとに最初の1回だけ書く
     for _ in range(3):
         assert press(auto)["expected_silent"] == "profile"
