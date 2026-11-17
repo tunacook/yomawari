@@ -1514,6 +1514,46 @@ def test_exhausted_question_answers_again_then_gives_up():
     assert tr.active is not None and not tr.abandoned
 
 
+
+def test_question_time_cap_switches_to_explore():
+    """1 つの質問で流れに沿った時間が flow_question_max_sec を超えたら、このランではその質問の流れに沿わず、
+    「画面を見て回る」に変える（run 2026-11-16_2241: 思い出を読むたびに言葉が増え、1 つの質問で 194 分答え続けた）。"""
+    s, st, run, events = _session({"flow_question_max_sec": 60.0})
+    run.flow = FlowTracker(parse_flows(tomllib.loads(EXHAUST)["flow"]))
+    run.intent = "progress"
+    tr = run.flow
+
+    def ask():
+        _feed(st, "line", line_id="main/s3:40.0", text="どこだって？")
+        _only(st, "AlbumUI", [LIST[0]])
+
+    ask()
+    for t in range(0, 60, 5):
+        _weights(s, st, float(t))
+        assert tr.active is not None
+    _weights(s, st, 100.0)  # 止まっていたあいだ（flow_idle_sec より長い間）は数えない
+    assert tr.active is not None and tr.question_sec[tr.ctx] == 55.0
+    _weights(s, st, 105.0)
+    q = ("質問に言葉で答える", "main/s3:40.0")
+    assert tr.active is None and q in tr.timed_out
+    assert run.intent == "explore" and run.rest_until == 105.0 + FUZZ_DEFAULTS["flow_question_rest_sec"]
+    assert any(e.kind == "intent" and e.data["intent"] == "explore" for e in events)
+    assert any("しばらくこの質問から離れ" in e for e in tr.events)
+    # 離れているあいだは、開示の状態が変わっても（ロードした）、同じ質問に着いても（起動し直して「本編を進める」を選んだ）、
+    # 流れは始めずに「画面を見て回る」にする
+    s.on_event(Event("game", "load", {"slot": "GameSave004", "phase": "start"}, 0))
+    run.intent = "progress"
+    ask()
+    _weights(s, st, 200.0)
+    assert tr.active is None and run.intent == "explore"
+    # 離れる時間が過ぎたら「本編を進める」に戻し、その質問にもう一度答える
+    _weights(s, st, run.rest_until)
+    assert run.intent == "progress" and run.rest_until is None and not tr.timed_out
+    ask()
+    _weights(s, st, run.rest_until or 2000.0)
+    assert tr.active is not None and tr.ctx == q
+
+
 STUCK = """
 [[flow]]
 name = "質問に答える"

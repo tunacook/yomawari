@@ -347,6 +347,15 @@ class FlowTracker:
         # 1834 回くり返した）
         self.step_entries: Counter[tuple[Ctx, int, Path]] = Counter()
         self._entry: tuple[Ctx, int, Path] | None = None  # いまの手順に入ったときの (質問, 手順, 選び方)
+        # 質問ごとに、流れに沿っていた時間（秒）。長すぎたら、このランではその質問の流れに沿うのをやめる（timed_out）。
+        # 思い出を読むたびに選べる言葉が増え、試し終える（exhausted）前に何時間も答え続けることがある
+        # （run 2026-11-16_2241: 1 つの質問で 194 分、思い出を 24 回読み、116 回答えた）
+        self.question_sec: Counter[Ctx] = Counter()
+        # 時間切れで離れている質問。開示の状態が変わっても戻さず、離れる時間が過ぎたらループが戻す
+        self.timed_out: set[Ctx] = set()
+        self.timeouts: Counter[Ctx] = Counter()
+        self.blocked: Ctx | None = None  # 流れを始めようとしたが、時間切れの質問だったので始めなかった
+        self._charged_at: float | None = None
 
     @property
     def step(self) -> Step | None:
@@ -437,6 +446,9 @@ class FlowTracker:
                         # ただし、プロファイルの正解の at で別の質問の行と分かれば、正解して次の質問に着いた
                         # （run 2026-11-11_1007: 正解のあと 2〜4 行で次の質問が出て、正解を外れと覚えた）
                         ctx = self.last_done
+                    if ctx in self.timed_out:
+                        self.blocked = ctx  # 時間をかけても答えられなかった質問。ループがプレイの目的を変える
+                        continue
                     if ctx in self.abandoned:
                         continue  # 試し終えても進めず、あきらめた質問。流れに沿わず、ふだんの操作にする
                     self.active, self.index, self.idle_since = f, 0, None
@@ -594,6 +606,27 @@ class FlowTracker:
             "先に進めなかったので、この質問では流れに沿うのをやめた（開示の状態が変わるまで）"
         )
         self._break("試し終えた質問をあきらめた")
+        return True
+
+    def charge(self, now: float, limit: float, gap: float) -> bool:
+        """いまの質問で流れに沿っている時間を数える。limit 秒を超えたら、このランではその質問の流れに沿うのをやめて
+        True。gap 秒より長く呼ばれなかったあいだ（流れの外・止まっていた）は数えない。limit が 0 以下なら数えない。"""
+        last, self._charged_at = self._charged_at, now
+        ctx = self.ctx
+        if limit <= 0 or ctx is None or self.active is None or last is None or ctx in self.timed_out:
+            return False
+        if 0 < now - last <= gap:
+            self.question_sec[ctx] += now - last
+        if self.question_sec[ctx] < limit:
+            return False
+        self.timed_out.add(ctx)
+        self.question_sec[ctx] = 0.0  # 戻ってきたら、また limit 秒まで答える
+        self.timeouts[ctx] += 1
+        self.events.append(
+            f"流れ「{ctx[0]}」の `{ctx[1]}` で、{limit / 60:g} 分流れに沿っても答えられなかったので、しばらくこの質問から"
+            "離れ、プレイの目的を「画面を見て回る」にした（プロファイルに正解を書けば、正解に沿って答える）"
+        )
+        self._break("時間をかけても答えられなかった")
         return True
 
     def _exhausted(self, ctx: Ctx, path: Path, depth: int) -> bool:
