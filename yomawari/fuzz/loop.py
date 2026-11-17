@@ -1015,9 +1015,10 @@ class FuzzSession:
     # --- 設定を変えに行く（DESIGN.md §9「設定を変えに行く」、fuzz/settings_tour.py） ---
 
     def _tour_paused(self) -> bool:
-        """区間・ゲームの流れの途中・言語を戻しているあいだは、設定を変えに行かない。"""
+        """区間・ゲームの流れの途中・言語を戻しているあいだ・続きから遊ぶあいだは、設定を変えに行かない
+        （run 2026-11-17_2240: 起動し直した直後、ロードする前にタイトルから設定の画面へ行った）。"""
         run = self.run
-        return run.burst is not None or run.flow.active is not None or (
+        return run.burst is not None or run.flow.active is not None or run.resume_until is not None or (
             self._locale_off() and not run.locale_missing)
 
     def _step_tour(self, now: float) -> None:
@@ -1430,6 +1431,14 @@ class FuzzSession:
             # （run 2026-11-10_0957: ページを送ると決めたのに、空のスロットを押す一覧の探索が 97% で選ばれ、ページを
             # 一度も送らないまま「はじめから」を押した）
             cands = [op for op in cands if op.by not in ("list", "blind")]
+            # 探すあいだは、ページを送るボタンだけを押して 1 ページずつ見る。人は自分のセーブを探すとき、ページを順に
+            # めくる。ほかのボタンも候補に残すと、ページ番号のボタンで飛んだり画面を出たりして、見ていないページが残る
+            # （run 2026-11-17_2240: 11 ページのうち、自分のセーブのある 2 ページ目だけ一度も開かないまま 180 秒たった）
+            nexts = [op for op in cands
+                     if op.kind == "click" and op.target is not None and op.target.kind == "button"
+                     and hints.next_page(op.target)]
+            if nexts:
+                cands = nexts
         # いちばん新しいセーブ以外は押さない。一覧の探索（list）の重みで古いセーブを選ぶと、何章も戻る
         # （run 2026-11-09_1358: 15:58 のセーブがあるのに 14:54 のセーブをロードし、5 章戻って 30 分やり直した）
         stale = ({t.label for t in saved} - newest) | unread | bad
@@ -2394,7 +2403,8 @@ class FuzzSession:
             self._note_silent(op.target, responded)
             if responded:
                 self.run.flow.seen(op.target.label, op.target.name, op.target.text)
-            if responded and self.run.resume_until is not None and self.run.save_hints.next_page(op.target):
+            if self.run.resume_until is not None and self.run.save_hints.next_page(op.target):
+                # 送れなかった押下も 1 回と数える（最後のページで送れないボタンを、時間切れまで押し続けないように）
                 self.run.resume_pages += 1
             if responded:
                 self.run.miss_streak.pop(op.target.label, None)

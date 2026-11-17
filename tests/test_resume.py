@@ -91,8 +91,7 @@ def test_relaunch_continues_from_newest_save():
     # 1 ページ目はどれも空: ページを送る
     _show(st, "SaveLoadUI", LOAD, {_label(i): f"{i + 1}. Empty" for i in range(9)})
     w = _weights(s, st, now)
-    assert w["click SaveLoadUI/NextPageButton"] == CLICK * BOOST
-    assert w["click SaveLoadUI/PreviousPageButton"] == CLICK
+    assert w == {"click SaveLoadUI/NextPageButton": CLICK * BOOST}  # 探すあいだは、ページを送るボタンだけを押す
     # 2 ページ目にセーブがある: いちばん新しいものを先に押す
     texts = {_label(i): f"{i + 10}. Empty" for i in range(9)}
     texts[_label(4)] = "14. 2026-11-06 10:20:00"
@@ -376,15 +375,61 @@ def test_resume_pages_instead_of_filling_list_ledger():
     cands.append(Op("drag", arg="down", weight=CLICK, by="blind", group="search"))
     out = s._apply_resume(cands, 0.0)
     assert not [op for op in out if op.by in ("list", "blind")]
-    w = {op.label: op.weight for op in out}
-    assert w["click SaveLoadUI/NextPageButton"] == CLICK * BOOST
-    assert w["click SaveLoadUI/NextPageButton"] > w[f"click {_label(1)}"]
+    assert {op.label: op.weight for op in out} == {"click SaveLoadUI/NextPageButton": CLICK * BOOST}
     # ページを送らないとき（見えているセーブが新しい）は、一覧の探索をそのまま残す
     s, st, run = _session(launch=1)
     _show(st, "SaveLoadUI", LOAD, _page({_label(4): "5. 2026-11-10 10:14:39"}))
     cands = normal_candidates(st, s.run.guard, s.cfg["weights"], False)
     cands.append(Op("drag", arg="down", weight=CLICK, by="list", group="list", goal=_label(8)))
     assert [op for op in s._apply_resume(cands, 0.0) if op.by == "list"]
+
+
+PAGED = LOAD + [{"name": f"Page{i:02d}", "rect": [0.2 + 0.05 * i, 0.9, 0.24 + 0.05 * i, 0.95]} for i in range(1, 6)]
+
+
+def test_resume_search_only_turns_pages_in_order():
+    # run 2026-11-17_2240: 自分のセーブを探すあいだ、ページ番号のボタンで飛んだり画面を出たりして、自分のセーブのある
+    # 2 ページ目だけ一度も開かないまま時間切れになり、はじめから遊び直した。探すあいだは、ページを送るボタンだけを押す
+    s, st, run = _session(launch=1)
+    run.saved_wall = time.mktime((2026, 11, 6, 22, 44, 9, 0, 0, -1))
+    _show(st, "SaveLoadUI", PAGED, _page({_label(4): "5. 2026-11-06 22:00:47"}))
+    cands = normal_candidates(st, s.run.guard, s.cfg["weights"], False)
+    cands.append(Op("key", arg="esc", weight=CLICK))
+    assert [op.label for op in s._apply_resume(cands, 0.0)] == ["click SaveLoadUI/NextPageButton"]
+    # 自分のセーブが見えたら、それを押す（ほかの候補も戻る）
+    _show(st, "SaveLoadUI", PAGED, _page({_label(6): "16. 2026-11-06 22:44:09"}))
+    w = _weights(s, st, 0.0)
+    assert w[f"click {_label(6)}"] == CLICK * BOOST and "click SaveLoadUI/Page02" in w
+    # ページを送り尽くしたら、見えているいちばん新しいものでよい（ほかの候補も戻る）
+    _show(st, "SaveLoadUI", PAGED, _page({_label(4): "5. 2026-11-06 22:00:47"}))
+    run.resume_pages = FUZZ_DEFAULTS["resume_page_limit"]
+    w = _weights(s, st, 0.0)
+    assert w[f"click {_label(4)}"] == CLICK * BOOST and "click SaveLoadUI/Page02" in w
+
+
+def test_next_page_without_response_counts_toward_page_limit():
+    # 最後のページで送れないボタンを、時間切れまで押し続けない
+    import asyncio
+
+    from .test_looks import CFG, _Mouse
+    s, st, run = _session(launch=1)
+    run.cfg.update({**CFG, "read_text": False})
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
+    s.pointer = Pointer(windows, _Mouse(), 1, st, activate_wait=0)
+    s.pointer.driver.click = lambda *a, **k: None
+    st.feed(Event("game", "resolution", {"w": 2000, "h": 1000}, 1))
+    _show(st, "SaveLoadUI", LOAD, _page({}))
+    nxt = next(t for t in st.targets() if t.name == "NextPageButton")
+    asyncio.run(s._normal(Op("click", nxt), "modal:SaveLoadUI", False))
+    assert run.resume_pages == 1
+
+
+def test_settings_tour_waits_while_resuming():
+    # run 2026-11-17_2240: 起動し直した直後、ロードする前に、設定を変えに行ってタイトルから設定の画面を開いた
+    s, st, run = _session(launch=1)
+    assert s._tour_paused()
+    s.on_event(Event("game", "load", {"slot": "GameSave016", "phase": "start"}, 1))
+    assert run.resume_until is None and not s._tour_paused()
 
 
 def test_resume_accepts_visible_save_when_there_is_no_next_page():
