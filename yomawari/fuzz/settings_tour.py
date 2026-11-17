@@ -82,11 +82,20 @@ class SettingsTour:
     def enabled(self) -> bool:
         return self.interval > 0 and self.factor > 1.0
 
-    def observe(self, settings: dict[str, Any] | None) -> None:
-        if settings:
-            self.keys |= {k for k in settings if k != "locales"}
-            for k in GUARDED_KEYS & settings.keys():
-                self.base.setdefault(k, settings[k])
+    def observe(self, settings: dict[str, Any] | None, now: float | None = None) -> None:
+        """いまの設定の値を見る。元の値に戻しにいっているあいだに、値がもう元の値なら、戻し終えたとみなす。
+        起動し直すとゲームは保存した値（元の値）で立ち上がり、押して変わったことにならないため
+        （run 2026-11-17_1204: 戻す途中で起動し直し、もう元の値なのに、選ばれている解像度のボタンを押し続けた）。
+        変わった知らせが、押したあとの待ち時間より遅れて届いたときも、ここで終える。"""
+        if not settings:
+            return
+        self.keys |= {k for k in settings if k != "locales"}
+        for k in GUARDED_KEYS & settings.keys():
+            self.base.setdefault(k, settings[k])
+        if (now is not None and self.restoring and self.target is not None and self.target in settings
+                and settings[self.target] == self.base.get(self.target)):
+            self.restored += 1
+            self._finish(now)
 
     def changed(self, keys: set[str], entry: str | None, now: float, values: dict[str, Any] | None = None) -> None:
         """設定の値が変わった（どの押下でも）。変えに行っていた設定なら、変えに行くのを終える。
