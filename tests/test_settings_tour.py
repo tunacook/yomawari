@@ -383,3 +383,20 @@ def test_tour_presses_guarded_screen_buttons_and_restores():
     run.experience.setting_buttons.clear()
     s._step_tour(10.0)
     assert run.tour.target is None
+
+
+def test_tour_avoids_buttons_that_change_other_settings():
+    """押すとほかの設定もまとめて変わるボタン（リセットなど）は、ほかに押すものがないときだけ押す。"""
+    st, run, s = _locale_session("ja-JP", _SOUND)
+    run.tour = SettingsTour(interval=1, timeout=50, factor=20, next_t=0.0)
+    exp = run.experience
+    exp.setting_buttons = {"SettingsUI/Option_a": {"master_volume": 0.5},
+                           "SettingsUI/Option_b": {"master_volume": 1, "reveal_speed": 0.5, "locale": "ja-JP"}}
+    run.tour.changes.update({"reveal_speed": 1, "locale": 1})
+    run.tour.step(0.0, exp.setting_buttons, random.Random(1))
+    assert run.tour.target == "master_volume"
+    w = _weights(st, s)
+    assert w["SettingsUI/Option_a"] == 20.0 and w["SettingsUI/Option_b"] == 1.0
+    # 目標の設定だけを変えるボタンがなければ、まとめて変えるボタンも押す
+    del exp.setting_buttons["SettingsUI/Option_a"]
+    assert _weights(st, s)["SettingsUI/Option_b"] == 20.0

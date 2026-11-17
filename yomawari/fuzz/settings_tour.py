@@ -13,6 +13,7 @@
   なので、ふだんは押さず、変えた値を覚えていないことが多い。プロファイルの [settings] offered にあれば、変えに行くときだけ
   押しにいく（まだ何を変えるか覚えていないボタンも押す）。変わったら、そのまま元の値（そのランで最初に見た値）に戻しにいく。
   ウィンドウの大きさが変わったままだと、ボタンが画面の外に出るなど、ほかの検出の邪魔になるため
+- 押すとほかの設定もまとめて変わると分かったボタン（設定のリセットなど）は、ほかに押すものがないときだけ押す
 - 区間（ガチャプレイ・ボタンの網羅）、ゲームの流れの途中、言語を戻しているあいだは、変えに行かない
 - 決めた時間のうちに変えられなければ、あきらめて「ハーネスの記録」に書く
 """
@@ -156,6 +157,10 @@ class SettingsTour:
             # 押せば今と違う値になるボタンを先に（選ばれている値を押しても変わらない）
             prefer = {label for label in want
                       if label not in buttons or buttons[label][self.target] != now.get(self.target)} or want
+        # ほかの設定もまとめて変えると分かったボタン（リセットなど）は、ほかに押すものがないときだけ
+        # （変えに行くたびに音量・言語なども変わり、A-03 などの比べる区間を崩すため）
+        prefer = {label for label in prefer
+                  if label not in buttons or set(buttons[label]) <= {self.target}} or prefer
         targets = {_menu(label) for label in prefer}
         if targets & menus:
             boost = {label for label in prefer if _menu(label) in menus}
