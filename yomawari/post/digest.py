@@ -142,6 +142,7 @@ def timeline(log: Log, lo: int, hi: int, limit: int, launch: int | None = None) 
     keep = list(log.cfg.get("report_timeline_commands") or [])
     rows: list[list[Any]] = []  # [時刻, 文, 回数]
     opened: set[str] = set()
+    continue_muted = False  # 本文送りの入力が止められているか（変わったときだけ経過に出す）
     last_op: list[Any] | None = None
 
     def add(wall: str, text: str) -> list[Any]:
@@ -190,6 +191,11 @@ def timeline(log: Log, lo: int, hi: int, limit: int, launch: int | None = None) 
             add(wall, f"{'セーブ' if k == 'save' else 'ロード'} {d.get('slot')}")
         elif k == "issue":
             add(wall, f"検出 [{d.get('rule_id')}] {d.get('title')}")
+        elif k == "input" and e.get("source") == "game":
+            muted = "Continue" in (d.get("muted") or [])
+            if muted != continue_muted:
+                continue_muted = muted
+                add(wall, "ゲームが本文送りの入力を止めた" if muted else "ゲームが本文送りの入力を戻した")
         elif k == "window_fit":
             add(wall, "ウィンドウが画面からはみ出していたので、タイトルバーをドラッグして"
                 + ("戻した" if d.get("fitted") else "戻そうとした（収まらなかった）"))

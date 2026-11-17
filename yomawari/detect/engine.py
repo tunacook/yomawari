@@ -886,25 +886,56 @@ class ResponseCheckDetector(Detector):
 
 
 class AdvanceStallDetector(Detector):
-    """S-02: 本文を送るクリックを続けても、line / choices / scene が来ない。"""
+    """S-02: 本文を送るクリックを続けても、line / choices / scene が来ない。
+
+    ゲームが本文送りの入力を止めているあいだ（パッケージの input の muted に Continue がある。`@processInput` や、
+    UI を隠すあいだの入力の止め方など）は、押しても進まないのが仕様なので、本文送りを数えない
+    （run 2026-11-16_2241: 入力を止めたオープニングの演出で、コマンドが進んでいるのに検出した）。
+    人もこのあいだにクリックすることはあるので、ハーネスは押すのをやめない。
+    止めたまま戻し忘れる不具合は、入力が止められていて、スクリプトのコマンド・本文も muted_idle_sec 来ないときに検出する。
+    """
 
     PROGRESS = {"line", "choices", "scene"}
+    SCRIPT = PROGRESS | {"command"}
 
     def __init__(self, rule: Rule) -> None:
         super().__init__(rule)
         self.clicks = int(rule.param("clicks"))
         self.alive = float(rule.param("heartbeat_alive_sec"))
+        self.idle = float(rule.param("muted_idle_sec"))
         self.count = 0
         self.lead: list[str] = []  # 進まなくなる前の操作（本文送りが続くと「直前の操作」から押し出されるため）
+        self.muted = False  # 本文送り（Continue）の入力が止められている
+        self.script_at: float | None = None  # 入力が止められてから、最後にスクリプトが進んだ時刻
+        self.script_wall = ""
+        self.heartbeat_at: float | None = None
+        self.state: dict | None = None  # 最後の操作のときのゲームの状態
+        self.fired = False
 
     def on_event(self, ev: Event) -> list[Issue]:
-        # 選択肢が消えた知らせ（items が空の choices）は進んだことにしない
-        progress = ev.kind in self.PROGRESS and not (ev.kind == "choices" and not ev.data.get("items"))
-        if ev.kind == "launch" or (ev.source == "game" and progress):
-            self.count = 0
-            return []
         d = ev.data
-        if ev.kind != "op_result" or d.get("kind") != "advance" or d.get("interfered") or not _alive(ev, self.alive):
+        if ev.kind == "launch" or ev.kind == "proc_exit":
+            self.count, self.muted, self.script_at, self.heartbeat_at, self.fired = 0, False, None, None, False
+            return []
+        if ev.source == "game":
+            if ev.kind == "heartbeat":
+                self.heartbeat_at = ev.t
+            elif ev.kind == "input":
+                muted = "Continue" in (d.get("muted") or [])
+                if muted != self.muted:
+                    self.muted, self.count, self.fired = muted, 0, False
+                    self.script_at, self.script_wall = (ev.t, ev.wall) if muted else (None, "")
+            elif ev.kind in self.SCRIPT:
+                if self.muted:
+                    self.script_at, self.script_wall, self.fired = ev.t, ev.wall, False
+                # 選択肢が消えた知らせ（items が空の choices）は進んだことにしない
+                if ev.kind in self.PROGRESS and not (ev.kind == "choices" and not d.get("items")):
+                    self.count = 0
+            return []
+        if ev.kind != "op_result":
+            return []
+        self.state = d.get("state") or self.state
+        if d.get("kind") != "advance" or d.get("interfered") or self.muted or not _alive(ev, self.alive):
             return []
         self.count += 1
         if self.count == 1:
@@ -919,6 +950,21 @@ class AdvanceStallDetector(Detector):
                 f"本文を {self.clicks} 回送っても進みません（行 {st.get('line_id')}）{lead}",
                 key=str(st.get("line_id")), launch=ev.launch, t=ev.t, wall=ev.wall,
                 recent=d.get("recent"), state=st,
+            )
+        ]
+
+    def on_tick(self, now: float, launch: int) -> list[Issue]:
+        if not self.muted or self.fired or self.script_at is None or now - self.script_at < self.idle:
+            return []
+        if self.heartbeat_at is None or now - self.heartbeat_at > self.alive:
+            return []  # 止まっている・固まっているのは H-01 などで見る
+        self.fired = True
+        st = self.state or {}
+        return [
+            self.issue(
+                f"本文送りの入力が止められたまま、{self.idle:g} 秒スクリプトが進みません（行 {st.get('line_id')}）。"
+                "入力を止めたあと、戻し忘れていないか",
+                key=f"muted|{st.get('line_id')}", launch=launch, t=now, wall=self.script_wall, state=st,
             )
         ]
 

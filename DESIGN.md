@@ -127,6 +127,7 @@ Unity製ノベルゲームのビルド（macOS `.app` / Windows `.exe`）を、�
 | `menu_close` | `name` | 応答確認 |
 | `transition` | `phase: start/end`, `name` | 操作待ち、進行不能判定 |
 | `resolution` | `w`, `h`, `mode` | 起動直後と変化時（`Update` で監視）。描画領域の位置と Retina 倍率の計算（§8）、解像度テスト |
+| `input` | `muted` | 起動直後と変化時（0.2 秒ごとに監視）。止められている Naninovel の標準の入力の id の並び（`Continue`・`Skip`・`ToggleSkip`・`AutoPlay`・`Rollback`・`Pause`・`ToggleUI`・`ShowBacklog` のうち、`IInputManager.IsMuted` が true のもの）。`@processInput` も、`AddMuter` で一時的に止める方法も、入力の処理自体が止まっているのも含めた、実際に効いている状態。入力の割り当てがない id も止められているものとして出る。ハーネスは、`Continue` が止められているあいだの本文送りを S-02 に数えない。パッケージ 0.16.0 から |
 | `settings` | `locale`, `locales`, `reveal_speed`, `auto_delay`, `master_volume`, `bgm_volume`, `sfx_volume`, `voice_volume`, `voice_locale`, `skip_mode`, `font`, `font_size`, `quality`, `screen_mode`, `resolution` | 起動直後と変化時（0.2 秒ごとに監視、値は小数第 3 位まで）。ゲームの設定で、Naninovel の標準の設定画面にある項目の値。Naninovel では `ILocalizationManager.SelectedLocale`（`locales` は使える言語の一覧 `AvailableLocales`。0.11.0 から）、`ITextPrinterManager.BaseRevealSpeed` / `BaseAutoDelay`、`IAudioManager` の各音量（0〜1）と `VoiceLocale`。0.15.0 から、`IScriptPlayer.SkipMode`（`skip_mode`。列挙の名前）、`IUIManager.FontName` / `FontSize`（`font`・`font_size`。既定は null・-1）、`QualitySettings.GetQualityLevel()`（`quality`）、`Screen.fullScreenMode`（`screen_mode`。列挙の名前）、`Screen.width`x`Screen.height`（`resolution`。`"1280x720"`）も出す。ゲームがこのうちどれをプレイヤーに変えさせるかは、パッケージには分からないので、プロファイルの `[settings]` に書く（§9「設定を変えに行く」）。設定画面がゲーム独自の部品でも、値はエンジンの標準のサービスから読める。ハーネスは、押して値が変われば反応ありとする（設定画面の選択肢・スライダーは、押しても画面の並びが変わらない）。ウィンドウの大きさは `resolution`。パッケージ 0.10.0 から |
 | `selected` | `menu`, `name`, `nth` | 変化時（0.2 秒ごとに監視）。エンジンのフォーカス（`EventSystem.current.currentSelectedGameObject`）があるボタン。Enter・Space で押されるのはこのボタン。`menu` はそのボタンを含む表示中の `menu` のうちいちばん内側のもの、`nth` は `menu` の `buttons` と同じ数え方で、同じ名前のボタンの何番目か（0 から）。`menu` の外のもの・押せないものにフォーカスがあるときは `menu` と `name` を `null` にする。ハーネスは、通常の操作で押さないボタン（ガードの区分が `expect_exit` / `external` / `deny` など）にフォーカスがあるあいだ、Enter を押さない（§9「ガード」）。パッケージ 0.12.0 から |
 | `save` / `load` | `slot`, `type`, `phase: start/end` | セーブ検証、分岐の巻き戻し |
@@ -1117,7 +1118,7 @@ answers = [                             # 質問ごとの正解（§9「答え�
 | C-04 | 終了操作から10秒経ってもプロセスが残る（観測で `exit` と確定したボタン、または `[guard.buttons]` の `expect_exit` のときだけ。推定だけのボタンでは、推定を取り消す） | Major |
 | H-01 | プロセス生存中にハートビートが10秒途絶（CPU使用率を付記） | Critical |
 | S-01 | 応答確認のイベントが5秒以内に来ない（ハートビートは生存。待っている間にスクリプトのコマンドが進んでいれば出さない。反応がなければ別の操作で2回まで確かめる） | Critical |
-| S-02 | 本文表示中に10回クリックしても `line`/`choices`/`scene` が来ない（反応のないクリックは S-01 の `timeout_sec` ずつ待つので約50秒）。進めなくなった原因の操作が「直前の操作」から押し出されるので、本文送りを続ける前の操作も載せる | Critical |
+| S-02 | 本文表示中に10回クリックしても `line`/`choices`/`scene` が来ない（反応のないクリックは S-01 の `timeout_sec` ずつ待つので約50秒）。進めなくなった原因の操作が「直前の操作」から押し出されるので、本文送りを続ける前の操作も載せる。ゲームが本文送りの入力を止めているあいだ（`input` の `muted` に `Continue` がある。入力を止めた演出など）のクリックは数えない。人もそのあいだにクリックするので、ハーネスは押すのをやめない。かわりに、入力が止められたまま、スクリプトのコマンド・本文も `muted_idle_sec`（120 秒）来なければ検出する（入力の戻し忘れ） | Critical |
 | S-03 | `transition` 開始から10秒で終了が来ない | Critical |
 | S-04 | 同じ行IDの並びが繰り返されるだけ（K回以上）。タイトルに戻って最初から読み直すのと区別する方法を決めてから実装する | Major |
 | S-05 | 同じ状態で前に反応したボタンが、押しても反応しない回が3回続く（トグル・ドロップダウンなど押しても並びが変わらない種類は除く）。一度も反応したことのないボタン（ロック中のスロットなど、押しても何も起きないのが仕様のもの）は対象にせず、レポートの「一度も反応しなかったボタン」に一覧で載せる | Major |

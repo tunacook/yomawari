@@ -17,6 +17,7 @@ namespace Yomawari
      * - choices: 表示中の選択肢ボタン（id, text, rect, locked）
      * - selected: EventSystem のフォーカスがあるボタン（menu, name, nth）。Enter で押されるのはこのボタン
      * - bgm_play / bgm_stop / voice / voice_stop: IAudioManager で実際に鳴っている BGM・ボイス（id はリソースのパス）
+     * - input: 止められている Naninovel の入力（muted。IInputManager.IsMuted）
      * - 開いているドロップダウン（標準の Dropdown / TMP_Dropdown）のリスト: "&lt;ドロップダウンの name&gt;.List" のモーダルな menu。
      *   リストはドロップダウンの子に作られるので、元の画面の buttons には入れない
      * ボタンの位置はホバーの拡大などで少し動くので、変化の判定は 1/20 単位に丸めて行う（出す値は丸めない）
@@ -53,6 +54,7 @@ namespace Yomawari
         string choicesSignature = ""; // 空 = 選択肢なし。起動直後に空の choices を出さない
         string settingsSignature; // 最後に出した settings。null = まだ出していない
         string selectedSignature = ""; // 最後に出した selected。空 = フォーカスのあるボタンなし（起動直後は出さない）
+        string inputSignature; // 最後に出した input。null = まだ出していない
         HashSet<string> bgmShown = new(); // 最後に鳴っていると出した BGM
         HashSet<string> bgmNow = new();
         string voiceShown; // 最後に鳴っていると出したボイス
@@ -79,6 +81,7 @@ namespace Yomawari
             ScanUIs(manager);
             ScanChoices();
             ScanSettings();
+            ScanInput();
             ScanSelected();
             ScanAudio();
         }
@@ -194,6 +197,33 @@ namespace Yomawari
             if (body == settingsSignature) return;
             settingsSignature = body;
             YomawariLog.Emit("settings", body);
+        }
+
+        // 見る入力: 本文送り・スキップ・オート・巻き戻し・メニュー・UI を隠す・バックログ（Naninovel の標準の入力）
+        static readonly string[] WatchedInputs =
+        {
+            Inputs.Continue, Inputs.Skip, Inputs.ToggleSkip, Inputs.AutoPlay, Inputs.Rollback,
+            Inputs.Pause, Inputs.ToggleUI, Inputs.ShowBacklog,
+        };
+
+        // 止められている入力を、最初と変わったときだけ出す（input）。@processInput の止め方も、AddMuter で一時的に止める
+        // 方法（UI を隠すあいだなど）も、入力の処理自体が止まっている（Enabled が false）のも含めた、実際に効いている状態
+        // （IInputManager.IsMuted）。ハーネスは、本文送り（Continue）が止められているあいだ、押しても進まないのを
+        // 進行不能（S-02）と数えない。入力の割り当てがない id も止められているものとして出る
+        void ScanInput()
+        {
+            if (!Engine.TryGetService<IInputManager>(out var input)) return;
+            var muted = new StringBuilder("[");
+            foreach (var id in WatchedInputs)
+            {
+                if (!input.IsMuted(id)) continue;
+                if (muted.Length > 1) muted.Append(',');
+                muted.Append(YomawariFormat.Str(id));
+            }
+            var body = "\"muted\":" + muted.Append(']');
+            if (body == inputSignature) return;
+            inputSignature = body;
+            YomawariLog.Emit("input", body);
         }
 
         void ScanUIs(IUIManager manager)
