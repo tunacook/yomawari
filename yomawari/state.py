@@ -159,13 +159,23 @@ class GameState:
     # エンジンのフォーカス（EventSystem の選択）があるボタンの label（selected イベント）。Enter で押されるのはこのボタン。
     # 何も選ばれていない・menu の外のものが選ばれている・パッケージが知らせない（0.12.0 より前）ときは None
     selected: str | None = None
+    # セーブのスロット → セーブを始めたときの本文（line と同じ形）。ロードし終えたら、そのスロットの本文を line に戻す。
+    # ロードでは本文（line）が出ないまま、セーブしたところ（質問の画面など）に戻るので、戻さないとロードの前の本文
+    # （読み終えた思い出の最後の行など）を、いまの行と思い続ける（run 2026-11-16_2241: 思い出から質問に戻ったあと、
+    # 思い出の最後の行を質問の行として数え、プロファイルの正解と照らし合わせられなかった）。
+    # セーブのファイルは起動し直しても残るので、起動し直しても捨てない
+    slot_lines: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # 最後のロードで line を戻したか（ロードが始まったら False に戻す）
+    line_restored: bool = False
     _played_since_title: bool = False
     _order: int = 0
 
     def feed(self, ev: Event) -> None:
         if ev.source == "harness" and ev.kind == "launch":
-            # 起動し直したら状態を捨てる
+            # 起動し直したら状態を捨てる（セーブしたときの本文は、セーブのファイルが残るので捨てない）
+            slot_lines = self.slot_lines
             self.__dict__.update(vars(GameState(launch=ev.launch)))
+            self.slot_lines = slot_lines
             return
         if ev.source != "game":
             return
@@ -298,6 +308,8 @@ class GameState:
         self.saving = d.get("phase") == "start"
         if self.saving:
             self.saves += 1
+            if d.get("slot") and self.line is not None:
+                self.slot_lines[str(d["slot"])] = dict(self.line)
 
     def _on_command(self, d: dict[str, Any], t: float) -> None:
         self.commands += 1
@@ -307,6 +319,12 @@ class GameState:
     def _on_load(self, d: dict[str, Any], t: float) -> None:
         self.loading = d.get("phase") == "start"
         self.handled_choices.clear()
+        self.line_restored = False
+        line = self.slot_lines.get(str(d.get("slot"))) if not self.loading else None
+        if line is not None:
+            self.line = dict(line)
+            self.command_line = None
+            self.line_restored = True
 
     # --- 参照 ---
 

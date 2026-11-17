@@ -1568,3 +1568,37 @@ def test_flow_step_entries_reset_when_moving_on():
         _feed(st, "menu_close", name="AnswerDialogUI")
         _feed(st, "menu_close", name="WordUI")
     assert not tracker.abandoned
+
+
+def test_load_restores_the_line_of_the_save():
+    # 思い出から質問の画面に戻るロードでは本文が出ない。セーブしたときの本文の行に戻し、質問をその行で数えて、
+    # プロファイルの正解と照らし合わせる（run 2026-11-16_2241: 思い出の最後の行を質問の行として数え、正解が使えなかった）
+    s, st, run, _ = _session({"wrong_answer_prob": 0.0})
+    doc = tomllib.loads(ONCE_PROFILE)
+    doc["flow"][0]["answers"] = [{"at": "main/chapter2_04:323.0", "pick": ["No.002*", "空"]}]
+    run.flow = FlowTracker(parse_flows(doc["flow"]))
+
+    def game(kind, **d):
+        ev = Event("game", kind, d, 0)
+        st.feed(ev)
+        s.on_event(ev)
+
+    _line(s, st, "main/chapter2_04:323.0", "どこだっけ？")
+    game("save", slot="Return", type="Normal", phase="start")
+    game("save", slot="Return", type="Normal", phase="end")
+    for i in range(FUZZ_DEFAULTS["ai_context_lines"] + 2):
+        _line(s, st, f"episodes/ep1:{10 + i}.0", f"思い出の {i} 行目")
+    game("load", slot="Return", type="Normal", phase="start")
+    assert st.line["line_id"] == f"episodes/ep1:{10 + FUZZ_DEFAULTS['ai_context_lines'] + 1}.0"
+    game("load", slot="Return", type="Normal", phase="end")
+    assert st.line["line_id"] == "main/chapter2_04:323.0" and st.line_restored
+    assert list(run.line_ids)[-1] == "main/chapter2_04:323.0" and run.lines[-1] == "どこだっけ？"
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=LIST)
+    _weights(s, st)
+    assert run.flow.ctx == ("質問に言葉で答える", "main/chapter2_04:323.0")
+    assert run.ctx_answers[run.flow.ctx]
+    # セーブしていないスロットのロードでは、行を変えない
+    _line(s, st, "episodes/ep1:30.0", "別の行")
+    game("load", slot="Other", type="Normal", phase="start")
+    game("load", slot="Other", type="Normal", phase="end")
+    assert st.line["line_id"] == "episodes/ep1:30.0" and not st.line_restored
