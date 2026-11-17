@@ -371,8 +371,9 @@ def test_tour_presses_guarded_screen_buttons_and_restores():
     _press(st, s, "SettingsUI/Option_large", resolution="1600x900")
     assert run.tour.target == "resolution" and run.tour.restoring  # 変わったので、元の値に戻しにいく
     # 1600x900 にするボタンだと覚えた。元の値（1280x720）にするボタンはまだ分からないので、押していないほうを押す
-    w = {op.target.label: op.weight for op in s._apply_tour([]) if op.target is not None}
-    assert w["SettingsUI/Option_small"] == 20 * w["SettingsUI/Option_large"]
+    # 戻すのに使わないボタン（Option_large）は、通常の操作としても候補に残さない
+    w = {op.target.label: op.by for op in s._apply_tour([]) if op.target is not None}
+    assert w == {"SettingsUI/Option_small": "settings"}
     _press(st, s, "SettingsUI/Option_small", resolution="1280x720")
     assert run.tour.target is None and run.tour.restored == 1
     assert run.tour.reached == {"resolution": 1}
@@ -397,6 +398,24 @@ def test_tour_restore_ends_when_value_is_already_back():
     tour.observe({"resolution": "1280x720", "screen_mode": "Windowed"}, 5.0)  # 起動し直した
     assert tour.target is None and not tour.restoring and tour.restored == 1
     assert tour.next_t == 105.0 and not tour.restore_failed
+
+
+def test_tour_adds_only_the_guarded_buttons_it_wants():
+    """変えに行くときに足す画面の設定のボタンは、変えに行く設定のために押すものだけ。ほかは通常の操作として押さない。"""
+    from yomawari.fuzz.roles import RoleEntry
+
+    st, run, s = _locale_session("ja-JP", _WINDOW)
+    st.feed(Event("game", "settings", {**_SETTINGS, "resolution": "1280x720", "screen_mode": "Windowed"}, 0))
+    for name in ("Option_small", "Option_large"):
+        run.guard.book.entries[f"SettingsUI/{name}"] = RoleEntry("system_setting", "confirmed", "画面が変わった")
+    # 画面モードを変えるボタン（Option_large）と、解像度を変えるボタン（Option_small）
+    run.experience.setting_buttons.update({"SettingsUI/Option_small": {"resolution": "1600x900"},
+                                           "SettingsUI/Option_large": {"screen_mode": "FullScreenWindow"}})
+    run.tour = SettingsTour(interval=1, timeout=50, factor=20, next_t=0.0, offered=frozenset({"resolution"}))
+    s._step_tour(0.0)
+    assert run.tour.target == "resolution"
+    ops = {op.target.label: op.by for op in s._apply_tour([]) if op.target is not None}
+    assert ops == {"SettingsUI/Option_small": "settings"}
 
 
 def test_tour_avoids_buttons_that_change_other_settings():

@@ -1039,15 +1039,21 @@ class FuzzSession:
             return cands
         run, exp = self.run, self.run.experience
         guarded = run.guard.setting_labels() if run.tour.target in GUARDED_KEYS else set()
+        added: set[str] = set()
         if guarded and not self.state.busy:
             # ガードがイレギュラー操作でだけ押す、画面の設定を変えるボタンも、変えに行くときは候補に入れる
             present = {op.target.label for op in cands if op.target is not None}
             w = float(self.cfg["weights"]["click"])
-            cands = cands + [Op("click", t, weight=w, novelty=True, group="button")
-                             for t in self.state.targets()
-                             if t.label in guarded and t.label not in present and not t.locked]
-        return run.tour.apply(cands, set(self.state.menus), self.state.settings,
-                              exp.setting_buttons, exp.setting_routes, guarded)
+            extra = [Op("click", t, weight=w, novelty=True, group="button")
+                     for t in self.state.targets()
+                     if t.label in guarded and t.label not in present and not t.locked]
+            added = {op.target.label for op in extra if op.target is not None}
+            cands = cands + extra
+        out = run.tour.apply(cands, set(self.state.menus), self.state.settings,
+                             exp.setting_buttons, exp.setting_routes, guarded)
+        # 足したボタンのうち、変えに行く設定のために押すもの（by="settings"）だけを残す。ほかは通常の操作として押さない
+        # （run 2026-11-17_1400: 解像度を変えに行くあいだに、フルスクリーンのボタンを通常の操作で押した）
+        return [op for op in out if op.by == "settings" or op.target is None or op.target.label not in added]
 
     def _apply_locale(self, cands: list[Op]) -> list[Op]:
         """ゲームの言語がプロファイルの言語と違うあいだ、その言語に切り替えたことのあるボタンと、その画面を開くボタンを
