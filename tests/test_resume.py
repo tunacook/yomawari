@@ -283,9 +283,13 @@ def test_relaunch_looks_for_own_save_on_other_pages():
     w = _weights(s, st, 0.0)
     assert w[f"click {_label(6)}"] == CLICK * BOOST and f"click {_label(1)}" not in w
     assert w["click SaveLoadUI/NextPageButton"] == CLICK
-    # ページを送り尽くしても見つからなければ、見えているいちばん新しいものでよい
+    # ページを送り尽くしても見つからなければ、探すあいだに見たいちばん新しいもの（2 ページ目の 22:44:09）をロードしに行く
     _show(st, "SaveLoadUI", LOAD, page1)
     run.resume_pages = FUZZ_DEFAULTS["resume_page_limit"]
+    w = _weights(s, st, 0.0)
+    assert w == {"click SaveLoadUI/NextPageButton": CLICK * BOOST}
+    # それも見えないまま、もう resume_page_limit 回送ったら、見えているいちばん新しいものでよい
+    run.resume_pages = 2 * FUZZ_DEFAULTS["resume_page_limit"]
     w = _weights(s, st, 0.0)
     assert w[f"click {_label(4)}"] == CLICK * BOOST
     # このランでセーブしていなければ、今までどおり見えているいちばん新しいもの
@@ -400,9 +404,11 @@ def test_resume_search_only_turns_pages_in_order():
     _show(st, "SaveLoadUI", PAGED, _page({_label(6): "16. 2026-11-06 22:44:09"}))
     w = _weights(s, st, 0.0)
     assert w[f"click {_label(6)}"] == CLICK * BOOST and "click SaveLoadUI/Page02" in w
-    # ページを送り尽くしたら、見えているいちばん新しいものでよい（ほかの候補も戻る）
+    # ページを送り尽くして、見えているいちばん新しいものでよいとしたら、ほかの候補も戻る
     _show(st, "SaveLoadUI", PAGED, _page({_label(4): "5. 2026-11-06 22:00:47"}))
     run.resume_pages = FUZZ_DEFAULTS["resume_page_limit"]
+    _weights(s, st, 0.0)  # 見たうちでいちばん新しい 22:44:09 のページへ送りに行く
+    run.resume_pages = 2 * FUZZ_DEFAULTS["resume_page_limit"]
     w = _weights(s, st, 0.0)
     assert w[f"click {_label(4)}"] == CLICK * BOOST and "click SaveLoadUI/Page02" in w
 
@@ -422,6 +428,47 @@ def test_next_page_without_response_counts_toward_page_limit():
     nxt = next(t for t in st.targets() if t.name == "NextPageButton")
     asyncio.run(s._normal(Op("click", nxt), "modal:SaveLoadUI", False))
     assert run.resume_pages == 1
+
+
+def test_resume_timeout_loads_newest_save_seen_instead_of_new_game():
+    # run 2026-11-17_2240: 自分のセーブを探して 180 秒たち、時間切れのあとはセーブ済みのスロットを押さないので
+    # 「はじめから」を押し、自動セーブを上書きして、以降の起動はどれも前半から読み直した。
+    # 探すあいだに見たいちばん新しいセーブをロードしに行く
+    s, st, run = _session(launch=1)
+    run.saved_wall = time.mktime((2026, 11, 6, 22, 44, 9, 0, 0, -1))
+    page1 = _page({_label(4): "5. 2026-11-06 22:00:47", _label(2): "3. 2026-11-06 21:00:00"})
+    page3 = {_label(i): f"{i + 19}. Empty" for i in range(9)}
+    page3[_label(1)] = "20. 2026-11-06 22:10:27"
+    _show(st, "SaveLoadUI", LOAD, page1)
+    _weights(s, st, 0.0)
+    _show(st, "SaveLoadUI", LOAD, page3)
+    assert _weights(s, st, 0.0) == {"click SaveLoadUI/NextPageButton": CLICK * BOOST}  # まだ自分のセーブを探す
+    assert run.resume_best == (_label(1), page3[_label(1)])
+    # 時間切れ: はじめからではなく、見たうちでいちばん新しい 22:10:27 をロードしに行く。時間を延ばす
+    end = run.resume_until
+    _show(st, "SaveLoadUI", LOAD, page1)
+    w = _weights(s, st, end + 1)
+    assert run.resume_until == pytest.approx(end + 1 + FUZZ_DEFAULTS["resume_sec"])
+    assert any("自分のセーブが見つからなかった" in n and "22:10:27" in n for n in run.notes)
+    assert w == {"click SaveLoadUI/NextPageButton": CLICK * BOOST}  # 見えていないので、そのページまで送る
+    _show(st, "SaveLoadUI", LOAD, page3)
+    w = _weights(s, st, end + 2)
+    assert w[f"click {_label(1)}"] == CLICK * BOOST
+    # タイトルに戻っても、「はじめから」は押さない
+    _show(st, "TitleUI", TITLE, TITLE_TEXT)
+    assert _weights(s, st, end + 3)["click TitleUI/NewGameButton"] == pytest.approx(CLICK * LOW)
+    # 延ばした時間でもロードできなければ、今までどおり終える
+    _weights(s, st, run.resume_until + 1)
+    assert run.resume_until is None
+    assert any("ロードも本文の始まりもなかった" in n for n in run.notes)
+
+
+def test_resume_timeout_without_any_save_seen_ends_as_before():
+    s, st, run = _session(launch=1)
+    _show(st, "SaveLoadUI", LOAD, _page({}))
+    _weights(s, st, 0.0)
+    _weights(s, st, run.resume_until + 1)
+    assert run.resume_until is None and run.resume_best is None
 
 
 def test_settings_tour_waits_while_resuming():

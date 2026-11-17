@@ -125,6 +125,10 @@ class FuzzRun:
     saved_t: float | None = None  # 最後にセーブした時刻（流れの外。ゲームが流れの中で自分でするセーブは除く）
     saved_wall: float | None = None  # saved_t と同じときの time.time()（スロットの文字の日時と比べる。起動し直しても残す）
     resume_pages: int = 0  # 続きから遊ぶあいだに、ページを送った回数
+    # 続きから遊ぶあいだに見たセーブのうち、いちばん新しいもの（スロットのボタン, 文字）。自分のセーブが見つからなければこれを選ぶ
+    resume_best: tuple[str, str] | None = None
+    # 自分のセーブを探すのをやめ、resume_best をロードしに行くと決めたときの resume_pages（決めていなければ None）
+    resume_settled: int | None = None
     slot_stems: set[str] = field(default_factory=set)  # セーブ済みと読めたスロットの名前（#N を除く）。文字を読む前の同じ名前のボタンも押さない
     resume_texts: dict[str, str | None] = field(default_factory=dict)  # 続きから遊ぶあいだに見えていたセーブ済みのスロットの文字
     resume_load: tuple[str, str | None] | None = None  # 続きから遊ぶためにロードしたスロットと文字（本文が出たら消す）
@@ -1375,11 +1379,35 @@ class FuzzSession:
         run.resume_until = time.monotonic() + float(self.cfg["resume_sec"])
         run.resume_pages = 0
         run.resume_texts = {}
+        run.resume_best, run.resume_settled = None, None
 
     def _end_resume(self, how: str) -> None:
         self.run.resume_until = None
         why = "前のランの続きから遊ぶ（--continue）ので" if self.launch == 0 else "起動し直したので"
         self.run.notes.append(f"{why}続きから遊ぼうとした: {how}（起動 #{self.launch}）")
+
+    def _note_best(self, saved: list[Target]) -> None:
+        """見えているセーブ済みのスロットから、続きから遊ぶあいだに見たいちばん新しいセーブ（resume_best）を更新する。"""
+        run = self.run
+        texts = {t.label: t.text for t in saved if t.text}
+        if not texts:
+            return
+        pool: dict[str, str | None] = dict(texts)
+        if run.resume_best is not None:
+            pool["\0best"] = run.resume_best[1]
+        top = newest_slots(pool, time.time())
+        if top and "\0best" not in top:
+            label = sorted(top)[0]
+            run.resume_best = (label, str(texts[label]))
+
+    def _settle_resume(self, why: str) -> None:
+        """自分のセーブを探すのをやめ、探すあいだに見たいちばん新しいセーブをロードしに行く。"""
+        run = self.run
+        assert run.resume_best is not None
+        run.resume_settled = run.resume_pages
+        label, text = run.resume_best
+        run.notes.append(f"続きから遊ぶとき、{why}ので、探したうちでいちばん新しいセーブ（`{label}`「{text}」）を"
+                         f"ロードしに行った（起動 #{self.launch}）")
 
     def _apply_resume(self, cands: list[Op], now: float) -> list[Op]:
         """続きから遊ぶあいだは、「続きから」のボタンと、いちばん新しいセーブ済みのスロットを先に押し、「はじめから」を
@@ -1388,8 +1416,16 @@ class FuzzSession:
         目的があるときだけにする。run 2026-11-06_1012 で、いまの章から前の章のセーブをロードして 12 分やり直した）。"""
         run, hints = self.run, self.run.save_hints
         if run.resume_until is not None and now >= run.resume_until:
-            self._end_resume(f"{float(self.cfg['resume_sec']):g} 秒のうちにロードも本文の始まりもなかった")
-        targets = [op.target for op in cands if op.target is not None and op.target.kind == "button"]
+            if run.resume_best is not None and run.resume_settled is None:
+                # 時間切れでも、探すあいだにセーブを見ていれば、はじめから遊ばずにそのうちいちばん新しいものをロードしに行く。
+                # 時間切れのあとはセーブ済みのスロットを押さない（saved_slot_factor）ので、残る道が「はじめから」だけになる
+                # （run 2026-11-17_2240: 自分のセーブを探して 180 秒たち、はじめから遊んで自動セーブを上書きし、以降の起動は
+                # どれも前半から読み直した）。もう resume_sec のあいだ続け、それでもロードできなければ終える
+                run.resume_until = now + float(self.cfg["resume_sec"])
+                self._settle_resume(f"{float(self.cfg['resume_sec']):g} 秒のうちに自分のセーブが見つからなかった")
+            else:
+                self._end_resume(f"{float(self.cfg['resume_sec']):g} 秒のうちにロードも本文の始まりもなかった")
+        targets =[op.target for op in cands if op.target is not None and op.target.kind == "button"]
         saved = [t for t in targets if hints.saved(t)]
         run.slot_stems.update(_slot_stem(t.label) for t in saved)
         # 文字を読む前のスロットは、セーブ済みかどうか分からない。ページを送った直後に押して古いセーブをロードしないように、
@@ -1418,9 +1454,23 @@ class FuzzSession:
         # 「Emply」と読み、セーブのある 3 ページ目以降を探さなかった）
         empty |= {t.label for t in targets if t.text and not hints.saved(t)}
         paging = not saved and bool(stuck_rows(self.state, empty))
+        self._note_best(saved)
+        has_next = any(hints.next_page(t) for t in targets)
+        limit = int(self.cfg["resume_page_limit"])
+        if run.resume_settled is None and run.resume_best is not None and run.resume_pages >= limit:
+            # ページを送り尽くしても自分のセーブが見つからない。いま見えているページのものより、探すあいだに見た
+            # いちばん新しいセーブのほうが近い
+            self._settle_resume(f"{limit} 回ページを送っても自分のセーブが見つからなかった")
+        if run.resume_settled is not None and run.resume_best is not None:
+            label, text = run.resume_best
+            if any(t.label == label and stamp_key(t.text) == stamp_key(text) for t in saved):
+                newest, paging = {label}, False
+            elif has_next and run.resume_pages < run.resume_settled + limit:
+                # 見えていなければ、ページを送ってそのセーブのあるページまで戻る。もう resume_page_limit 回送っても
+                # 見えなければ、見えているいちばん新しいセーブでよいとする
+                newest, paging = set(), True
         # 次のページがなければ探せないので、見えているものでよいとする
-        if saved and any(hints.next_page(t) for t in targets) and \
-                self._older_than_own_save(newest, {t.label: t.text for t in saved}):
+        elif saved and has_next and self._older_than_own_save(newest, {t.label: t.text for t in saved}):
             # 見えているセーブは、どれもこのランで最後にセーブしたときより古い。人は自分がどこにセーブしたかを覚えていて、
             # ほかのページを探す（run 2026-11-06_2157: 22:44 に 16 番へセーブしたのに、起動し直したあと 1 ページ目の
             # 22:00 のセーブをロードし、44 分前に戻った）
