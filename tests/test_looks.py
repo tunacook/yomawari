@@ -718,3 +718,19 @@ def test_text_change_in_same_screen_counts_as_response():
     s.pointer.driver.click = lambda *a, **k: setattr(windows, "texts", boxes(["11/10 09:00", "11/11 12:08", "空き"]))
     asyncio.run(s._normal(Op("click", target), "modal:AlbumUI", False))
     assert not [e.data for e in events if e.kind == "op_result"][-1]["responded"]
+
+
+def test_text_changed_by_button_row():
+    """ページを替えると、スロットの並びの文字だけが変わり、ページ・戻るボタンの文字は変わらない。"""
+    from yomawari.fuzz.reading import text_changed
+
+    fixed = {f"SaveLoadUI/Page{n:02d}": f"{n:02d}" for n in range(1, 12)} | {
+        "SaveLoadUI/BackButton": "back", "SaveLoadUI/SaveToggle": "Save", "SaveLoadUI/LoadToggle": "Load"}
+    before = fixed | {f"SaveLoadUI/Slot#{i}": f"No.{37 + i:03d}" for i in range(9)}
+    after = fixed | {f"SaveLoadUI/Slot#{i}": f"No.{46 + i:03d}" for i in range(9)}
+    assert text_changed(before, after, 0.5)  # 全体では 9/23 だが、スロットの並びでは 9/9
+    # 並びの中で 1 つだけ変わった（読み取りの揺れ）ものは、反応とみなさない
+    shaky = dict(before) | {"SaveLoadUI/Slot#3": "No.04O"}
+    assert not text_changed(before, shaky, 0.5)
+    # 番号の付いたボタン（ページ）の 1 つが揺れても同じ
+    assert not text_changed(before, dict(before) | {"SaveLoadUI/Page09": "09 10"}, 0.5)
