@@ -327,3 +327,59 @@ def test_tour_and_notes_follow_profile_offered():
     assert "このランで一度も変わらなかった設定: master_volume（変えるボタンを見つけていない）、reveal_speed" in notes
     assert any("offered にあるのに、ゲームが値を出していない設定: resolution" in n for n in notes)
     assert not any("auto_delay" in n or "voice_volume" in n for n in notes)
+
+
+def test_f03_skips_values_set_by_launch_args(repo_rules):
+    """起動の引数で画面の大きさを渡した起動では、解像度はゲームが保存した値ではないので比べない。"""
+    def run(cmd):
+        e = _f03(repo_rules)
+        evs = [_ev("launch", 0, 0, source="harness", cmd=cmd), _settings(0, 1, resolution="1280x720"),
+               _ev("menu", 0, 2, name="SettingsUI", modal=True, buttons=[]),
+               _settings(0, 3, resolution="1600x900"),
+               _ev("op_result", 0, 3, source="harness", target="SettingsUI/Option",
+                   settings_changed=True, screen_changed=False),
+               _ev("menu_close", 0, 4, name="SettingsUI"),
+               _ev("proc_exit", 0, 6, source="proc", code=-15, by_harness=True),
+               _ev("launch", 1, 100, source="harness", cmd=cmd), _settings(1, 101, resolution="1280x720")]
+        return [i.evidence["setting"] for i in _feed(e, evs)]
+    assert run(["game", "-screen-width", "1280", "-screen-height", "720"]) == []
+    assert run(["game"]) == ["resolution"]
+
+
+_WINDOW = {"name": "SettingsUI", "modal": True, "buttons": [
+    {"name": "Option_small", "rect": [0.1, 0.3, 0.3, 0.4], "type": "other"},
+    {"name": "Option_large", "rect": [0.5, 0.3, 0.7, 0.4], "type": "other"},
+    {"name": "BackButton", "rect": [0.1, 0.8, 0.3, 0.9]}]}
+
+
+def test_tour_presses_guarded_screen_buttons_and_restores():
+    """画面の大きさのボタンは、ガードがイレギュラー操作でだけ押すもの。プロファイルで変えさせる設定なら、変えに行くときだけ
+    押し、変わったら元の値に戻す。"""
+    from yomawari.fuzz.roles import RoleEntry
+
+    st, run, s = _locale_session("ja-JP", _WINDOW)
+    st.feed(Event("game", "settings", {**_SETTINGS, "resolution": "1280x720"}, 0))
+    for name in ("Option_small", "Option_large"):
+        run.guard.book.entries[f"SettingsUI/{name}"] = RoleEntry("system_setting", "confirmed", "解像度が変わった")
+    run.tour = SettingsTour(interval=1, timeout=50, factor=20, next_t=0.0, offered=frozenset({"resolution"}))
+    s._step_tour(0.0)
+    assert run.tour.target == "resolution"  # 何を変えるかまだ覚えていないボタンがあるので、押しにいく
+    # ふだんの候補にない（ガードで外れる）ボタンも、変えに行くあいだは候補に入れて優先する
+    w = {op.target.label: (op.weight, op.by) for op in s._apply_tour([]) if op.target is not None}
+    assert w.keys() == {"SettingsUI/Option_small", "SettingsUI/Option_large"}
+    assert w["SettingsUI/Option_small"] == w["SettingsUI/Option_large"] and w["SettingsUI/Option_small"][1] == "settings"
+    _press(st, s, "SettingsUI/Option_large", resolution="1600x900")
+    assert run.tour.target == "resolution" and run.tour.restoring  # 変わったので、元の値に戻しにいく
+    # 1600x900 にするボタンだと覚えた。元の値（1280x720）にするボタンはまだ分からないので、押していないほうを押す
+    w = {op.target.label: op.weight for op in s._apply_tour([]) if op.target is not None}
+    assert w["SettingsUI/Option_small"] == 20 * w["SettingsUI/Option_large"]
+    _press(st, s, "SettingsUI/Option_small", resolution="1280x720")
+    assert run.tour.target is None and run.tour.restored == 1
+    assert run.tour.reached == {"resolution": 1}
+    assert any("元の値に戻した 1 回" in n for n in run.tour.notes(run.experience.setting_buttons))
+    # プロファイルで変えさせていなければ、押しにいかない
+    run.tour = SettingsTour(interval=1, timeout=50, factor=20, next_t=0.0, offered=frozenset({"locale"}))
+    run.tour.observe(st.settings)
+    run.experience.setting_buttons.clear()
+    s._step_tour(10.0)
+    assert run.tour.target is None

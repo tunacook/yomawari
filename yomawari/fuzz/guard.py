@@ -32,6 +32,18 @@ class Guard:
                 kind = self._roles.get(role)
         return None if kind == "normal" else kind
 
+    def setting_labels(self) -> set[str]:
+        """役割が system_setting（画面モード・解像度などを変える）と推定・確定したボタンのうち、押してよいもの
+        （通常の操作か、イレギュラー操作でだけ押す区分）。設定を変えに行くときに押す（fuzz/settings_tour.py）。"""
+        out = set()
+        for label, e in self.book.entries.items():
+            if e.role != "system_setting" or e.status == "cancelled":
+                continue
+            kind = self._kind.get(label.split("#", 1)[0], self._roles.get("system_setting"))
+            if kind in (None, "normal", "irregular_only"):
+                out.add(label)
+        return out
+
     def named(self, target: Target) -> bool:
         """[guard.buttons] で名前を指定したボタンか。"""
         return target.key in self._kind

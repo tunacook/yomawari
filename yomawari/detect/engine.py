@@ -1062,12 +1062,23 @@ class SettingsPersistDetector(Detector):
     最初の settings を比べる。設定を保存するのは画面を閉じたときというゲームが多いので、開いたまま終わった起動では、
     閉じたときの値と最後の値のどちらかに一致すればよい。前の起動が落ちた（C-01）・固まって再起動した（on_detect: restart
     の問題が出た）ときは比べない（保存の前に止まったのかもしれない）。設定の画面は、押して settings の値だけが変わった
-    ボタンのある画面（menu）とする。"""
+    ボタンのある画面（menu）とする。
+
+    起動の引数で画面の大きさ・画面モードを渡した起動（Unity の -screen-width など。yomawari.toml の [builds.<名前>] args）
+    では、その値はゲームが保存した値ではなく引数で決まるので、比べない。"""
+
+    # Unity のコマンドライン引数 → その引数で決まる settings の値
+    LAUNCH_ARGS = {
+        "-screen-width": "resolution", "-screen-height": "resolution",
+        "-screen-fullscreen": "screen_mode", "-window-mode": "screen_mode",
+        "-popupwindow": "screen_mode", "-screen-quality": "quality",
+    }
 
     def __init__(self, rule: Rule) -> None:
         super().__init__(rule)
         self.ok_codes = set(rule.param("harness_exit_codes"))
         self.ignore = set(rule.param("ignore_keys"))
+        self.by_args: set[str] = set()  # この起動で、引数で決まった settings の値
         self.menus: set[str] = set()  # 押して設定の値だけが変わったボタンのある画面
         self.open: dict[str, dict[str, Any] | None] = {}  # 開いている画面 → 開いたときの値
         self.current: dict[str, Any] | None = None
@@ -1082,6 +1093,7 @@ class SettingsPersistDetector(Detector):
         if ev.kind == "launch":
             self.launch, self.waiting, self.broken = ev.launch, True, False
             self.current = self.committed = None
+            self.by_args = {self.LAUNCH_ARGS[a] for a in d.get("cmd") or [] if a in self.LAUNCH_ARGS}
             self.open = {}
         elif ev.kind == "settings":
             values = {k: v for k, v in d.items() if k not in self.ignore and k not in ("seq", "t", "f", "ev")}
@@ -1123,7 +1135,7 @@ class SettingsPersistDetector(Detector):
         self.prev = None
         out = []
         for k, want in committed.items():
-            if k not in values or _same(values[k], want) or _same(values[k], last.get(k)):
+            if k in self.by_args or k not in values or _same(values[k], want) or _same(values[k], last.get(k)):
                 continue
             out.append(self.issue(
                 f"起動 #{launch} の終わりに {k} = {want} だった設定が、起動し直したら {values[k]} になっていました",

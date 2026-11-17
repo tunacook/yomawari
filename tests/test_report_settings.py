@@ -37,5 +37,8 @@ def test_settings_section_without_profile_or_settings():
     out = render([_settings(0), _settings(0, master_volume=0)], None)
     assert any("プロファイルに書いていないので" in line for line in out)
     assert _row(out, "master_volume") == "| 全体の音量 | `master_volume` | — | 1 回 | `0` |"
+    out = render([_settings(0, font="")], None)
+    assert _row(out, "font") == "| フォント | `font` | — | 0 回 | （空） |"  # 空のコード（``）にしない
+    out = render([_settings(0), _settings(0, master_volume=0)], None)
     assert not any(line.startswith("- ") for line in out)
     assert render([{"source": "game", "kind": "line", "data": {}}], ["locale"]) == []

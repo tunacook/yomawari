@@ -9,6 +9,10 @@
 - 変えに行く設定は、このランで変わった回数がいちばん少ないもの。押せば今と違う値になるボタンを先に押す
 - 設定の画面が出ていなければ、その画面を開いた操作の並び（入り口ごとに覚えたもの）を押しにいく。右クリックメニューの
   ように、いちばん外側の画面を右クリック・キーで開いたなら、その操作も押しにいく
+- 画面モード・解像度・画質（GUARDED_KEYS）を変えるボタンは、ガードがイレギュラー操作でだけ押すもの（役割 system_setting）
+  なので、ふだんは押さず、変えた値を覚えていないことが多い。プロファイルの [settings] offered にあれば、変えに行くときだけ
+  押しにいく（まだ何を変えるか覚えていないボタンも押す）。変わったら、そのまま元の値（そのランで最初に見た値）に戻しにいく。
+  ウィンドウの大きさが変わったままだと、ボタンが画面の外に出るなど、ほかの検出の邪魔になるため
 - 区間（ガチャプレイ・ボタンの網羅）、ゲームの流れの途中、言語を戻しているあいだは、変えに行かない
 - 決めた時間のうちに変えられなければ、あきらめて「ハーネスの記録」に書く
 """
@@ -44,6 +48,10 @@ SETTING_ITEMS = {
 }
 
 
+# ガードがイレギュラー操作でだけ押すボタン（役割 system_setting）で変わる設定
+GUARDED_KEYS = frozenset({"screen_mode", "resolution", "quality"})
+
+
 def _menu(label: str) -> str:
     return label.split("/", 1)[0]
 
@@ -64,6 +72,10 @@ class SettingsTour:
     gave_up: Counter[str] = field(default_factory=Counter)  # 変えに行ったが、時間のうちに変えられなかった設定
     # プロファイルの [settings] offered: ゲームがプレイヤーに変えさせる設定。None（書いていない）なら、ゲームが出した設定すべて
     offered: frozenset[str] | None = None
+    base: dict[str, Any] = field(default_factory=dict)  # GUARDED_KEYS の、このランで最初に見た値（変えたあと戻す値）
+    restoring: bool = False  # 変えた GUARDED_KEYS の設定を、元の値に戻しにいっている
+    restored: int = 0
+    restore_failed: Counter[str] = field(default_factory=Counter)
 
     @property
     def enabled(self) -> bool:
@@ -72,33 +84,52 @@ class SettingsTour:
     def observe(self, settings: dict[str, Any] | None) -> None:
         if settings:
             self.keys |= {k for k in settings if k != "locales"}
+            for k in GUARDED_KEYS & settings.keys():
+                self.base.setdefault(k, settings[k])
 
-    def changed(self, keys: set[str], entry: str | None, now: float) -> None:
-        """設定の値が変わった（どの押下でも）。変えに行っていた設定なら、変えに行くのを終える。"""
+    def changed(self, keys: set[str], entry: str | None, now: float, values: dict[str, Any] | None = None) -> None:
+        """設定の値が変わった（どの押下でも）。変えに行っていた設定なら、変えに行くのを終える。
+        画面モード・解像度・画質なら、元の値に戻しにいく（戻ったら終える）。"""
         self.changes.update(keys)
-        if self.target is not None and self.target in keys:
-            self.reached[self.target] += 1
-            self.entries[entry or "（ゲームが開いた画面）"] += 1
-            self._finish(now)
+        if self.target is None or self.target not in keys:
+            return
+        value = (values or {}).get(self.target)
+        if self.restoring:
+            if value == self.base.get(self.target):
+                self.restored += 1
+                self._finish(now)
+            return
+        self.reached[self.target] += 1
+        self.entries[entry or "（ゲームが開いた画面）"] += 1
+        if self.target in GUARDED_KEYS and self.target in self.base and value != self.base[self.target]:
+            self.restoring, self.since = True, now  # 同じ設定のまま、元の値に戻しにいく
+            return
+        self._finish(now)
 
     def _finish(self, now: float) -> None:
         self.target = None
+        self.restoring = False
         self.next_t = now + self.interval
 
-    def step(self, now: float, buttons: dict[str, dict[str, Any]], rng: random.Random) -> None:
-        """時間になったら変えに行く設定を選ぶ。変えに行っているあいだに時間が過ぎたら、あきらめる。"""
+    def step(self, now: float, buttons: dict[str, dict[str, Any]], rng: random.Random,
+             guarded: set[str] | frozenset[str] = frozenset()) -> None:
+        """時間になったら変えに行く設定を選ぶ。変えに行っているあいだに時間が過ぎたら、あきらめる。
+        guarded は、ガードがイレギュラー操作でだけ押す、画面の設定を変えるボタン（Guard.setting_labels）。"""
         if not self.enabled:
             return
         if self.next_t is None:
             self.next_t = now + self.interval
         if self.target is not None:
             if now - self.since >= self.timeout:
-                self.gave_up[self.target] += 1
+                (self.restore_failed if self.restoring else self.gave_up)[self.target] += 1
                 self._finish(now)
             return
         if now < self.next_t:
             return
-        known = self._offered({k for eff in buttons.values() for k in eff})
+        known = {k for eff in buttons.values() for k in eff}
+        if any(label not in buttons for label in guarded):
+            known |= GUARDED_KEYS & self.keys  # まだ何を変えるか覚えていないボタンがある: 押してみる
+        known = self._offered(known)
         if not known:
             return  # 設定を変えるボタンをまだ知らない（ランダムに押すうちに覚える）
         least = min(self.changes[k] for k in known)
@@ -107,14 +138,24 @@ class SettingsTour:
         self.tours += 1
 
     def apply(self, cands: list[Op], menus: set[str], settings: dict[str, Any] | None,
-              buttons: dict[str, dict[str, Any]], routes: dict[str, list[list[str]]]) -> list[Op]:
+              buttons: dict[str, dict[str, Any]], routes: dict[str, list[list[str]]],
+              guarded: set[str] | frozenset[str] = frozenset()) -> list[Op]:
         """変えに行っている設定を変えるボタンと、その画面を開くボタンを優先する。"""
         if self.target is None:
             return cands
         now = settings or {}
         want = {label for label, eff in buttons.items() if self.target in eff}
-        # 押せば今と違う値になるボタンを先に（選ばれている値を押しても変わらない）
-        prefer = {label for label in want if buttons[label][self.target] != now.get(self.target)} or want
+        if self.target in GUARDED_KEYS:
+            want |= {label for label in guarded if label not in buttons}  # 何を変えるかまだ覚えていない
+        if self.restoring:
+            # 元の値にすると覚えたボタン。覚えていなければ、まだ押していないボタンを試す
+            back = self.base.get(self.target)
+            prefer = {label for label in want if label in buttons and buttons[label][self.target] == back} or {
+                label for label in want if label not in buttons} or want
+        else:
+            # 押せば今と違う値になるボタンを先に（選ばれている値を押しても変わらない）
+            prefer = {label for label in want
+                      if label not in buttons or buttons[label][self.target] != now.get(self.target)} or want
         targets = {_menu(label) for label in prefer}
         if targets & menus:
             boost = {label for label in prefer if _menu(label) in menus}
@@ -153,6 +194,11 @@ class SettingsTour:
         if never:
             out.append("このランで一度も変わらなかった設定: " + "、".join(
                 k + ("" if k in known else "（変えるボタンを見つけていない）") for k in never))
+        if self.restored or self.restore_failed:
+            text = f"画面の設定を変えたあと、元の値に戻した {self.restored} 回"
+            if self.restore_failed:
+                text += "、戻せなかった " + "、".join(f"{k} {n} 回" for k, n in sorted(self.restore_failed.items()))
+            out.append(text)
         missing = sorted((self.offered or frozenset()) - self.keys)
         if missing:
             out.append("プロファイルの [settings] offered にあるのに、ゲームが値を出していない設定: " + "、".join(missing)
