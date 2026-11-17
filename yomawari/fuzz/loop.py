@@ -393,6 +393,9 @@ class FuzzSession:
         self._sig: Any = None
         self._sig_t = 0.0
         self._modal_since: float | None = None
+        # モーダルが開いて本文送りが止められてからの時刻と、そのあいだに本文送りで確かめたか（S-02。_mute_check）
+        self._mute_since: float | None = None
+        self._mute_checked = False
         # キーで出し入れする画面（UI を隠すキーなど）。ボタンのないモーダルが、出る直前に押したキーでしか閉じないことがある
         self._key_ops: deque[tuple[float, str]] = deque(maxlen=5)  # 最近押したキー (押し終えた時刻, キー)
         self._modal_open: set[str] = set()  # 開いているモーダル（menu・menu_close から）
@@ -729,6 +732,9 @@ class FuzzSession:
                     cands.append(toggle)
         else:
             self._modal_since = None
+        check = self._mute_check(now)
+        if check is not None:
+            cands = [check]
         key = state_key(self.state)
         verify = False
         if self._verify_next:
@@ -746,6 +752,24 @@ class FuzzSession:
             await self._external(op)
         else:
             await self._normal(op, key, verify)
+
+    def _mute_check(self, now: float) -> Op | None:
+        """モーダルな画面が開いていて、ゲームが本文送りの入力を止めたまま mute_check_sec たったら、1 回だけ本文送りを押す。
+
+        メニューを開いているあいだに本文送りを止めるのは仕様なので、S-02 は、本文送りを押しても進まないことを確かめたあとは、
+        モーダルが閉じるまで数えない（run 2026-11-17_1204: ロード・設定の画面にいるだけで S-02 を出し、再起動した）。
+        人もメニューを開いたまま本文を送ろうとすることがあるので、押して確かめる。モーダルが閉じるか、入力が戻ったら数え直す。
+        """
+        st = self.state
+        if st.top_modal() is None or "Continue" not in st.muted:
+            self._mute_since, self._mute_checked = None, False
+            return None
+        if self._mute_since is None:
+            self._mute_since = now
+        if self._mute_checked or st.busy or now - self._mute_since < float(self.cfg["mute_check_sec"]):
+            return None
+        self._mute_checked = True
+        return Op("advance", by="mute_check")
 
     # --- プレイの目的 ---
 

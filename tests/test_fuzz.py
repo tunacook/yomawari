@@ -687,6 +687,51 @@ def test_s02_detects_input_left_muted():
     assert engine.tick(20.0 + 2 * idle, 0) == []
 
 
+def test_s02_modal_muted_counts_until_advance_is_checked():
+    """モーダルの上で入力が止められていても、本文送りで進まないと確かめるまでは数える。確かめたら閉じるまで数えず、
+    閉じたらそこから数え直す。"""
+    rules = scaled_rules(1.0)
+    idle = float(rules["S-02"].param("muted_idle_sec"))
+    modal = {"line_id": "a:5.0", "top_modal": "SaveMenu"}
+
+    def run(check: bool) -> tuple[Engine, list]:
+        engine = Engine(rules)
+        engine.feed(Event("game", "line", {"line_id": "a:5.0"}, 0, t=0.0))
+        engine.feed(Event("game", "input", {"muted": ["Continue"]}, 0, t=1.0))
+        engine.feed(Event("harness", "op_result", {"kind": "click", "heartbeat_age": 0.5, "state": modal}, 0, t=2.0))
+        if check:
+            engine.feed(Event("harness", "op_result", {"kind": "advance", "heartbeat_age": 0.5, "waited": 5.0,
+                                                         "state": modal}, 0, t=60.0))
+        engine.feed(Event("game", "heartbeat", {}, 0, t=2.0 + idle))
+        return engine, engine.tick(2.0 + idle, 0)
+
+    assert [i.rule_id for i in run(False)[1]] == ["S-02"]  # 確かめていない: これまでどおり検出する
+    engine, out = run(True)
+    assert out == []  # 本文送りで進まないと確かめた: モーダルが閉じるまで数えない
+    # モーダルが閉じたら、そこから数え直す
+    t0 = 10.0 + idle
+    engine.feed(Event("harness", "op_result", {"kind": "key", "heartbeat_age": 0.5,
+                                                 "state": {"line_id": "a:5.0", "top_modal": None}}, 0, t=t0))
+    engine.feed(Event("game", "heartbeat", {}, 0, t=t0 + idle - 1))
+    assert engine.tick(t0 + idle - 1, 0) == []
+    engine.feed(Event("game", "heartbeat", {}, 0, t=t0 + idle))
+    assert [i.rule_id for i in engine.tick(t0 + idle, 0)] == ["S-02"]
+
+
+def test_s02_modal_advance_that_progressed_is_not_a_check():
+    """モーダルの上で押した本文送りで本文が進んだなら、確かめたことにしない。"""
+    rules = scaled_rules(1.0)
+    idle = float(rules["S-02"].param("muted_idle_sec"))
+    modal = {"line_id": "a:5.0", "top_modal": "SaveMenu"}
+    engine = Engine(rules)
+    engine.feed(Event("game", "input", {"muted": ["Continue"]}, 0, t=1.0))
+    engine.feed(Event("game", "line", {"line_id": "a:6.0"}, 0, t=58.0))
+    engine.feed(Event("harness", "op_result", {"kind": "advance", "heartbeat_age": 0.5, "waited": 5.0,
+                                                 "state": modal}, 0, t=60.0))
+    engine.feed(Event("game", "heartbeat", {}, 0, t=58.0 + idle))
+    assert [i.rule_id for i in engine.tick(58.0 + idle, 0)] == ["S-02"]
+
+
 # --- ハーネス全体（モックゲーム） ---
 
 
