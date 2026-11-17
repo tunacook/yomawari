@@ -893,9 +893,9 @@ class AdvanceStallDetector(Detector):
     （run 2026-11-16_2241: 入力を止めたオープニングの演出で、コマンドが進んでいるのに検出した）。
     人もこのあいだにクリックすることはあるので、ハーネスは押すのをやめない。
     止めたまま戻し忘れる不具合は、入力が止められていて、スクリプトのコマンド・本文も muted_idle_sec 来ないときに検出する。
-    ただし、モーダルな画面が開いているあいだに本文送りを押して、進まないことを確かめたあとは、そのモーダルが閉じるまで数えない
+    ただし、モーダルな画面が開いているあいだに本文送りを押して、進まないことを確かめたあとは、モーダルがすべて閉じるまで数えない
     （メニューを開いているあいだに本文送りを止めるのは仕様。run 2026-11-17_1204: ロード・設定の画面にいるだけで検出した）。
-    閉じたら、そこから数え直す。ハーネスは、モーダルが開いて入力が止められたまま mute_check_sec たつと本文送りを押す
+    モーダルからモーダルへ移るあいだも数えない。すべて閉じたら、そこから数え直す。ハーネスは、モーダルが開いて入力が止められたまま mute_check_sec たつと本文送りを押す
     （fuzz/loop.py の _mute_check）
     """
 
@@ -916,7 +916,7 @@ class AdvanceStallDetector(Detector):
         self.state: dict | None = None  # 最後の操作のときのゲームの状態
         self.fired = False
         self.progress_at: float | None = None  # 最後に line / choices / scene が来た時刻
-        # 入力が止められたモーダルの上で、本文送りを押しても進まないと確かめたモーダルの名前（閉じるまで数えない）
+        # 入力が止められたモーダルの上で、本文送りを押しても進まないと確かめたモーダルの名前（モーダルがすべて閉じるまで数えない）
         self.checked: str | None = None
 
     def on_event(self, ev: Event) -> list[Issue]:
@@ -945,8 +945,10 @@ class AdvanceStallDetector(Detector):
             return []
         self.state = d.get("state") or self.state
         top = (d.get("state") or {}).get("top_modal")
-        if self.checked is not None and top != self.checked:
-            # 確かめたモーダルが閉じた: ここから数え直す
+        if self.checked is not None and top is None:
+            # モーダルがすべて閉じた: ここから数え直す。ロード → 右クリックメニュー → 設定のように、モーダルからモーダルへ
+            # 移るあいだは数えない（ハーネスの _mute_check も、モーダルがすべて閉じるまで確かめ直さない。
+            # run 2026-11-17_1400: 確かめたあとに設定の画面へ移り、数え直して検出した）
             self.checked = None
             if self.muted:
                 self.script_at, self.script_wall, self.fired = ev.t, ev.wall, False
