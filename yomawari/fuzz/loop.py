@@ -577,6 +577,10 @@ class FuzzSession:
                 self._watch_rollback(ev)
             if ev.launch == self.launch:
                 self._spot(ev)
+            if ev.kind == "load" and ev.launch == self.launch and self.state.line_restored:
+                # ロードでセーブしたときの本文に戻った。質問の画面に戻ったなら、その質問の行を直近の本文に入れて、
+                # プロファイルの正解と照らし合わせられるようにする（本文の行として数えはしない）
+                self._remember_line(self.state.line or {})
             if ev.kind == "line" and ev.launch == self.launch:
                 self._remember_line(ev.data)
                 line_id = ev.data.get("line_id")

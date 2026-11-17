@@ -127,3 +127,18 @@ def test_snapshot_keeps_command_line_after_last_text():
     assert snap["line_id"] == "main/a:10.0" and snap["command_line_id"] == "main/b:19.0"
     s.feed(game("line", label="main/b", line_id="main/b:25.0", text="t"))
     assert s.snapshot()["command_line_id"] is None
+
+
+def test_load_restores_line_of_the_save_across_launches():
+    # セーブを始めたときの本文を覚え、同じスロットのロードを終えたら line を戻す。セーブのファイルは起動し直しても
+    # 残るので、起動し直しても覚えている
+    s = GameState()
+    s.feed(Event("game", "line", {"line_id": "main/a:5.0", "text": "質問"}, 0))
+    s.feed(Event("game", "save", {"slot": "Slot1", "phase": "start"}, 0))
+    s.feed(Event("game", "save", {"slot": "Slot1", "phase": "end"}, 0))
+    s.feed(Event("harness", "launch", {"pid": 2}, launch=1))
+    assert s.line is None
+    s.feed(Event("game", "load", {"slot": "Slot1", "phase": "start"}, launch=1))
+    assert s.line is None and s.loading
+    s.feed(Event("game", "load", {"slot": "Slot1", "phase": "end"}, launch=1))
+    assert s.line == {"label": None, "line_id": "main/a:5.0", "speaker": None, "text": "質問"} and s.line_restored
