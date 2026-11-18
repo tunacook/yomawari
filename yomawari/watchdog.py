@@ -7,6 +7,7 @@ fuzz / random モードでは、起動ごとに FuzzSession（fuzz/loop.py）を
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import os
 import platform as pyplatform
@@ -30,7 +31,7 @@ from .judge import ollama
 from .events import Event, Issue, now_wall
 from .fuzz.decider import RandomDecider
 from .fuzz.advisor import ChoiceAdvisor
-from .fuzz.settings_tour import SettingsTour, VolumeHold
+from .fuzz.settings_tour import SCREEN_KEYS, SettingsTour, VolumeHold
 from .fuzz.experience import Experience
 from .fuzz.flow import FlowTracker
 from .fuzz.guard import Guard
@@ -46,6 +47,7 @@ from .profile import GameSpec
 from .post.report import RunSummary, write_report
 from .purpose import Purpose
 from .savestate import SaveState, previous_run_save, resolve_target
+from .screen import Screen
 from .sensors.savefile import SaveFileWatch
 from .state import GameState
 from .sensors.crash import watch_crash_dir
@@ -68,6 +70,7 @@ class RunOptions:
     display_off: bool = False  # ゲームが起動したあと、画面を消す
     display_off_delay_sec: float = 10.0
     continue_previous: bool = False  # ランの最初の起動から、前のランのセーブの続きを遊ぶ
+    screen: Screen | None = None  # ランの画面の前提（--screen）。決めた大きさのウィンドウで起動し、ランのあいだは変えさせない
 
 
 @dataclass
@@ -149,6 +152,9 @@ class Harness:
         self._fuzz_task: asyncio.Task[None] | None = None
         self._crash_seen: set[Path] = set()
         self._save_watch: SaveFileWatch | None = None  # F-01: セーブしたらファイルが更新されたかを見る
+        self._screen: Screen | None = None  # ランの画面の前提（--screen）
+        self._screen_seen: set[int] = set()  # 画面の大きさを一度でも見た起動
+        self._screen_abort = ""  # 決めた画面で起動できなかった（ランを止める理由）
         self._bus: EventBus | None = None
         self._started = 0.0
         self._last_status = 0.0
@@ -168,6 +174,8 @@ class Harness:
             self._session_fuzz.on_event(ev)
         if self._save_watch is not None:
             self._save_watch.on_event(ev)
+        if ev.kind == "resolution" and ev.source == "game" and self._screen is not None:
+            self._check_screen(ev)
         if ev.kind == "boot" and ev.source == "game":
             d = ev.data
             self.roles.build = "/".join(str(d[k]) for k in ("version", "build_guid") if d.get(k)) or None
@@ -200,6 +208,24 @@ class Harness:
         if ev.kind == "proc_exit" and self._restart_req is not None:
             if not ev.data["by_harness"] or self._expect_exit:
                 self._restart_req.set()
+
+    def _check_screen(self, ev: Event) -> None:
+        """--screen: ゲームの画面の大きさ・画面モードが決めたものと違えば、起動し直す。起動したときから違えば、
+        起動し直しても同じなので、ランを止める（画面より大きいウィンドウは開けない、など）。"""
+        assert self._screen is not None
+        d = ev.data
+        first = ev.launch not in self._screen_seen
+        self._screen_seen.add(ev.launch)
+        if self._screen.matches(d.get("w"), d.get("h"), d.get("mode")) or self._restart_req is None:
+            return
+        got = f"{d.get('w')}x{d.get('h')}（{d.get('mode')}）"
+        if first:
+            self._screen_abort = (f"決めた画面（{self._screen}）で起動できなかったため、ランを止めました（起動 #{ev.launch}。"
+                                  f"ゲームの画面は {got}。ディスプレイより大きいと開けないことがあります）")
+        else:
+            self.notes.append(f"ランのあいだに画面が {got}に変わったため、決めた画面（{self._screen}）で起動し直しました"
+                              f"（起動 #{ev.launch}）")
+        self._restart_req.set()
 
     def _handle_issues(self, issues: list[Issue]) -> None:
         for i in issues:
@@ -424,13 +450,22 @@ class Harness:
         self._started = time.monotonic()
         started_wall = now_wall()
         seed = str(random.randrange(2**31)) if opts.seed == "auto" else opts.seed
+        if opts.screen is not None:
+            # ビルドの args の画面の指定を置き換えて起動する（DESIGN.md §9「画面の前提」）
+            self._screen = opts.screen
+            self.build = dataclasses.replace(self.build, args=opts.screen.args(self.build.args))
+            self.notes.append(f"画面を {opts.screen}に決めて起動した（--screen）。ランのあいだは、解像度・画面モードを変える"
+                              "ボタンを押さず、設定を変えに行くときも変えない")
         if opts.mode != "aging":
             if "S-01" not in self.rules:
                 raise RuleError(f"モード {opts.mode} には rules.yaml の S-01（応答を待つ時間）が必要です")
             self._fuzz = FuzzRun(
                 mode=opts.mode,
                 decider=RandomDecider(random.Random(seed), float(self.fuzz_cfg["no_response_factor"])),
-                guard=Guard(self.spec.guard_buttons, self.spec.guard_roles, self.roles),
+                # --screen では、画面モード・解像度などを変えるボタン（役割 system_setting）を押さない
+                guard=Guard(self.spec.guard_buttons,
+                            opts.screen.guard_roles(self.spec.guard_roles) if opts.screen else self.spec.guard_roles,
+                            self.roles),
                 rng=random.Random(f"{seed}:trigger"),
                 cfg=self.fuzz_cfg,
                 response_timeout=float(self.rules["S-01"].param("timeout_sec")),
@@ -450,7 +485,8 @@ class Harness:
                                   float(self.fuzz_cfg["settings_tour_timeout_sec"]),
                                   float(self.fuzz_cfg["settings_tour_factor"]),
                                   offered=(frozenset(self.spec.settings_offered)
-                                           if self.spec.settings_offered is not None else None)),
+                                           if self.spec.settings_offered is not None else None),
+                                  fixed=SCREEN_KEYS if opts.screen else frozenset()),
             )
             if "A-03" in self.rules:
                 a03 = self.rules["A-03"]
@@ -558,6 +594,10 @@ class Harness:
             max_restarts = int(self.run_cfg["max_restarts"])
             while time.monotonic() < deadline:
                 reason = await self._session(launch, deadline, run_dir)
+                if self._screen_abort:
+                    self.notes.append(self._screen_abort)
+                    interrupted, stop_reason = True, self._screen_abort
+                    break
                 if reason == "deadline":
                     break
                 if reason == "relaunch":

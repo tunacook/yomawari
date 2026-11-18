@@ -51,6 +51,8 @@ SETTING_ITEMS = {
 
 # ガードがイレギュラー操作でだけ押すボタン（役割 system_setting）で変わる設定
 GUARDED_KEYS = frozenset({"screen_mode", "resolution", "quality"})
+# 画面の大きさ・画面モード。--screen で決めたランでは変えに行かない
+SCREEN_KEYS = frozenset({"screen_mode", "resolution"})
 
 
 def _menu(label: str) -> str:
@@ -73,6 +75,7 @@ class SettingsTour:
     gave_up: Counter[str] = field(default_factory=Counter)  # 変えに行ったが、時間のうちに変えられなかった設定
     # プロファイルの [settings] offered: ゲームがプレイヤーに変えさせる設定。None（書いていない）なら、ゲームが出した設定すべて
     offered: frozenset[str] | None = None
+    fixed: frozenset[str] = frozenset()  # 変えに行かない設定（--screen で決めた画面の大きさ・画面モード）
     base: dict[str, Any] = field(default_factory=dict)  # GUARDED_KEYS の、このランで最初に見た値（変えたあと戻す値）
     restoring: bool = False  # 変えた GUARDED_KEYS の設定を、元の値に戻しにいっている
     restored: int = 0
@@ -185,7 +188,7 @@ class SettingsTour:
         return out
 
     def _offered(self, keys: set[str]) -> set[str]:
-        return keys if self.offered is None else keys & self.offered
+        return (keys if self.offered is None else keys & self.offered) - self.fixed
 
     def notes(self, buttons: dict[str, dict[str, Any]]) -> list[str]:
         if not self.keys:

@@ -8,6 +8,8 @@ Unity と同じく -yomawari があるときだけ [YOMAWARI] 行を出し、-lo
   noboot     何も出さずに生き続ける
   exception  boot の直後に例外（Player.log の本文と log_error イベント）を出し、その後は normal と同じ
   menus      boot の後に resolution とタイトルの menu を出し、--mock-after 秒後に設定画面（モーダル）を開く
+  screen     boot の後に、起動の引数（-screen-width / -screen-height）の大きさで resolution を出す。--mock-resize があれば
+             --mock-after 秒後にその大きさ（「WxH」）に変わる。--mock-ignore-screen なら引数を無視して 1280x720 のまま
 """
 
 import argparse
@@ -22,6 +24,11 @@ p.add_argument("-yomawari", action="store_true")
 p.add_argument("--mock-mode", default="normal")
 p.add_argument("--mock-after", type=float, default=1.0)
 p.add_argument("--mock-hb", type=float, default=0.2)
+p.add_argument("-screen-width", type=int, default=1280)
+p.add_argument("-screen-height", type=int, default=720)
+p.add_argument("-screen-fullscreen")
+p.add_argument("--mock-resize")
+p.add_argument("--mock-ignore-screen", action="store_true")
 a, _ = p.parse_known_args()
 
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
@@ -69,9 +76,16 @@ if a.mock_mode == "menus":
         {"name": "NewGameButton", "rect": [0.1, 0.5, 0.3, 0.6]},
         {"name": "SettingsButton", "rect": [0.1, 0.7, 0.3, 0.8]},
     ])
+if a.mock_mode == "screen":
+    w, h = (1280, 720) if a.mock_ignore_screen else (a.screen_width, a.screen_height)
+    emit("resolution", w=w, h=h, mode="Windowed")
 opened = False
 while True:
     elapsed = time.monotonic() - t0
+    if a.mock_mode == "screen" and a.mock_resize and not opened and elapsed >= a.mock_after:
+        opened = True
+        rw, rh = (int(v) for v in a.mock_resize.split("x"))
+        emit("resolution", w=rw, h=rh, mode="Windowed")
     if a.mock_mode == "menus" and not opened and elapsed >= a.mock_after:
         opened = True
         emit("menu", name="SettingsUI", modal=True, buttons=[{"name": "ReturnButton", "rect": [0.8, 0.9, 0.95, 0.98]}])
