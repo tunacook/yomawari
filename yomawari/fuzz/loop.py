@@ -400,6 +400,10 @@ class FuzzSession:
         # モーダルが開いて本文送りが止められてからの時刻と、そのあいだに本文送りで確かめたか（S-02。_mute_check）
         self._mute_since: float | None = None
         self._mute_checked = False
+        # 最後に、セーブ済みのスロットが並んだ画面か、続きから遊ぶボタンを押した時刻と、直前の操作がそうだったか
+        # （そのあとのロードは人が選んだもの）
+        self._save_screen_at: float | None = None
+        self._save_screen_last = False
         # キーで出し入れする画面（UI を隠すキーなど）。ボタンのないモーダルが、出る直前に押したキーでしか閉じないことがある
         self._key_ops: deque[tuple[float, str]] = deque(maxlen=5)  # 最近押したキー (押し終えた時刻, キー)
         self._modal_open: set[str] = set()  # 開いているモーダル（menu・menu_close から）
@@ -437,6 +441,30 @@ class FuzzSession:
     def cfg(self) -> dict[str, Any]:
         """いまの [fuzz] の設定（区間（burst）の間は、区間の設定）。"""
         return self.run.cfg
+
+    def _on_save_screen(self, op: Op) -> bool:
+        """op が、続きから遊ぶボタンか、セーブ済みのスロットが並んだ画面の上の操作か。"""
+        hints = self.run.save_hints
+        if op.target is not None and hints.resume(op.target):
+            return True
+        name = op.target.menu if op.target is not None else None
+        menu = self.state.menus.get(name) if name is not None else self.state.top_modal()
+        return menu is not None and any(hints.saved(b) for b in menu.buttons)
+
+    def _note_internal_save(self, slot: Any) -> None:
+        """ロードが始まった。直前の操作も、progress_window_sec のうちの操作も、セーブ済みのスロットが並んだ画面の上や続きから
+        遊ぶボタンでなければ、ゲームが自分でロードしたセーブ（セーブの画面のスロットに残らない）として覚える（ランをまたいで
+        経験に残す）。スロットを押してからロードが始まるまで、暗転などで数秒かかることがあるので、直前の操作も見る。"""
+        if not slot:
+            return
+        at, window = self._save_screen_at, float(self.cfg["progress_window_sec"])
+        if self._save_screen_last or (at is not None and time.monotonic() - at <= window):
+            return
+        exp = self.run.experience
+        if str(slot) not in exp.internal_saves:
+            exp.internal_saves.add(str(slot))
+            self.run.notes.append(f"セーブ `{slot}` は、セーブの画面で選ばずにゲームがロードしたので、セーブの画面に残らない"
+                                  f"セーブとして覚えた。終了を試す前のセーブに数えない（起動 #{self.launch}）")
 
     def recent_press(self, now: float | None = None) -> str | None:
         """role_window_sec のうちに押したボタンの "<menu>/<name>"。なければ None。"""
@@ -551,13 +579,18 @@ class FuzzSession:
         if ev.kind == "line":
             # ロードしたセーブから本文が出た。このセーブからは進める
             self.run.resume_load = None
+        if ev.kind == "load" and d.get("phase") == "start":
+            self._note_internal_save(d.get("slot"))
         if ev.kind == "load" and d.get("phase") == "start" and self.run.flow.active is None:
             # 流れの外でセーブをロードした（続きから遊ぶ・ロードの行き来）。流れの中のロード（思い出から本編に戻る）は除く
             self._forget_progress(f"セーブ（{d.get('slot')}）をロードした")
             # 答えたあとにロードしたなら、また同じ質問に着いても、ゲームが外れと判定したのではない
             self.run.flow.rewound(f"セーブ（{d.get('slot')}）をロードした")
         if (ev.kind == "save" and d.get("phase") == "start" and self.run.flow.active is None
-                and self.run.resume_until is None):
+                and self.run.resume_until is None and str(d.get("slot")) not in self.run.experience.internal_saves):
+            # ゲームが自分でロードするセーブ（寄り道から本編に戻るためのものなど）は、セーブの画面のスロットに残らないので、
+            # 続きから遊ぶときに探せない。終了を試す前のセーブに数えない（run 2026-11-18_1622: そのセーブを数えて終了を試し、
+            # 起動し直したら自分のセーブが見つからず、10 分前のオートセーブに戻った）
             self.run.saved_t = time.monotonic()
             self.run.saved_wall = time.time()
             self.run.exit_unsaved = False
@@ -2683,6 +2716,10 @@ class FuzzSession:
         if op.kind in ("key", "rapid_key") and op.arg is not None:
             # 連打の途中で画面が出ることがあるので、押し始める前にも覚える（押し終えたら時刻を更新する）
             self._key_ops.append((time.monotonic(), str(op.arg)))
+        # 押しているあいだにロードが始まることがあるので、押す前に覚える
+        self._save_screen_last = self._on_save_screen(op)
+        if self._save_screen_last:
+            self._save_screen_at = time.monotonic()
         async with self._lock:
             try:
                 try:

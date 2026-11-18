@@ -226,6 +226,48 @@ def test_save_first_gives_up_and_skips_inside_flow_saves():
     assert any("セーブできなかった" in n for n in run.notes)
 
 
+def test_save_the_game_loads_by_itself_is_not_counted_before_exit(tmp_path):
+    """セーブの画面で選ばずにゲームがロードしたセーブ（寄り道から本編に戻るためのものなど）は、セーブの画面に残らないので、
+    終了を試す前のセーブに数えない。ランをまたいで覚える（run 2026-11-18_1622: 数えて終了を試し、起動し直したら自分の
+    セーブが見つからなかった）。"""
+    from yomawari.fuzz.experience import Experience
+    path = tmp_path / "game.json"
+    s, st, run = _session(launch=0)
+    run.experience = Experience(path)
+    # 本文送りのあと、ゲームが自分でロードした
+    s._save_screen_at = None
+    s.on_event(Event("game", "load", {"slot": "ReturnPoint", "phase": "start"}, 0))
+    assert run.experience.internal_saves == {"ReturnPoint"}
+    assert any("`ReturnPoint`" in n and "数えない" in n for n in run.notes)
+    # そのセーブは数えない。セーブの画面のスロットへのセーブは数える
+    assert not s._saved_for_exit(1000.0)
+    s.on_event(Event("game", "save", {"slot": "ReturnPoint", "phase": "start"}, 0))
+    assert run.saved_t is None and run.save_first_until is not None
+    s.on_event(Event("game", "save", {"slot": "GameSave007", "phase": "start"}, 0))
+    assert run.saved_t is not None and run.save_first_until is None
+    run.experience.save()
+    assert Experience(path).internal_saves == {"ReturnPoint"}
+
+
+def test_load_chosen_on_the_save_screen_is_not_internal():
+    """セーブ済みのスロットが並んだ画面の上の操作や、続きから遊ぶボタンのあとのロードは、人が選んだもの（覚えない）。
+    スロットを押した操作のほか、画面の上の本文送り・キーでロードが始まっても同じ。"""
+    s, st, run = _session(launch=0)
+    texts = {_label(i): (f"{i + 1}. 2026-11-06 10:0{i}:00" if i < 2 else f"{i + 1}. Empty") for i in range(9)}
+    _show(st, "SaveLoadUI", LOAD, texts)
+    for op in (Op("click", target=st.find("SaveLoadUI/SaveLoadSlot (Clone)", 1)), Op("advance"), Op("key", arg="enter")):
+        assert s._on_save_screen(op)
+    _show(st, "TitleUI", TITLE, TITLE_TEXT)
+    assert s._on_save_screen(Op("click", target=st.find("TitleUI/ContinueButton", 0)))
+    assert not s._on_save_screen(Op("click", target=st.find("TitleUI/SettingsButton", 0)))
+    s._save_screen_at = time.monotonic()
+    s.on_event(Event("game", "load", {"slot": "GameSave002", "phase": "start"}, 0))
+    # 暗転などで、押してからロードが始まるまで時間がかかっても、直前の操作がセーブの画面の上なら覚えない
+    s._save_screen_at, s._save_screen_last = time.monotonic() - 60, True
+    s.on_event(Event("game", "load", {"slot": "GameSave001", "phase": "start"}, 0))
+    assert run.experience.internal_saves == set()
+
+
 def test_save_first_does_not_count_time_inside_flow():
     # run 2026-11-10_0957: 流れの外にいた一瞬にセーブしようとし始め、そのあとずっと流れの途中だった。流れの操作が先に
     # 選ばれて一度もセーブしないまま時間切れになり、流れの途中で終了を試して、約 2 時間前のセーブに戻った
