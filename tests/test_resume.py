@@ -213,6 +213,29 @@ def test_saves_before_trying_exit_button():
     assert s._saved_for_exit(time.monotonic())
 
 
+def test_save_first_opens_the_menu_where_the_save_button_was_seen():
+    """セーブするボタンが見えていなければ、前にそのボタンを見た画面の開き方（右クリックなど）を先に押す。一覧の台帳を
+    埋める操作はしない（run 2026-11-18_1622: 180 秒の大半を本文の履歴の一覧を動かすのに使い、セーブできなかった）。"""
+    s, st, run = _session(launch=0)
+    # 右クリックで開いたメニューにセーブするボタンがあった（セーブしようとしていなくても覚える）
+    run.opened_via["QuickMenuUI"] = "right_click"
+    _show(st, "QuickMenuUI", RCLICK, RCLICK_TEXT)
+    _save_weights(s, st)
+    assert run.save_routes == {"QuickMenuUI": ["right_click"]}
+    # 本文を読んでいるとき: セーブしようとしていなければ、右クリックはそのまま
+    _feed(st, "menu_close", name="QuickMenuUI")
+    plain = _save_weights(s, st)
+    assert not s._saved_for_exit(1000.0)
+    w = _save_weights(s, st)
+    assert w["right_click"] == plain["right_click"] * SAVE_FACTOR and w["advance"] == plain["advance"]
+    # 一覧の操作は外す。ほかの操作が残らなければ外さない
+    cands = [Op("drag", arg="down", by="list"), Op("right_click"), Op("key", arg="esc")]
+    out = s._apply_save_first(cands)
+    assert [op.label for op in out] == ["right_click", "key esc"] and out[0].by == "save_first"
+    only = [Op("drag", arg="down", by="list")]
+    assert s._apply_save_first(only) == only
+
+
 def test_save_first_gives_up_and_skips_inside_flow_saves():
     s, st, run = _session(launch=0)
     # ゲームが流れの中で自分でするセーブ（思い出を読む前の EpisodeReturn など）は数えない

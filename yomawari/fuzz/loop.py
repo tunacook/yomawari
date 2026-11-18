@@ -189,6 +189,9 @@ class FuzzRun:
     # menu → それを開いた、ボタンでない操作（右クリック・キー）の label。設定・言語の画面の開き方をたどるのにだけ使う
     # （opened_by には入れない。ゲームの流れの by や一覧の寄り道では、ゲームが開いた画面のまま扱う）
     opened_via: dict[str, str] = field(default_factory=dict)
+    # セーブするボタン（save_hints.save）のある画面 → その画面を開いた操作の並び（_route）。終了を試す前にセーブしようと
+    # するとき、セーブするボタンが見えていなければ、この開き方を先に押す
+    save_routes: dict[str, list[str]] = field(default_factory=dict)
     # プレイの目的（random モード）。起動したとき・タイトルに戻ったときに選び直す
     intent: str | None = None
     # 時間をかけても答えられなかった質問から離れて「画面を見て回る」にしている終わりの時刻（time.monotonic）
@@ -1561,17 +1564,35 @@ class FuzzSession:
 
     def _apply_save_first(self, cands: list[Op]) -> list[Op]:
         """セーブしようとするあいだは、セーブするボタン（save_hints.save）と、それがある画面の空きのスロット（文字で空と
-        分かるもの）を先に押す。"""
+        分かるもの）を先に押す。セーブするボタンが見えていなければ、前にそのボタンを見た画面の開き方（右クリックなど）を
+        先に押す。一覧の台帳を埋める・一覧の目標へ向かう操作はしない（run 2026-11-18_1622: セーブしようとした 180 秒の
+        大半を、本文の履歴の一覧を動かすのに使い、セーブできないまま終了を試した。起動し直したら scene の始めの自動セーブ
+        まで戻った）。"""
         run, hints = self.run, self.run.save_hints
-        if run.save_first_until is None:
-            return cands
         targets = [op.target for op in cands if op.target is not None and op.target.kind == "button"]
         menus = {t.menu for t in targets if hints.save(t)}
-        empty = inactive([t for t in targets if t.menu in menus], run.inactive_words, run.masked_chars)
+        for menu in menus:
+            route = self._route(menu)
+            if route:
+                run.save_routes[menu] = route
+        if run.save_first_until is None:
+            return cands
+        cands = [op for op in cands if op.by != "list"] or cands
         boost = float(self.cfg["save_first_factor"])
-        return [op.scaled("save_first", boost)
-                if op.target is not None and op.target.kind == "button"
-                and (hints.save(op.target) or op.target.label in empty) else op for op in cands]
+        if menus:
+            empty = inactive([t for t in targets if t.menu in menus], run.inactive_words, run.masked_chars)
+            return [op.scaled("save_first", boost)
+                    if op.target is not None and op.target.kind == "button"
+                    and (hints.save(op.target) or op.target.label in empty) else op for op in cands]
+        steps = {label for route in run.save_routes.values() for label in route}
+        out = []
+        for op in cands:
+            t = op.target
+            # 開き方の最初の一歩が右クリック・キーなら、その操作（ボタンでない）も押しにいく
+            if (t is not None and t.kind == "button" and t.label in steps) or (t is None and op.label in steps):
+                op = dataclasses.replace(op, novelty=False, by="save_first").scaled("save_first", boost)
+            out.append(op)
+        return out
 
     # --- 巻き戻しのエッジケース（fuzz/rollback.py） ---
 
