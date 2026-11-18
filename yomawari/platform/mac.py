@@ -35,6 +35,19 @@ def parse_lsappinfo_pid(out: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def parse_lsappinfo_app(out: str) -> str | None:
+    """`lsappinfo info -only name,bundleid <ASN>` の出力から、アプリの名前とバンドル ID を「名前（バンドル ID）」にする。
+
+    macOS 26 では `"LSDisplayName"="メモ"`・`"CFBundleIdentifier"="com.apple.Notes"`、macOS 27 では先頭の行の
+    `"メモ" ASN:...`・`bundleID="com.apple.Notes"` の形で出る。どちらも分からなければ None。"""
+    name = re.search(r'"LSDisplayName"\s*=\s*"([^"]*)"', out) or re.search(r'^\s*"([^"]*)"\s+ASN:', out, re.M)
+    bundle = re.search(r'"CFBundleIdentifier"\s*=\s*"([^"]*)"', out) or re.search(r'bundleID\s*=\s*"([^"]*)"', out)
+    n, b = (name.group(1) if name else None), (bundle.group(1) if bundle else None)
+    if n and b:
+        return f"{n}（{b}）"
+    return n or b
+
+
 def parse_screen_lock(out: str) -> str | None:
     """sysadminctl -screenLock status の出力から、ロックまでの時間を読む。"""
     m = re.search(r"screenLock delay is (immediate|\d+ seconds)", out)
@@ -410,7 +423,11 @@ class MacPlatform:
         return out
 
     def frontmost_pid(self) -> int | None:
-        """前面のアプリの pid。
+        """前面のアプリの pid。"""
+        return self._frontmost("pid")[0]
+
+    def _frontmost(self, only: str) -> tuple[int | None, str]:
+        """前面のアプリの pid と、`lsappinfo info -only <only>` の出力。
 
         NSWorkspace.frontmostApplication は、イベントループを回していないプロセス（このハーネス）では
         起動時の値のまま更新されないので使わない。LaunchServices に lsappinfo で聞く。
@@ -418,11 +435,11 @@ class MacPlatform:
         try:
             asn = subprocess.run(["lsappinfo", "front"], capture_output=True, text=True, timeout=5).stdout.strip()
             out = subprocess.run(
-                ["lsappinfo", "info", "-only", "pid", asn], capture_output=True, text=True, timeout=5
+                ["lsappinfo", "info", "-only", only, asn], capture_output=True, text=True, timeout=5
             ).stdout
         except (OSError, subprocess.SubprocessError):
-            return None
-        return parse_lsappinfo_pid(out)
+            return None, ""
+        return parse_lsappinfo_pid(out), out
 
     def screen_locked(self) -> bool | None:
         try:
@@ -473,7 +490,8 @@ class MacPlatform:
         - thermal: 熱の状態（nominal / fair / serious / critical）
         - pressure: メモリの逼迫度（normal / warning / critical）
         - asleep: 画面が消えている / locked: 画面がロックされている
-        - front: ゲームが前面にある / on_screen: ゲームのウィンドウが画面に出ている（最小化・隠れていない）
+        - front: ゲームが前面にある / front_app: ゲームが前面にないとき、前面にいるアプリ（「名前（バンドル ID）」）。
+          OS のダイアログ（認証など）が前に出たのか、ほかのアプリなのかを V-03 で切り分ける / on_screen: ゲームのウィンドウが画面に出ている（最小化・隠れていない）
         - window: ゲームのウィンドウの外枠 [x, y, w, h]（ポイント） / backing: そのウィンドウがあるディスプレイの倍率
           （1 ポイントあたりのピクセル数。Retina なら 2）。V-04 が resolution と比べる
         分からない値は None。
@@ -503,8 +521,10 @@ class MacPlatform:
             out["asleep"] = bool(Quartz.CGDisplayIsAsleep(Quartz.CGMainDisplayID()))
         except Exception:
             pass
-        front = self.frontmost_pid()
+        front, info = self._frontmost("pid,name,bundleid")
         out["front"] = None if front is None else front == pid
+        if out["front"] is False:
+            out["front_app"] = parse_lsappinfo_app(info)
         try:
             win = self.window_info(pid)
             out["on_screen"] = None if win is None else win.on_screen

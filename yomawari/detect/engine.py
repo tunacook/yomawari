@@ -615,7 +615,8 @@ class WindowLostDetector(Detector):
     """V-03: ハーネスが前面に戻そうとしても、ゲームのウィンドウが画面に出ない（最小化など）か、前面に戻らない状態が
     min_sec 以上続いた。proc_stats の sys（on_screen・front）で続いた時間を測り、そのあいだにハーネスが操作しようとして
     断られた（input_blocked「ゲームを前面にできません」、op_error「画面に出ていません」）ときだけ出す（操作しないモードや、
-    すぐ戻ったものは除く）。画面のロック中・画面が消えているあいだは数えない。ほかのアプリが前に出続けた場合も当たる。"""
+    すぐ戻ったものは除く）。画面のロック中・画面が消えているあいだは数えない。ほかのアプリが前に出続けた場合も当たる。
+    前面にいたアプリ（sys の front_app）が分かれば、証拠と文に入れる（OS の認証ダイアログなどと切り分ける）。"""
 
     BLOCKED = ("ゲームを前面にできません", "画面に出ていません")
 
@@ -624,13 +625,14 @@ class WindowLostDetector(Detector):
         self.min_sec = float(rule.param("min_sec"))
         self.since: tuple[float, str] | None = None
         self.state = ""
+        self.front_app: str | None = None  # 前面にいたアプリ（最後に分かったもの）
         self.tried: tuple[float, str] | None = None  # 最後に断られた時刻と理由
         self.reported = False
 
     def on_event(self, ev: Event) -> list[Issue]:
         d = ev.data
         if ev.kind in ("launch", "proc_exit"):
-            self.since, self.tried, self.reported = None, None, False
+            self.since, self.tried, self.reported, self.front_app = None, None, False, None
         elif ev.kind in ("input_blocked", "op_error"):
             err = str(d.get("error") or "")
             if any(w in err for w in self.BLOCKED):
@@ -640,8 +642,9 @@ class WindowLostDetector(Detector):
             hidden = sysd.get("on_screen") is False
             back = sysd.get("front") is False
             if (not hidden and not back) or sysd.get("locked") or sysd.get("asleep"):
-                self.since, self.reported = None, False
+                self.since, self.reported, self.front_app = None, False, None
                 return []
+            self.front_app = sysd.get("front_app") or self.front_app
             self.state = "画面に出ていない（最小化など）" if hidden else "前面に戻らない"
             if self.since is None:
                 self.since = (ev.t, ev.wall)
@@ -654,10 +657,12 @@ class WindowLostDetector(Detector):
         if self.tried is None or self.tried[0] < self.since[0] - 5:
             return []
         self.reported = True
+        front = f"前面にいたアプリ: {self.front_app}。" if self.front_app else ""
         return [self.issue(
             f"ゲームのウィンドウが {self.min_sec:g} 秒以上{self.state}ままです。ハーネスが前面に戻そうとしましたが戻りません"
-            f"（{self.tried[1]}）。ほかのアプリが前に出続けた場合も当たるので、レポートの前後の記録で確かめてください",
+            f"（{self.tried[1]}）。{front}ほかのアプリが前に出続けた場合も当たるので、レポートの前後の記録で確かめてください",
             key=self.state, launch=launch, t=now, wall=self.since[1], window=self.state, error=self.tried[1],
+            front_app=self.front_app,
         )]
 
 
