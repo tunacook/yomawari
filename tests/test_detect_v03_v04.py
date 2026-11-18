@@ -67,13 +67,13 @@ def test_v03_window_stays_hidden_after_harness_tried(repo_rules):
     e = Engine({"V-03": repo_rules["V-03"]})
     events = [stats(t, on_screen=False, front=False) for t in range(0, 40)] + [blocked(1)]
     issues = run(e, events, ticks=range(0, 40))
-    assert [(i.rule_id, i.evidence["state"]) for i in issues] == [("V-03", "画面に出ていない（最小化など）")]
+    assert [(i.rule_id, i.evidence["window"]) for i in issues] == [("V-03", "画面に出ていない（最小化など）")]
 
 
 def test_v03_not_front(repo_rules):
     e = Engine({"V-03": repo_rules["V-03"]})
     events = [stats(t, on_screen=True, front=False) for t in range(0, 40)] + [blocked(2)]
-    assert [i.evidence["state"] for i in run(e, events, ticks=range(0, 40))] == ["前面に戻らない"]
+    assert [i.evidence["window"] for i in run(e, events, ticks=range(0, 40))] == ["前面に戻らない"]
 
 
 def test_v03_ignored_cases(repo_rules):

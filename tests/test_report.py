@@ -219,3 +219,11 @@ def test_place_uses_command_line_after_last_text(tmp_path):
     state = {**state, "command_line_id": None}
     text = render(_summary(), [_issue("S-02", "critical", "進まない", 0, state=state)], tmp_path)
     assert "`main/a:10.0`" in _rows(text)[0] and "行 `main/a:10.0`、" in text
+
+
+def test_issue_whose_state_is_not_a_screen_does_not_break_the_report(tmp_path):
+    # 古い記録の V-03 は、証拠の state にウィンドウの様子の文字を入れていた。画面の状態（dict）でなければ場所は「-」
+    issues = [_issue("V-03", "major", "前面に戻らない", 1, state="前面に戻らない")]
+    text = render(_summary(), issues, tmp_path)
+    assert "[V-03]" in _rows(text)[0]
+    assert "最初の検出のときの画面" not in _section(text, 1)

@@ -657,7 +657,7 @@ class WindowLostDetector(Detector):
         return [self.issue(
             f"ゲームのウィンドウが {self.min_sec:g} 秒以上{self.state}ままです。ハーネスが前面に戻そうとしましたが戻りません"
             f"（{self.tried[1]}）。ほかのアプリが前に出続けた場合も当たるので、レポートの前後の記録で確かめてください",
-            key=self.state, launch=launch, t=now, wall=self.since[1], state=self.state, error=self.tried[1],
+            key=self.state, launch=launch, t=now, wall=self.since[1], window=self.state, error=self.tried[1],
         )]
 
 
