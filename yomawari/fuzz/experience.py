@@ -15,6 +15,10 @@ runs/_experience/<ゲーム>.json の "progress" に足し合わせる。random 
 どちらも、起きる前 progress_window_sec のうちに押した最後の操作と、いま開いている寄り道の画面を開いた操作
 （右クリックメニューの「ロード」など）のものとして数える。
 
+セーブの画面で選ばずに（セーブ済みのスロットが並んだ画面でも、続きから遊ぶボタンでも押さずに）ゲームがロードしたセーブの
+名前も "internal_saves" に覚え、終了を試す前のセーブに数えない（寄り道から本編に戻るためのセーブなど。セーブの画面の
+スロットに残らないので、続きから遊ぶときに探せない。DESIGN.md §9「終了を試す前にセーブする」）。
+
 ゲームの言語を切り替えたボタン（押して settings の locale が変わった）と、その画面までの開き方も "locale" に覚え、
 次のランでゲームの言語をプロファイルの言語に戻すのに使う（DESIGN.md §9「プロファイルの言語」）。
 
@@ -62,6 +66,8 @@ class Experience:
         self.setting_buttons: dict[str, dict[str, Any]] = {}
         # 設定を変えるボタンのある画面（menu）→ その画面を開いたボタンの並び（外側の画面から順に）。入り口ごとに1つ
         self.setting_routes: dict[str, list[list[str]]] = {}
+        # ゲームが自分でロードしたセーブ（セーブの画面で選ばずにロードが始まった）の名前。セーブの画面のスロットに残らない
+        self.internal_saves: set[str] = set()
         if path is not None and path.exists():
             self._load(path)
 
@@ -95,6 +101,9 @@ class Experience:
                 for route in routes if isinstance(routes, list) else []:
                     if isinstance(route, list) and route and all(isinstance(x, str) for x in route):
                         self.setting_routes.setdefault(str(menu), []).append(list(route))
+        for slot in doc.get("internal_saves") or []:
+            if isinstance(slot, str):
+                self.internal_saves.add(slot)
         for key, ops in (doc.get("progress") or {}).items():
             if not isinstance(ops, dict):
                 continue
@@ -105,7 +114,8 @@ class Experience:
                         self._loaded.add((key, label))
 
     def save(self) -> None:
-        """ほかの記録（roles など）は残して、"progress" と "flow_wrong"・"flow_right"・"locale"・"settings" だけを書き換える。"""
+        """ほかの記録（roles など）は残して、"progress" と "flow_wrong"・"flow_right"・"locale"・"settings"・"internal_saves" だけを
+        書き換える。"""
         if self.path is None:
             return
         doc: dict[str, Any] = {}
@@ -126,6 +136,8 @@ class Experience:
         if self.setting_buttons or self.setting_routes:
             doc["settings"] = {"buttons": dict(sorted(self.setting_buttons.items())),
                                "routes": dict(sorted(self.setting_routes.items()))}
+        if self.internal_saves:
+            doc["internal_saves"] = sorted(self.internal_saves)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -204,6 +216,7 @@ SECTIONS = {
     "progress": "進行につながった操作・巻き戻した操作",
     "flow_wrong": "ゲームの流れで外れと分かった答え",
     "flow_right": "ゲームの流れで正解と分かった答え",
+    "internal_saves": "ゲームが自分でロードするセーブ（セーブの画面に残らない）",
 }
 
 
