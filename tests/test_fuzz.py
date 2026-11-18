@@ -738,6 +738,36 @@ def test_s02_modal_check_holds_while_moving_between_modals():
     assert [i.rule_id for i in engine.tick(100.0 + 2 * idle, 0)] == ["S-02"]
 
 
+def test_s02_modal_check_holds_over_a_moment_without_modal():
+    """確かめたあと、画面から画面へ移る一瞬だけモーダルがなくなっても（操作の結果がちょうどその一瞬をとった）、
+    modal_gap_sec のうちにモーダルな画面が開いたなら、すべて閉じたとみなさない。開かなければ、なくなったときから数え直す。"""
+    rules = scaled_rules(1.0)
+    idle = float(rules["S-02"].param("muted_idle_sec"))
+    gap = float(rules["S-02"].param("modal_gap_sec"))
+
+    def run(reopen: bool) -> list:
+        engine = Engine(rules)
+        engine.feed(Event("game", "line", {"line_id": "a:5.0"}, 0, t=0.0))
+        engine.feed(Event("game", "input", {"muted": ["Continue"]}, 0, t=1.0))
+        engine.feed(Event("harness", "op_result", {"kind": "advance", "heartbeat_age": 0.5, "waited": 1.0,
+                                                     "state": {"top_modal": "ListMenu"}}, 0, t=60.0))
+        engine.feed(Event("harness", "op_result", {"kind": "click", "heartbeat_age": 0.5,
+                                                     "state": {"top_modal": None}}, 0, t=70.0))
+        if reopen:
+            engine.feed(Event("game", "menu", {"name": "DetailMenu", "modal": True, "buttons": []}, 0, t=70.0 + gap / 10))
+        out = []
+        for i in range(1, 4):
+            engine.feed(Event("game", "heartbeat", {}, 0, t=70.0 + i))
+            out += engine.tick(70.0 + i, 0)  # 次の操作の結果が来るまでのあいだにも、時間はたつ
+        engine.feed(Event("harness", "op_result", {"kind": "click", "heartbeat_age": 0.5,
+                                                     "state": {"top_modal": "DetailMenu" if reopen else None}}, 0, t=73.0))
+        engine.feed(Event("game", "heartbeat", {}, 0, t=70.0 + idle))
+        return out + engine.tick(70.0 + idle, 0)
+
+    assert run(reopen=True) == []
+    assert [i.rule_id for i in run(reopen=False)] == ["S-02"]
+
+
 def test_s02_modal_advance_that_progressed_is_not_a_check():
     """モーダルの上で押した本文送りで本文が進んだなら、確かめたことにしない。"""
     rules = scaled_rules(1.0)
