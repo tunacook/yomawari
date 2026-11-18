@@ -42,6 +42,7 @@ from .reading import assign, text_changed, unread
 from .ops import (
     Op,
     escape_candidates,
+    free_point,
     irregular_candidates,
     normal_candidates,
     state_key,
@@ -799,6 +800,9 @@ class FuzzSession:
         メニューを開いているあいだに本文送りを止めるのは仕様なので、S-02 は、本文送りを押しても進まないことを確かめたあとは、
         モーダルが閉じるまで数えない（run 2026-11-17_1204: ロード・設定の画面にいるだけで S-02 を出し、再起動した）。
         人もメニューを開いたまま本文を送ろうとすることがあるので、押して確かめる。モーダルが閉じるか、入力が戻ったら数え直す。
+        人が本文を送ろうとするときはボタンのない場所を押すので、advance_point にボタンがあれば、ボタンのない場所を押す
+        （run 2026-11-18_1004: ロードの画面で advance_point にあったセーブのスロットを押し、古いセーブをロードした）。
+        ボタンのない場所がなければ、押さずに確かめたことにしない。
         """
         st = self.state
         if st.top_modal() is None or "Continue" not in st.muted:
@@ -809,7 +813,15 @@ class FuzzSession:
         if self._mute_checked or st.busy or now - self._mute_since < float(self.cfg["mute_check_sec"]):
             return None
         self._mute_checked = True
-        return Op("advance", by="mute_check")
+        ax, ay = (float(v) for v in self.cfg["advance_point"])
+        prefer = (ax, ay)
+        point = free_point(st, prefer)
+        if point is None:
+            top = st.top_modal()
+            self.run.notes.append(f"モーダル `{top.name if top else ''}` の上で本文送りを確かめようとしたが、"
+                                  f"ボタンのない場所がなかったので押さなかった（起動 #{self.launch}）")
+            return None
+        return Op("advance", by="mute_check", point=None if point == prefer else point)
 
     # --- プレイの目的 ---
 
@@ -2798,7 +2810,7 @@ class FuzzSession:
             assert op.target is not None
             return p.click(op.target, clicks=2)
         if k == "advance":
-            return p.click_at(ax, ay)
+            return p.click_at(*(op.point or (ax, ay)))
         if k == "rapid_click":
             return p.click_at(ax, ay, clicks=int(op.arg or 1))
         if k == "right_click":

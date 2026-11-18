@@ -14,7 +14,7 @@ from yomawari.input.pointer import Pointer
 from yomawari.sensors.window import ScreenRect, WindowInfo
 from yomawari.state import GameState
 
-from .test_window import FakeWindows
+from .test_window import FakeWindows, RecordingDriver
 
 WHEEL = ("wheel_up", "1")
 ROLLBACK_BUTTON = ("click", "BacklogUI/RollbackButton")
@@ -138,3 +138,46 @@ def test_mute_check_presses_advance_once_on_a_muted_modal():
           buttons=[{"name": "Back", "rect": [0.1, 0.1, 0.2, 0.2], "type": "button"}])
     assert s._mute_check(202.0) is None
     assert s._mute_check(262.0) is not None  # 開き直したら、また確かめる
+
+
+def test_mute_check_clicks_where_no_button_is():
+    """本文送りの位置（advance_point）にボタンがあれば、ボタンのない場所を押す。人も本文を送るときはボタンを押さない
+    （ロードの画面で、真ん中にあったセーブのスロットを押して古いセーブをロードした）。"""
+    s, st, run, _ = _session(mute_check_sec=60)
+    drv = RecordingDriver()
+    windows = FakeWindows(WindowInfo(1, ScreenRect(100, 50, 1280, 748), True), front=1)
+    s.pointer = Pointer(windows, drv, 1, st, activate_wait=0)
+    slot = [0.3, 0.35, 0.55, 0.6]  # 本文送りの位置（0.5, 0.5）を覆うスロット
+    _game(s, st, "menu", name="LoadMenu", modal=True,
+          buttons=[{"name": "Slot", "rect": slot, "type": "button"},
+                   {"name": "Back", "rect": [0.0, 0.0, 0.1, 0.1], "type": "button"}])
+    _game(s, st, "input", muted=["Continue"])
+    s._mute_check(0.0)
+    op = s._mute_check(60.0)
+    assert op is not None and op.kind == "advance" and op.point is not None
+    x, y = op.point
+    assert not (slot[0] <= x <= slot[2] and slot[1] <= y <= slot[3])
+    s._input(op)
+    (cx, cy, button, _), = drv.clicks
+    assert button == "left" and (cx, cy) == s.pointer.area().to_screen(x, y)
+
+
+def test_mute_check_does_not_click_when_buttons_cover_the_screen():
+    s, st, run, _ = _session(mute_check_sec=60)
+    _game(s, st, "menu", name="LoadMenu", modal=True,
+          buttons=[{"name": "Slot", "rect": [0.0, 0.0, 1.0, 1.0], "type": "button"}])
+    _game(s, st, "input", muted=["Continue"])
+    s._mute_check(0.0)
+    assert s._mute_check(60.0) is None
+    assert s._mute_check(120.0) is None  # 押せなかったときも、閉じるまで確かめ直さない
+    assert any("ボタンのない場所がなかった" in n for n in run.notes)
+
+
+def test_mute_check_keeps_advance_point_when_it_is_free():
+    s, st, run, _ = _session(mute_check_sec=60)
+    _game(s, st, "menu", name="SaveMenu", modal=True,
+          buttons=[{"name": "Back", "rect": [0.1, 0.1, 0.2, 0.2], "type": "button"}])
+    _game(s, st, "input", muted=["Continue"])
+    s._mute_check(0.0)
+    op = s._mute_check(60.0)
+    assert op is not None and op.point is None  # これまでどおり advance_point を押す
