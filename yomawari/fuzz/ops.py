@@ -41,7 +41,8 @@ class Op:
     weight: float = 1.0
     novelty: bool = False  # True なら Decider が試行回数で重みを下げる
     group: str | None = None  # Decider がまとめて選ぶ単位（button / move / leave）。None なら操作ごと
-    point: tuple[float, float] | None = None  # ホイール・ドラッグの位置（描画領域の正規化座標）
+    # ホイール・ドラッグの位置（描画領域の正規化座標）。本文送りなら押す位置（なければ advance_point）
+    point: tuple[float, float] | None = None
     # どの仕組みが出した操作か（normal: 画面ごとの通常の操作 / list: 一覧の目標へ向かう / flow: ゲームの流れの手順 /
     # blind: 向きを決めずに探す / escape・recover: 抜け出す）。events.jsonl の op に残し、行ったり来たりしたときに出どころを突き止める
     by: str = "normal"
@@ -160,6 +161,31 @@ def modal_candidates(
     ops += [Op("key", arg="esc", weight=leave, novelty=True, group="leave"),
             Op("right_click", weight=leave, novelty=True, group="leave")]
     return ops
+
+
+# ボタンのない場所を探すときに見る点の間隔と、描画領域の端から離す幅と、ボタンから離す幅（正規化座標。ボタンの隙間の
+# 細い溝を選ぶと、少しずれただけでボタンに当たる）
+_FREE_STEP = 0.05
+_FREE_MARGIN = 0.05
+_FREE_CLEAR = 0.03
+
+
+def free_point(state: GameState, prefer: tuple[float, float]) -> tuple[float, float] | None:
+    """どのボタン・選択肢にも重ならず、_FREE_CLEAR より離れた点。prefer が空いていればそれを、空いていなければ prefer に
+    いちばん近い点を返す。描画領域の端（_FREE_MARGIN）には寄せない。どこも空いていなければ None。"""
+    rects = [b.rect for m in state.menus.values() for b in m.buttons] + [c.rect for c in state.choices]
+    c = _FREE_CLEAR
+
+    def free(p: tuple[float, float]) -> bool:
+        return not any(r[0] - c <= p[0] <= r[2] + c and r[1] - c <= p[1] <= r[3] + c for r in rects)
+
+    if free(prefer):
+        return prefer
+    n = round((1 - 2 * _FREE_MARGIN) / _FREE_STEP)
+    grid = [(round(_FREE_MARGIN + i * _FREE_STEP, 4), round(_FREE_MARGIN + j * _FREE_STEP, 4))
+            for i in range(n + 1) for j in range(n + 1)]
+    grid.sort(key=lambda p: ((p[0] - prefer[0]) ** 2 + (p[1] - prefer[1]) ** 2, p))
+    return next((p for p in grid if free(p)), None)
 
 
 def escape_candidates() -> list[Op]:
