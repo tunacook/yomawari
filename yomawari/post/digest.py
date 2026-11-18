@@ -90,8 +90,14 @@ def item_key(issue: Issue) -> tuple[str, ...]:
     return (issue.rule_id,)
 
 
+def _state_of(issue: Issue) -> dict[str, Any]:
+    """検出したときの画面（state.snapshot()）。古い記録の V-03 は state にウィンドウの様子の文字を入れていたので、dict だけを使う。"""
+    st = issue.evidence.get("state")
+    return st if isinstance(st, dict) else {}
+
+
 def place_of(issue: Issue) -> str:
-    st = issue.evidence.get("state") or {}
+    st = _state_of(issue)
     # 最後の本文のあとにコマンドが進んでいれば、スクリプトが実際にいるその行（本文のない演出の途中）
     where = issue.evidence.get("where") or st.get("command_line_id") or st.get("line_id") or st.get("scene")
     return f"`{where}`" if where else "-"
@@ -508,7 +514,7 @@ def render_top(items: list[Item], events: list[dict], duration_sec: float, launc
             if len(it.issues) > SHOWN_ISSUES:
                 out.append(f"  - ほか {len(it.issues) - SHOWN_ISSUES} 件")
             first = it.issues[0]
-            st = first.evidence.get("state")
+            st = _state_of(first)
             if st:
                 line = f"行 `{st.get('line_id')}`"
                 if st.get("command_line_id"):
