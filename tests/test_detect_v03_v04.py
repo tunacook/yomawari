@@ -76,6 +76,21 @@ def test_v03_not_front(repo_rules):
     assert [i.evidence["window"] for i in run(e, events, ticks=range(0, 40))] == ["前面に戻らない"]
 
 
+def test_v03_names_the_app_in_front(repo_rules):
+    # OS の認証ダイアログが前に出たまま。前面にいたアプリを証拠と文に入れる
+    e = Engine({"V-03": repo_rules["V-03"]})
+    app = "認証のダイアログ（com.example.auth）"
+    events = [stats(t, on_screen=True, front=False, front_app=app) for t in range(0, 40)] + [blocked(2)]
+    issues = run(e, events, ticks=range(0, 40))
+    assert [i.evidence["front_app"] for i in issues] == [app]
+    assert f"前面にいたアプリ: {app}。" in issues[0].detail
+    # 分からなければ入れない
+    e = Engine({"V-03": repo_rules["V-03"]})
+    events = [stats(t, on_screen=True, front=False) for t in range(0, 40)] + [blocked(2)]
+    issues = run(e, events, ticks=range(0, 40))
+    assert issues[0].evidence["front_app"] is None and "前面にいたアプリ" not in issues[0].detail
+
+
 def test_v03_ignored_cases(repo_rules):
     # すぐ戻った
     e = Engine({"V-03": repo_rules["V-03"]})

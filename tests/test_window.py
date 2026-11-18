@@ -140,6 +140,22 @@ def test_parse_lsappinfo_pid():
     assert parse_lsappinfo_pid("parentpid = 12\n") is None
 
 
+def test_parse_lsappinfo_app():
+    from yomawari.platform.mac import parse_lsappinfo_app
+
+    # macOS 27 の形（実機の出力）
+    out = ('"メモ" ASN:0x0-0x56a269d: (in front) \n    bundleID="com.apple.Notes"\n    bundle path=[ NULL ] \n'
+           "    executable path=[ NULL ] \n    pid = 36854 !cgsConnection !signalled type=[ NULL ]  \n")
+    assert parse_lsappinfo_app(out) == "メモ（com.apple.Notes）"
+    # macOS 26 の形
+    assert parse_lsappinfo_app('"LSDisplayName"="メモ"\n"CFBundleIdentifier"="com.apple.Notes"\n"pid"=1\n') \
+        == "メモ（com.apple.Notes）"
+    # 名前がない
+    out = '[ NULL ]  ASN:0x0-0x1: (in front) \n    bundleID="com.apple.Notes"\n'
+    assert parse_lsappinfo_app(out) == "com.apple.Notes"
+    assert parse_lsappinfo_app("") is None
+
+
 def test_unknown_frontmost_app_is_not_reported_as_cannot_activate():
     # 前面のアプリを OS から取得できないときは、押さず、「前面にできない」とも言わない（ゲームは前面にあるかもしれない）
     import pytest
