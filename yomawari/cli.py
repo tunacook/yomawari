@@ -247,12 +247,12 @@ def run(
     ),
     input_main: str | None = typer.Option(
         None, "--input",
-        help="入力の方式: mouse（マウス中心）| keyboard（キーボード中心。本文送り・メニューをキーで押す）。"
+        help="入力の方式: mouse（マウス中心）| keyboard（キーボード中心。本文送り・メニューをキーで押し、ボタンは方向キーでたどって Enter で押す）。"
              "既定は yomawari.toml の fuzz.input（mouse）",
     ),
     input_mix: float | None = typer.Option(
         None, "--input-mix",
-        help="主でない方を混ぜる割合（0〜1）。--input mouse --input-mix 0.2 なら、本文送り・メニューの 2 割をキーで押す。"
+        help="主でない方を混ぜる割合（0〜1）。--input mouse --input-mix 0.2 なら、本文送り・メニュー・ボタンの 2 割をキーで押す。"
              "既定は yomawari.toml の fuzz.input_mix（0）",
     ),
     forget_all: bool = typer.Option(

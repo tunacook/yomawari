@@ -125,3 +125,84 @@ def test_session_presses_the_key_and_learns_it():
     assert run.input_style.worked == {"space": 2}
     vias = [e.data.get("via") for e in published if e.kind == "op_result"]
     assert vias == ["enter", "space", "space"]
+
+
+# --- ボタンを方向キーでたどって押す ---
+
+
+def test_next_direction_follows_the_target():
+    from yomawari.fuzz.keyboard import next_direction
+
+    a, below, right = (0.1, 0.1, 0.2, 0.2), (0.1, 0.5, 0.2, 0.6), (0.6, 0.1, 0.7, 0.2)
+    assert next_direction(a, below, set()) == "down"
+    assert next_direction(a, right, set()) == "right"
+    assert next_direction(a, (0.6, 0.3, 0.7, 0.4), {"right"}) == "down"  # 右下: 右が動かなければ下
+    assert next_direction(a, below, {"down"}) is None  # 目的のほうへ向かない向きは選ばない
+
+
+def test_click_becomes_navigation_unless_unreachable():
+    from yomawari.fuzz.keyboard import NAV
+    from yomawari.state import Target
+
+    s = InputStyle("keyboard", 0.0)
+    t = Target("button", "UI", "A", (0.1, 0.1, 0.2, 0.2))
+    rng = random.Random(1)
+    assert s.convert(Op("click", t), rng).via_key == NAV
+    s.navigated("UI/A", False)
+    assert s.convert(Op("click", t), rng).via_key is None
+    assert any("たどり着けなかったボタン" in n and "`UI/A`" in n for n in s.notes())
+
+
+class GridDriver(KeyDriver):
+    """方向キーで、縦に並んだボタンのフォーカスを動かすゲームの代わり。moves=False ならフォーカスが動かない。"""
+
+    def __init__(self, s, st, names, moves=True):
+        super().__init__()
+        self.s, self.st, self.names, self.moves = s, st, names, moves
+        self.at = 0
+
+    def key(self, name):
+        super().key(name)
+        if self.moves and name in ("down", "up"):
+            self.at = max(0, min(len(self.names) - 1, self.at + (1 if name == "down" else -1)))
+            _game(self.s, self.st, "selected", menu="UI", name=self.names[self.at], nth=0)
+
+
+def _menu_session(moves=True):
+    s, st, run, _ = _session(nav_wait_sec=0.2)
+    s.pointer.platform.info = WindowInfo(1, ScreenRect(100, 50, 1280, 748), True)
+    names = ["A", "B", "C"]
+    _game(s, st, "menu", name="UI", modal=True, buttons=[
+        {"name": n, "rect": [0.1, 0.1 + 0.2 * i, 0.3, 0.2 + 0.2 * i], "type": "button"} for i, n in enumerate(names)])
+    _game(s, st, "selected", menu="UI", name="A", nth=0)
+    drv = GridDriver(s, st, names, moves)
+    s.pointer.driver = drv
+    run.input_style = InputStyle("keyboard", 0.0)
+    published = []
+    s.publish = published.append
+    return s, st, run, drv, published
+
+
+def test_session_walks_to_the_button_and_presses_enter():
+    from yomawari.fuzz.keyboard import NAV
+
+    s, st, run, drv, published = _menu_session()
+    op = asyncio.run(s._navigate(Op("click", st.find("UI/C"), via_key=NAV)))
+    assert drv.keys == ["down", "down"] and op.via_key == "enter"
+    s._input(op)
+    assert drv.keys[-1] == "enter" and drv.clicks == []
+    nav = [e.data for e in published if e.kind == "key_nav"]
+    assert nav == [{"target": "UI/C", "path": ["down", "down"], "reached": True}]
+    assert run.input_style.reached == {"UI/C": 1}
+
+
+def test_session_falls_back_to_mouse_when_focus_does_not_move():
+    from yomawari.fuzz.keyboard import NAV
+
+    s, st, run, drv, published = _menu_session(moves=False)
+    op = asyncio.run(s._navigate(Op("click", st.find("UI/C"), via_key=NAV)))
+    assert drv.keys == ["down"] and op.via_key is None  # 下が効かず、ほかに目的へ向かう向きがない
+    s._input(op)
+    assert len(drv.clicks) == 1
+    assert run.input_style.unreachable == {"UI/C": 1}
+    assert any("`UI/C` に方向キーでたどり着けなかった（down" in n for n in run.notes)
