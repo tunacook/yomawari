@@ -36,6 +36,7 @@ from ..state import GameState, Rect, Target
 from .decider import Decider
 from .experience import Experience, Press
 from .guard import Guard
+from .keyboard import DIRECTIONS, NAV, InputStyle, next_direction
 from .looks import Values, alike, brighter, brightest, dark, disabled_looks, groups, inactive, letters, masked, measure, text_inactive
 from .advisor import ChoiceAdvisor
 from .reading import assign, text_changed, unread
@@ -231,6 +232,7 @@ class FuzzRun:
     locale_missing: bool = False  # プロファイルの言語が、ゲームの使える言語（settings の locales）になかった
     # 設定を変えに行く（fuzz/settings_tour.py）。既定は変えに行かない（watchdog が [fuzz] の設定で作る）
     tour: SettingsTour = field(default_factory=lambda: SettingsTour(0.0, 0.0, 0.0))
+    input_style: InputStyle = field(default_factory=InputStyle)  # 入力の方式（--input・--input-mix。fuzz/keyboard.py）
     # 音量を変えたら、A-03 が比べる区間のあいだほかの設定を変えない（fuzz/settings_tour.py）。既定は待たない
     volume_hold: VolumeHold = field(default_factory=VolumeHold)
     # 画面の文字を読む（fuzz/reading.py）
@@ -757,6 +759,7 @@ class FuzzSession:
         cands = self._apply_tour(cands)
         cands = self.run.volume_hold.apply(cands, self.run.experience.setting_buttons, now)
         cands = self._one_mover(cands)
+        cands = self.run.input_style.scale(cands)
         top = self.state.top_modal()
         if top is not None and not top.buttons and not self.state.busy:
             self._modal_since = self._modal_since or now
@@ -787,6 +790,12 @@ class FuzzSession:
             return  # 暗転中などで押せない。応答確認は次に押せるときまで持ち越す
         self._odds = (op.label, getattr(self.run.decider, "last_odds", {}))
         self._verify_next = False
+        op = self.run.input_style.convert(op, self.run.rng)
+        if op.via_key == NAV:
+            nav = await self._navigate(op)
+            if nav is None:
+                return  # 押す前にウィンドウが出ていない・前面にできないなど
+            op = nav
         if op.kind == "expect_exit":
             await self._expect_exit(op)
         elif op.kind == "external":
@@ -2446,6 +2455,7 @@ class FuzzSession:
         values_before = dict(self.state.settings or {})
         locale_before = values_before.get("locale")
         expected = self._expected_silent(op.target)
+        line_before = (self.state.line, self.state.line_done)
         # 反応しないと見込んでいるボタンは、何も起きないことを確かめるだけなので、待つ時間を短くする
         quiet = op.target is not None and (op.target.label in self._quiet() or expected is not None)
         started = time.monotonic()
@@ -2468,6 +2478,8 @@ class FuzzSession:
         waited = time.monotonic() - started
         responded = self.state.signature() != before
         texts_changed = False
+        if op.kind == "advance" and op.via_key is not None:
+            self._key_advanced(op.via_key, (self.state.line, self.state.line_done) != line_before)
         if not responded and op.target is not None and op.target.kind == "button":
             texts_changed = responded = await self._texts_changed(op.target)
         if not responded and op.target is not None and op.target.kind == "button":
@@ -2603,6 +2615,57 @@ class FuzzSession:
                 self.launch,
             )
         )
+
+    async def _navigate(self, op: Op) -> Op | None:
+        """ボタンを方向キーでたどる（fuzz/keyboard.py）。フォーカスが着いたら submit_key で押す操作を、着かなければ、
+        たどり着けなかったボタンとして覚えてマウスで押す操作を返す。キーを押せなければ None。"""
+        assert op.target is not None
+        style = self.run.input_style
+        label = op.target.label
+        wait = float(self.cfg["nav_wait_sec"])
+        tried: dict[str | None, set[str]] = {}
+        path: list[str] = []
+        reached = False
+        for _ in range(int(self.cfg["nav_max_steps"])):
+            cur = self.state.selected_target()
+            if cur is not None and cur.label == label:
+                reached = True
+                break
+            here = cur.label if cur is not None else None
+            seen = tried.setdefault(here, set())
+            if cur is None:
+                # どのボタンにもフォーカスがない: 押せばフォーカスが出るゲームがあるので、順に試す
+                key = next((k for k in DIRECTIONS if k not in seen), None)
+            else:
+                key = next_direction(cur.rect, op.target.rect, seen)
+            if key is None:
+                break
+            seen.add(key)
+            path.append(key)
+            before = self.state.selected
+            try:
+                await asyncio.to_thread(self.pointer.key, key)
+            except PointerError:
+                return None
+            started = time.monotonic()
+            while self.state.selected == before and time.monotonic() - started < wait:
+                await asyncio.sleep(0.05)
+        style.navigated(label, reached)
+        self.publish(Event("harness", "key_nav", {"target": label, "path": path, "reached": reached}, self.launch))
+        if reached:
+            return dataclasses.replace(op, via_key=style.submit_key)
+        self.run.notes.append(f"`{label}` に方向キーでたどり着けなかった（{' → '.join(path) or 'フォーカスが出ない'}。"
+                              f"起動 #{self.launch}）。以後このボタンはマウスで押す")
+        return dataclasses.replace(op, via_key=None)
+
+    def _key_advanced(self, key: str, worked: bool) -> None:
+        """本文送りをキーで押した結果を覚える。どのキーでも本文が進まなければ、以後はマウスで押す。"""
+        style = self.run.input_style
+        style.advanced(key, worked)
+        if style.gave_up():
+            self.run.notes.append(f"本文送りのキー（{'・'.join(style.advance_keys)}）を {style.learn_tries} 回ずつ押したが"
+                                  f"本文が進まなかったので、以後の本文送りはマウスで押す（起動 #{self.launch}。"
+                                  "yomawari.toml の [fuzz] advance_keys で変えられる）")
 
     async def _irregular(self, trigger: str) -> None:
         if not self._ready() or self._exiting:
@@ -2803,6 +2866,9 @@ class FuzzSession:
         p = self.pointer
         ax, ay = (float(v) for v in self.cfg["advance_point"])
         k = op.kind
+        if k in ("advance", "right_click", "click") and op.via_key is not None:
+            p.key(op.via_key)  # キーボードで押す（fuzz/keyboard.py）。ボタンは、方向キーでフォーカスを移してから
+            return None
         if k in ("click", "expect_exit", "external"):
             assert op.target is not None
             return p.click(op.target)

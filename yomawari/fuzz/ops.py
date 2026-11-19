@@ -48,6 +48,7 @@ class Op:
     by: str = "normal"
     why: tuple[tuple[str, float], ...] = ()  # 重みを変えた層と倍率（screen・looks・intent・resume・save_first・flow・list）
     goal: str | None = None  # 一覧の目標（その項目の label）へ向かう操作なら、その label（fuzz/listing.py）
+    via_key: str | None = None  # キーボードで押すなら、そのキー（本文送り・メニュー。fuzz/keyboard.py）。None ならマウス
 
     def scaled(self, layer: str, f: float) -> Op:
         """重みに f を掛け、掛けた層を why に残したもの。f が 1 ならそのまま。"""
@@ -71,6 +72,8 @@ class Op:
             out["why"] = [[layer, round(f, 4)] for layer, f in self.why]
         if self.goal is not None:
             out["goal"] = self.goal
+        if self.via_key is not None:
+            out["via"] = self.via_key
         return out
 
 

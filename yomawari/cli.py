@@ -30,6 +30,7 @@ from . import launcher
 from .config import BuildConfig, Config, ConfigError, find_config_path, normalize_path_input, stdin_is_tty
 from .detect.engine import Rule, RuleError, load_rules
 from .fuzz.experience import SECTIONS, experience_path, forget, section_sizes
+from .fuzz.keyboard import InputError, InputStyle
 from .fuzz.roles import RoleBook, load_role_hints
 from .platform import Platform, get_platform
 from .post.rebuild import rebuild_report
@@ -175,6 +176,16 @@ def _status_text(s: dict[str, Any]) -> Text:
     return Text(line)
 
 
+def _input_overrides(main: str | None, mix: float | None) -> dict[str, object]:
+    """--input・--input-mix で、fuzz の設定を上書きするもの。"""
+    out: dict[str, object] = {}
+    if main is not None:
+        out["input"] = main
+    if mix is not None:
+        out["input_mix"] = mix
+    return out
+
+
 def _supervise(cfg: Config, build: str | None, build_path: Path | None, no_open: bool) -> int:
     """見張り役として、同じコマンドをハーネス本体として子プロセスで動かす（supervisor.py）。"""
     if build_path is None and cfg.resolve_build(build, None) is None:
@@ -234,6 +245,16 @@ def run(
         help="ボーダーレスのフルスクリーンで起動し、ランのあいだは変えさせない（--screen があればその大きさで）。"
              "既定は yomawari.toml の run.fullscreen（false）",
     ),
+    input_main: str | None = typer.Option(
+        None, "--input",
+        help="入力の方式: mouse（マウス中心）| keyboard（キーボード中心。本文送り・メニューをキーで押し、ボタンは方向キーでたどって Enter で押す）。"
+             "既定は yomawari.toml の fuzz.input（mouse）",
+    ),
+    input_mix: float | None = typer.Option(
+        None, "--input-mix",
+        help="主でない方を混ぜる割合（0〜1）。--input mouse --input-mix 0.2 なら、本文送り・メニュー・ボタンの 2 割をキーで押す。"
+             "既定は yomawari.toml の fuzz.input_mix（0）",
+    ),
     forget_all: bool = typer.Option(
         False, "--forget",
         help="ランを始める前に、そのゲームで覚えたこと（runs/_experience/<ゲーム>.json）をすべて消す（.bak-<日時> に写してから）。"
@@ -249,6 +270,11 @@ def run(
         fixed_screen = parse_screen(str(screen if screen is not None else cfg.run["screen"]),
                                     bool(cfg.run["fullscreen"] if fullscreen is None else fullscreen))
     except ScreenError as e:
+        err.print(f"[red]{e}[/]")
+        raise typer.Exit(EXIT_HARNESS_ERROR) from None
+    try:
+        InputStyle.from_cfg({**cfg.fuzz, **_input_overrides(input_main, input_mix)})
+    except InputError as e:
         err.print(f"[red]{e}[/]")
         raise typer.Exit(EXIT_HARNESS_ERROR) from None
     if child_state_path() is None and cfg.run["watchdog"] and not no_watchdog:
@@ -289,6 +315,7 @@ def run(
         console.print(forget_note)
     roles = RoleBook(load_role_hints(cfg.rules_path), experience_path(cfg.runs_dir, game))
 
+    fuzz_cfg = {**goal.apply(cfg.fuzz), **_input_overrides(input_main, input_mix)}
     rc = cfg.run
     dark = bool(rc["display_off"] if display_off is None else display_off)
     if dark:
@@ -317,7 +344,7 @@ def run(
     harness = Harness(
         b, exe, plat, rules, cfg.rules_path, cfg.runs_dir, rc, cfg.sensors,
         on_status=(lambda s: live.update(_status_text(s))) if live else None,
-        fuzz_cfg=goal.apply(cfg.fuzz),
+        fuzz_cfg=fuzz_cfg,
         spec=spec,
         roles=roles,
         judge_cfg=cfg.judge,

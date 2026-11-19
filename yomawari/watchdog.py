@@ -35,6 +35,7 @@ from .fuzz.settings_tour import SCREEN_KEYS, SettingsTour, VolumeHold
 from .fuzz.experience import Experience
 from .fuzz.flow import FlowTracker
 from .fuzz.guard import Guard
+from .fuzz.keyboard import InputStyle
 from .fuzz.loop import FuzzRun, FuzzSession
 from .fuzz.looks import load_inactive_words, load_masked_chars
 from .fuzz.resume import load_save_hints
@@ -488,6 +489,7 @@ class Harness:
                                            if self.spec.settings_offered is not None else None),
                                   fixed=SCREEN_KEYS if opts.screen else frozenset()),
             )
+            self._fuzz.input_style = InputStyle.from_cfg(self.fuzz_cfg)
             if "A-03" in self.rules:
                 a03 = self.rules["A-03"]
                 window = float(a03.param("window_sec"))
@@ -636,6 +638,7 @@ class Harness:
                 self.notes += self._fuzz.edge_notes()
                 self.notes += self._fuzz.settings_notes()
                 self.notes += self._fuzz.looks_notes()
+                self.notes += self._fuzz.input_style.notes()
                 self.notes += self._fuzz.locale_notes(time.monotonic())
                 if self._fuzz.advisor is not None:
                     self.notes += self._fuzz.advisor.summary()
