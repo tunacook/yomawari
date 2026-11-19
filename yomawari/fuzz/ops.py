@@ -49,6 +49,9 @@ class Op:
     why: tuple[tuple[str, float], ...] = ()  # 重みを変えた層と倍率（screen・looks・intent・resume・save_first・flow・list）
     goal: str | None = None  # 一覧の目標（その項目の label）へ向かう操作なら、その label（fuzz/listing.py）
     via_key: str | None = None  # キーボードで押すなら、そのキー（本文送り・メニュー。fuzz/keyboard.py）。None ならマウス
+    # キーボードでは代わりがないと分かったマウスの操作（方向キーで動かない一覧を動かすホイール・ドラッグ）。
+    # キーボード中心でも、混ぜる割合を掛けずに入れる（fuzz/keyboard.py の InputStyle.scale）
+    mouse_needed: bool = False
 
     def scaled(self, layer: str, f: float) -> Op:
         """重みに f を掛け、掛けた層を why に残したもの。f が 1 ならそのまま。"""

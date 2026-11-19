@@ -1850,6 +1850,9 @@ class FuzzSession:
             return
         goal.misses += 1
         run.ledger.dead[(row.menu, how)] += 1
+        if self._keyless_list(row.menu, how):
+            goal.misses = 0  # 方向キーで近づかなかった回数は、ホイール・ドラッグで試す回数に入れない
+            return
         if goal.misses >= int(self.cfg["list_move_give_up"]):
             run.ledger.unreachable.add(label)
             del run.ledger.goals[key]
@@ -1969,6 +1972,22 @@ class FuzzSession:
             ledger.filling.discard(row.key)
             self._note_search(row.menu, f"`{row.key}` の一覧の台帳を埋め終えた（{len(row.labels)} 項目）", tag="fill")
 
+    def _keyless_list(self, menu: str, how: str) -> bool:
+        """一覧の目標へ方向キーで動かしても、続けて list_key_give_up 回近づかなかったら、その画面は以後ホイール・ドラッグで
+        動かす（run 2026-11-19_2230: 一覧が開いた直後はどの項目にもフォーカスがなく、方向キーでは一覧が動かなかった。
+        キーボード中心ではホイール・ドラッグを入れないので、画面の外にある質問の正解の項目に届かず、別の項目で答えた）。
+        いま画面を keyless_lists に入れたら True。"""
+        style = self.run.input_style
+        if not how.startswith("key ") or menu in style.keyless_lists:
+            return False
+        if self.run.ledger.dead[(menu, how)] < int(self.cfg["list_key_give_up"]):
+            return False
+        style.keyless_lists.add(menu)
+        self.run.notes.append(f"`{menu}` の一覧は、方向キー（{how.split(' ', 1)[1]}）で {self.run.ledger.dead[(menu, how)]} 回"
+                              f"動かしても目標が近づかなかったので、以後ホイール・ドラッグで動かす（起動 #{self.launch}。"
+                              "キーボードで遊ぶ人が一覧の先を見られないかもしれない）")
+        return True
+
     def _toward(self, row: Row, label: str, by: str, purpose: str | None = None) -> list[Op]:
         """目標へ向かう操作。見えていて押せるなら押し（押すのが目的のとき）、見えていなければ向きを計算してそちらへ動かす。
         流れの目標（by が flow）を押す操作は、_apply_flow が手順のボタンとして重みを付けるので、ここでは出さない。"""
@@ -1992,8 +2011,13 @@ class FuzzSession:
         if d is None:
             return []
         low = float(self.cfg["no_response_factor"])
+        keyless = row.menu in run.input_style.keyless_lists
         out = []
         for op in moves(row, d, w, label, by):
+            if keyless:
+                if op.kind == "key":
+                    continue  # 方向キーでは動かなかった画面
+                op = dataclasses.replace(op, mouse_needed=True)
             op = op.scaled("list", factor).scaled("list_dead", low ** ledger.dead[(row.menu, op.label)])
             self._list_row[op.label] = row.key
             out.append(op)
