@@ -45,6 +45,41 @@ yomawari run -p gacha --seed 42             # 乱数シードを固定して再�
 
 夜に画面を消して回すときは `--display-off` を付ける（ゲームが起動して `run.display_off_delay_sec` 秒後に `pmset displaysleepnow` で画面を消す）。その前に、システム設定の「ロック画面」で、ディスプレイがオフのときにパスワードを求めるのを「しない」か長い時間にしておく（すぐロックする設定なら、開始時に注意を出す）。ロックなどで操作できなかった時間は、レポートの「ハーネスの記録」に出る。画面を消しているあいだは macOS が描画を間引くので、FPS・CPU・GPU・メモリの判定（R 系）をしない（外した時間は「ハーネスの記録」に出る）。
 
+#### よく使う組み合わせ
+`--hours` は小数でも書ける（`0.25` で 15 分、`1.5` で 1 時間 30 分）。省くと `run.hours`（8 時間）回す。
+
+```zsh
+# 寝る前に、夜通し回す（8 時間。ゲームが起動したら画面を消す）
+yomawari run --display-off
+
+# 前の夜のランの続きから回す（序盤を毎晩読み直さない）
+yomawari run --continue --display-off
+
+# 外出中や仕事中に、時間を決めて回す
+yomawari run --hours 2
+yomawari run --hours 4.5 -p stuck            # 進行不能を探す
+
+# ハーネスやビルドを直したあと、短く動きを確かめる
+yomawari run --hours 0.25
+
+# ボタンの不具合を探す（暗いボタンも押す）
+yomawari run -p buttons --hours 3
+
+# 決まった画面で遊ぶ前提で回す（ランのあいだは解像度・画面モードを変えさせない）
+yomawari run --screen 1920x1080
+yomawari run --fullscreen                    # フルスクリーンで（大きさはゲームに任せる）
+yomawari run --fullscreen --screen 1920x1080 # 1920x1080 のフルスクリーンで
+
+# 前のランと同じ乱数で回す（シードはレポートの「ランの情報」にある。ゲームの時間の進み方で操作はずれるので、まったく同じにはならない）
+yomawari run --seed 898481646 --hours 1
+
+# 覚えたことを消してから回す（ハーネスの仕様が大きく変わったあとなど）
+yomawari run --forget --hours 1
+
+# 登録した別のビルドを回す
+yomawari run -b mac_release --display-off
+```
+
 | オプション | 内容 | 既定 |
 |---|---|---|
 | `--purpose` / `-p` | ランの目的（下の表）。`yomawari.toml` で足した目的も選べる | `yomawari.toml` の `run.purpose`（`play`） |
