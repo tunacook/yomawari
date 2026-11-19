@@ -447,8 +447,9 @@ rules:
     severity: major
     title: 前回までのランより悪くなった
     description: >-
-      ランの終わりに、scene ごとの値と、演出のコマンドごとの実行前後の差を、同じビルド名・同じマシンの前回までのラン
-      （perf の history_runs 回）と比べる。FPS が ratio 以上落ちた、CPU・GPU 使用率が ratio 以上かつ cpu_add・gpu_add ポイント以上
+      ランの終わりに、scene ごとの値と、演出のコマンドごとの実行前後の差を、同じビルド名・同じマシン・同じ画面
+      （ゲームの resolution の大きさと画面モード。ランでいちばん長く使った画面）の前回までのラン（perf の history_runs 回）と
+      比べる。画面が違うと描く画素の数が違うので比べない。FPS が ratio 以上落ちた、CPU・GPU 使用率が ratio 以上かつ cpu_add・gpu_add ポイント以上
       上がった（GPU は FPS も gpu_fps_drop_ratio 以上落ちたときだけ）。メモリは見ない（R-01 で見る）。
       コマンドは、今回と前回のどちらも min_cmd_runs 回以上実行したものだけ比べ、今回の変化そのものも悪い
       （FPS が ratio 以上落ちる、CPU・GPU が cpu_add・gpu_add ポイント以上上がる）ときだけ出す（1 回だけの実行や、
