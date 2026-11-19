@@ -378,6 +378,16 @@ def _presses(op: Op, labels: set[str]) -> bool:
     return op.label == "key enter" or (op.target is not None and op.target.label in labels)
 
 
+def _pressed_key(op: Op) -> str | None:
+    """op で押すキー。key・rapid_key の操作と、キーボードで押す本文送り・メニュー・ボタン（via_key。fuzz/keyboard.py）。
+    キーを押した直後に出たモーダルを、同じキーで戻すために覚える（_track_toggle）。"""
+    if op.kind in ("key", "rapid_key") and op.arg is not None:
+        return str(op.arg)
+    if op.via_key is not None and op.via_key != NAV:
+        return op.via_key
+    return None
+
+
 class FuzzSession:
     """1回の起動ぶんの操作。"""
 
@@ -2645,6 +2655,7 @@ class FuzzSession:
             before = self.state.selected
             try:
                 await asyncio.to_thread(self.pointer.key, key)
+                self._key_ops.append((time.monotonic(), key))
             except PointerError:
                 return None
             started = time.monotonic()
@@ -2809,9 +2820,10 @@ class FuzzSession:
     async def _do(self, op: Op, trigger: str | None = None) -> bool:
         """op を実行して op イベントを出す。押せなければ op_error を出して False。"""
         blocked = False
-        if op.kind in ("key", "rapid_key") and op.arg is not None:
+        pressed = _pressed_key(op)
+        if pressed is not None:
             # 連打の途中で画面が出ることがあるので、押し始める前にも覚える（押し終えたら時刻を更新する）
-            self._key_ops.append((time.monotonic(), str(op.arg)))
+            self._key_ops.append((time.monotonic(), pressed))
         # 押しているあいだにロードが始まることがあるので、押す前に覚える
         self._save_screen_last = self._on_save_screen(op)
         if self._save_screen_last:
@@ -2844,8 +2856,8 @@ class FuzzSession:
             self.publish(Event("harness", "input_resumed", {"reason": resumed[0], "sec": round(resumed[1], 1)},
                                self.launch))
         self.run.recent.append(op.label)
-        if op.kind in ("key", "rapid_key") and op.arg is not None:
-            self._key_ops.append((time.monotonic(), str(op.arg)))
+        if pressed is not None:
+            self._key_ops.append((time.monotonic(), pressed))
         self._operated(op)
         if op.target is not None:
             self.run.labels.add(op.target.label)
