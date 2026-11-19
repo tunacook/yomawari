@@ -216,12 +216,16 @@ rules:
     description: >-
       ゲームが出した resolution（描画領域のピクセル数）と、OS から測ったウィンドウの外枠（ディスプレイの倍率を掛けたピクセル数）が、
       min_sec 以上合わない。幅は外枠の幅と比べ、高さは外枠からタイトルバーの分（0〜title_max_pt ポイント）を引いた残りと比べる。
-      合わないとハーネスはボタンの位置を計算できない。フルスクリーンではゲームが描画を引き伸ばすので、modes のときだけ見る
+      合わないとハーネスはボタンの位置を計算できない。フルスクリーンではゲームが描画を引き伸ばすので、modes のときだけ見る。
+      larger_modes（フルスクリーン）では、ゲームが描く大きさがウィンドウ（外枠 × 倍率）より tolerance_px を超えて大きいときだけ
+      出す。はみ出した部分が切れて見えず、ハーネスが押す位置もずれる（ノッチのある Mac のフルスクリーンで、ウィンドウが
+      ノッチの帯の下に置かれ、モニター全体の高さで描いたゲームの下の端が切れた）
     params:
       min_sec: 5
       tolerance_px: 4
       title_max_pt: 60
       modes: ["Windowed"]
+      larger_modes: ["FullScreenWindow", "ExclusiveFullScreen", "MaximizedWindow"]
 
   - id: V-05
     severity: major
