@@ -190,12 +190,38 @@ def test_f03_setting_kept(repo_rules):
 
 
 def test_f03_settings_screen_open_at_exit_accepts_either(repo_rules):
-    # 設定の画面を開いたまま終わった: 閉じたときの値（変える前）でも、最後の値でもよい
+    # ゲームが自分で終わったときに、設定の画面が開いたままだった: 閉じたときの値（変える前）でも、最後の値でもよい
     for after in (1, 0):
         e = _f03(repo_rules)
-        evs = _change_and_exit(0, close=False) + [_ev("launch", 1, 100, source="harness"),
+        evs = _change_and_exit(0, close=False, code=0, by_harness=False) + [_ev("launch", 1, 100, source="harness"),
                                                    _settings(1, 101, master_volume=after)]
         assert _feed(e, evs) == []
+
+
+def test_f03_skips_when_harness_stopped_with_unknown_settings_screen_open(repo_rules):
+    # 押した直後にハーネスが起動し直して、押した結果（op_result）を見ていない: まだ設定の画面と分かっていないが、
+    # 開いてから値が変わったモーダルな画面が開いたままなら、保存する前に止めたかもしれないので比べない
+    def launch0(code=-15, by_harness=True, modal=True):
+        return [
+            _ev("launch", 0, 0, source="harness"),
+            _settings(0, 1),
+            _ev("menu", 0, 2, name="TitleUI", modal=False, buttons=[]),
+            _ev("menu", 0, 3, name="SettingsUI", modal=modal, buttons=[]),
+            _settings(0, 4, master_volume=0),
+            _ev("proc_exit", 0, 6, source="proc", code=code, by_harness=by_harness),
+        ]
+
+    relaunch = [_ev("launch", 1, 100, source="harness"), _settings(1, 101)]
+    assert _feed(_f03(repo_rules), launch0() + relaunch) == []
+    # ゲームが自分で終わったときと、モーダルでない画面しか開いていないときは、これまでどおり比べる
+    assert [i.rule_id for i in _feed(_f03(repo_rules), launch0(code=0, by_harness=False) + relaunch)] == ["F-03"]
+    assert [i.rule_id for i in _feed(_f03(repo_rules), launch0(modal=False) + relaunch)] == ["F-03"]
+
+
+def test_f03_harness_stop_after_closing_settings_still_compares(repo_rules):
+    e = _f03(repo_rules)
+    evs = _change_and_exit(0, close=True) + [_ev("launch", 1, 100, source="harness"), _settings(1, 101)]
+    assert [i.rule_id for i in _feed(e, evs)] == ["F-03"]
 
 
 def test_f03_skips_after_crash_or_restart(repo_rules):

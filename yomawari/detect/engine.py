@@ -1155,7 +1155,10 @@ class SettingsPersistDetector(Detector):
     前の起動で最後に設定の画面を閉じたときの値（設定の画面が開いていなかったあいだは、そのときの値）と、次の起動の
     最初の settings を比べる。設定を保存するのは画面を閉じたときというゲームが多いので、開いたまま終わった起動では、
     閉じたときの値と最後の値のどちらかに一致すればよい。前の起動が落ちた（C-01）・固まって再起動した（on_detect: restart
-    の問題が出た）ときは比べない（保存の前に止まったのかもしれない）。設定の画面は、押して settings の値だけが変わった
+    の問題が出た）ときは比べない（保存の前に止まったのかもしれない）。ハーネスが止めたときに設定の画面が開いたままだった
+    ときも比べない（閉じたときに保存するゲームでは、保存する前に止めている）。まだ設定の画面と分かっていなくても、開いてから
+    設定の値が変わったモーダルな画面が開いていれば、設定の画面とみなす（run 2026-11-19_1112: 言語を押した直後に画面が
+    変わってハーネスが起動し直し、押した結果を見ていなかったので設定の画面と分からず、最後の値と比べて検出した）。設定の画面は、押して settings の値だけが変わった
     ボタンのある画面（menu）とする。
 
     起動の引数で画面の大きさ・画面モードを渡した起動（Unity の -screen-width など。yomawari.toml の [builds.<名前>] args）
@@ -1175,6 +1178,7 @@ class SettingsPersistDetector(Detector):
         self.by_args: set[str] = set()  # この起動で、引数で決まった settings の値
         self.menus: set[str] = set()  # 押して設定の値だけが変わったボタンのある画面
         self.open: dict[str, dict[str, Any] | None] = {}  # 開いている画面 → 開いたときの値
+        self.modal: set[str] = set()  # 開いているモーダルな画面
         self.current: dict[str, Any] | None = None
         self.committed: dict[str, Any] | None = None  # 設定の画面が閉じていたときの値
         self.launch = 0
@@ -1188,7 +1192,7 @@ class SettingsPersistDetector(Detector):
             self.launch, self.waiting, self.broken = ev.launch, True, False
             self.current = self.committed = None
             self.by_args = {self.LAUNCH_ARGS[a] for a in d.get("cmd") or [] if a in self.LAUNCH_ARGS}
-            self.open = {}
+            self.open, self.modal = {}, set()
         elif ev.kind == "settings":
             values = {k: v for k, v in d.items() if k not in self.ignore and k not in ("seq", "t", "f", "ev")}
             out = self._compare(values, ev) if self.waiting else []
@@ -1206,12 +1210,18 @@ class SettingsPersistDetector(Detector):
                     self.committed = self.open[menu]
                 self.menus.add(menu)
         elif ev.kind == "menu":
-            self.open.setdefault(str(d.get("name")), self.current)
+            name = str(d.get("name"))
+            self.open.setdefault(name, self.current)
+            if d.get("modal"):
+                self.modal.add(name)
+            else:
+                self.modal.discard(name)
         elif ev.kind == "menu_close":
             name = str(d.get("name"))
             if name in self.menus and name in self.open and self.current is not None:
                 self.committed = self.current
             self.open.pop(name, None)
+            self.modal.discard(name)
         elif ev.kind == "issue":
             if d.get("action") == "restart" and ev.launch == self.launch:
                 self.broken = True
@@ -1219,8 +1229,16 @@ class SettingsPersistDetector(Detector):
             code = d.get("code")
             normal = code == 0 or (bool(d.get("by_harness")) and code in self.ok_codes)
             ok = normal and not self.broken and self.committed is not None and self.current is not None
+            if ok and d.get("by_harness") and self._settings_open():
+                ok = False  # 設定の画面を開いたまま止めた（閉じたときに保存するゲームでは、まだ保存していない）
             self.prev = (self.committed, self.current, ev.launch) if ok else None  # type: ignore[assignment]
         return []
+
+    def _settings_open(self) -> bool:
+        """設定の画面が開いている。設定の画面と分かっている画面か、開いてから設定の値が変わったモーダルな画面。"""
+        if self.open.keys() & self.menus:
+            return True
+        return any(self.open.get(m) is not None and self.open[m] != self.current for m in self.modal)
 
     def _compare(self, values: dict[str, Any], ev: Event) -> list[Issue]:
         if self.prev is None:
