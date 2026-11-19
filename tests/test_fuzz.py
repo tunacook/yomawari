@@ -718,6 +718,99 @@ def test_s02_modal_muted_counts_until_advance_is_checked():
     assert [i.rule_id for i in engine.tick(t0 + idle, 0)] == ["S-02"]
 
 
+def test_s02_buttonless_modal_is_not_exempted():
+    """ボタンのないモーダル（全画面の幕・UI を隠すパネルなど）の上では、本文送りで進まないと確かめても数え続ける
+    （run 2026-11-19_0958: ボタンのないモーダルが閉じず、入力が止められたまま 15 分進まなかったのに検出しなかった）。"""
+    rules = scaled_rules(1.0)
+    idle = float(rules["S-02"].param("muted_idle_sec"))
+
+    def run(buttons: list) -> list:
+        engine = Engine(rules)
+        engine.feed(Event("game", "line", {"line_id": "a:5.0"}, 0, t=0.0))
+        engine.feed(Event("game", "menu", {"name": "Panel", "modal": True, "buttons": buttons}, 0, t=1.0))
+        engine.feed(Event("game", "input", {"muted": ["Continue"]}, 0, t=1.0))
+        engine.feed(Event("harness", "op_result", {"kind": "advance", "heartbeat_age": 0.5, "waited": 5.0,
+                                                     "state": {"line_id": "a:5.0", "top_modal": "Panel"}}, 0, t=60.0))
+        engine.feed(Event("game", "heartbeat", {}, 0, t=1.0 + idle))
+        return engine.tick(1.0 + idle, 0)
+
+    assert run([{"name": "Back", "rect": [0.1, 0.8, 0.2, 0.9], "type": "button"}]) == []  # ボタンがある: 数えない
+    assert [i.rule_id for i in run([])] == ["S-02"]  # ボタンがない: 検出する
+
+
+def test_s02_check_holds_over_a_buttonless_overlay():
+    """ボタンのあるモーダルの上で確かめたあと、ボタンのないパネルが一瞬いちばん上に出ても数え直さない
+    （run 2026-11-18_2153: 設定の画面で選択肢を押すたびに出るパネルで数え直し、設定の画面を操作しているあいだに検出した）。"""
+    rules = scaled_rules(1.0)
+    idle = float(rules["S-02"].param("muted_idle_sec"))
+    engine = Engine(rules)
+    engine.feed(Event("game", "line", {"line_id": "a:5.0"}, 0, t=0.0))
+    engine.feed(Event("game", "menu", {"name": "SettingsMenu", "modal": True,
+                                       "buttons": [{"name": "Back", "rect": [0.1, 0.8, 0.2, 0.9]}]}, 0, t=1.0))
+    engine.feed(Event("game", "input", {"muted": ["Continue"]}, 0, t=1.0))
+    engine.feed(Event("harness", "op_result", {"kind": "advance", "heartbeat_age": 0.5, "waited": 1.0,
+                                                 "state": {"top_modal": "SettingsMenu"}}, 0, t=60.0))
+    engine.feed(Event("game", "menu", {"name": "Overlay", "modal": True, "buttons": []}, 0, t=70.0))
+    engine.feed(Event("harness", "op_result", {"kind": "click", "heartbeat_age": 0.5,
+                                                 "state": {"top_modal": "Overlay"}}, 0, t=70.0))
+    engine.feed(Event("harness", "op_result", {"kind": "click", "heartbeat_age": 0.5,
+                                                 "state": {"top_modal": "SettingsMenu"}}, 0, t=71.0))
+    engine.feed(Event("game", "heartbeat", {}, 0, t=80.0 + idle))
+    assert engine.tick(80.0 + idle, 0) == []
+
+
+def test_s02_check_on_a_buttonless_overlay_counts_when_a_buttoned_modal_is_open():
+    """確かめた瞬間に、ボタンのあるモーダルの上にボタンのないパネルが出ていても、ボタンのあるモーダルが開いていれば
+    数えない（run 2026-11-17_2240: セーブ・ロードの画面を操作しているとき、確かめた瞬間にパネルがいちばん上に出ていた）。
+    ボタンのないモーダルしか開いていなければ検出する。"""
+    rules = scaled_rules(1.0)
+    idle = float(rules["S-02"].param("muted_idle_sec"))
+
+    def run(close_menu: bool) -> list:
+        engine = Engine(rules)
+        engine.feed(Event("game", "line", {"line_id": "a:5.0"}, 0, t=0.0))
+        engine.feed(Event("game", "menu", {"name": "SaveMenu", "modal": True,
+                                           "buttons": [{"name": "Back", "rect": [0.1, 0.8, 0.2, 0.9]}]}, 0, t=1.0))
+        engine.feed(Event("game", "input", {"muted": ["Continue"]}, 0, t=1.0))
+        menus = ["Overlay", "SaveMenu"]
+        if close_menu:
+            engine.feed(Event("game", "menu_close", {"name": "SaveMenu"}, 0, t=50.0))
+            menus = ["Overlay"]
+        engine.feed(Event("game", "menu", {"name": "Overlay", "modal": True, "buttons": []}, 0, t=59.9))
+        engine.feed(Event("harness", "op_result", {"kind": "advance", "heartbeat_age": 0.5, "waited": 1.0,
+                                                     "state": {"top_modal": "Overlay", "menus": menus}}, 0, t=60.0))
+        engine.feed(Event("game", "heartbeat", {}, 0, t=1.0 + idle))
+        return engine.tick(1.0 + idle, 0)
+
+    assert run(False) == []
+    assert [i.rule_id for i in run(True)] == ["S-02"]
+
+
+def test_s02_buttoned_modal_opened_after_the_check_holds_counting():
+    """ボタンのないモーダル（全画面の幕）の上で確かめたあとに、ボタンのあるモーダルが開いたら、開いているあいだは数えない
+    （run 2026-11-17_1204: 幕の上で確かめた直後に一覧の画面が開き、そこを操作しているあいだに検出した）。
+    ボタンのあるモーダルが閉じて、ボタンのないモーダルだけが残ったら、閉じたときから数える。"""
+    rules = scaled_rules(1.0)
+    idle = float(rules["S-02"].param("muted_idle_sec"))
+    engine = Engine(rules)
+    engine.feed(Event("game", "line", {"line_id": "a:5.0"}, 0, t=0.0))
+    engine.feed(Event("game", "menu", {"name": "Curtain", "modal": True, "buttons": []}, 0, t=1.0))
+    engine.feed(Event("game", "input", {"muted": ["Continue"]}, 0, t=1.0))
+    engine.feed(Event("harness", "op_result", {"kind": "advance", "heartbeat_age": 0.5, "waited": 1.0,
+                                                 "state": {"top_modal": "Curtain"}}, 0, t=2.0))
+    engine.feed(Event("game", "menu", {"name": "ListMenu", "modal": True,
+                                       "buttons": [{"name": "Back", "rect": [0.1, 0.8, 0.2, 0.9]}]}, 0, t=3.0))
+    for t in range(10, int(2 * idle), 10):
+        engine.feed(Event("game", "heartbeat", {}, 0, t=float(t)))
+        assert engine.tick(float(t), 0) == []
+    t_close = 2 * idle
+    engine.feed(Event("game", "menu_close", {"name": "ListMenu"}, 0, t=t_close))
+    engine.feed(Event("game", "heartbeat", {}, 0, t=t_close + 1))
+    assert engine.tick(t_close + 1, 0) == []
+    engine.feed(Event("game", "heartbeat", {}, 0, t=t_close + idle + 2))
+    assert [i.rule_id for i in engine.tick(t_close + idle + 2, 0)] == ["S-02"]
+
+
 def test_s02_modal_check_holds_while_moving_between_modals():
     """確かめたあと、ロード → メニュー → 設定のようにモーダルからモーダルへ移っても数え直さない。すべて閉じたら数え直す。"""
     rules = scaled_rules(1.0)
