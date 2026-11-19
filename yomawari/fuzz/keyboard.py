@@ -6,7 +6,10 @@
 - 本文送り（advance）: advance_keys のキーで押す。どのキーで本文が進むかはゲームごとに違うので決め打ちしない。まだ
   key_learn_tries 回試していないキーを先に試し、本文が進んだ割合がいちばん高いキーを使う。どのキーでも進まなければ、
   マウスで押す（ハーネスの記録に書く）
-- メニュー（右クリック）: menu_key（Esc）を押す
+- メニュー（右クリック）: menu_keys のキーで押す。本文送りと同じく、どのキーでメニューが開くかはゲームごとに違うので
+  決め打ちしない。押してメニュー（ボタンのある画面）が開いた・閉じたかで覚え、どのキーでも開かなければマウスで右クリック
+  する（ハーネスの記録に書く。キーボードで遊ぶ人がメニューを開けないかもしれない）。数えるのは、モーダルな画面が開いて
+  いない（本文を読んでいる）ときに押したものだけ。モーダルな画面の上では、ゲームがメニューを開かないことがあるため
 - ボタン: 方向キーでフォーカス（ゲームの selected）を目的のボタンまで移し、submit_key（Enter）で押す（via_key は NAV）。
   向きは、いまフォーカスのあるボタンから目的のボタンへの向きに近い方向キーから試す。フォーカスが動かなかった向きは、
   同じボタンの上では試さない。nav_max_steps 回で着かない・試せる向きがなくなったら、たどり着けなかったボタンとして
@@ -46,13 +49,16 @@ class InputStyle:
     main: str = "mouse"  # mouse / keyboard
     mix: float = 0.0  # 主でない方を混ぜる割合（0〜1）
     advance_keys: tuple[str, ...] = ("enter", "space")
-    menu_key: str = "esc"
+    menu_keys: tuple[str, ...] = ("esc",)
     submit_key: str = "enter"  # フォーカスのあるボタンを押すキー
     learn_tries: int = 3  # 本文送りのキーを、それぞれこの回数は試してから選ぶ
     tried: Counter[str] = field(default_factory=Counter)  # 本文送りのキー → 押した回数
     worked: Counter[str] = field(default_factory=Counter)  # 本文送りのキー → 本文が進んだ回数
     used: Counter[str] = field(default_factory=Counter)  # 操作の種類 → キーボードで押した回数
     gave_up_noted: bool = False
+    menu_tried: Counter[str] = field(default_factory=Counter)  # メニューのキー → 本文を読んでいるときに押した回数
+    menu_worked: Counter[str] = field(default_factory=Counter)  # メニューのキー → メニューが開いた・閉じた回数
+    menu_gave_up_noted: bool = False
     unreachable: Counter[str] = field(default_factory=Counter)  # ボタン → 方向キーでたどり着けなかった回数
     reached: Counter[str] = field(default_factory=Counter)  # ボタン → 方向キーでたどり着いて押した回数
 
@@ -65,7 +71,8 @@ class InputStyle:
         if not 0.0 <= mix <= 1.0:
             raise InputError(f"混ぜる割合は 0〜1 です: {mix}")
         keys = tuple(str(k) for k in cfg.get("advance_keys", ("enter", "space")))
-        return cls(main, mix, keys or ("enter",), str(cfg.get("menu_key", "esc")), str(cfg.get("submit_key", "enter")),
+        menu = tuple(str(k) for k in cfg.get("menu_keys", ("esc",)))
+        return cls(main, mix, keys or ("enter",), menu or ("esc",), str(cfg.get("submit_key", "enter")),
                    int(cfg.get("key_learn_tries", 3)))
 
     @property
@@ -96,7 +103,7 @@ class InputStyle:
         if op.kind == "advance":
             key = self._advance_key()
         elif op.kind == "right_click":
-            key = self.menu_key
+            key = self._menu_key()
         elif op.kind == "click" and op.target is not None and op.target.kind == "button" \
                 and op.target.label not in self.unreachable:
             key = NAV
@@ -114,6 +121,29 @@ class InputStyle:
                 return k
         best = max(self.advance_keys, key=lambda k: (self.worked[k] / self.tried[k], -self.advance_keys.index(k)))
         return best if self.worked[best] else None
+
+    def _menu_key(self) -> str | None:
+        """メニューに使うキー。まだ試し足りないキーを先に、あとはメニューが開いた割合がいちばん高いもの。どれも開かなければ None。"""
+        for k in self.menu_keys:
+            if self.menu_tried[k] < self.learn_tries:
+                return k
+        best = max(self.menu_keys, key=lambda k: (self.menu_worked[k] / self.menu_tried[k], -self.menu_keys.index(k)))
+        return best if self.menu_worked[best] else None
+
+    def menu_pressed(self, key: str, worked: bool) -> None:
+        """メニューをキーで押した結果（本文を読んでいるときに押して、メニューが開いた・閉じたか）。"""
+        self.menu_tried[key] += 1
+        if worked:
+            self.menu_worked[key] += 1
+
+    def menu_gave_up(self) -> bool:
+        """どのメニューのキーでもメニューが開かなかった（以後は右クリックする）。最初の 1 回だけ True。"""
+        if self.menu_gave_up_noted or any(self.menu_tried[k] < self.learn_tries for k in self.menu_keys):
+            return False
+        if any(self.menu_worked[k] for k in self.menu_keys):
+            return False
+        self.menu_gave_up_noted = True
+        return True
 
     def advanced(self, key: str, worked: bool) -> None:
         """本文送りをキーで押した結果（本文が進んだか）。"""
@@ -148,6 +178,9 @@ class InputStyle:
         if self.tried:
             out.append("本文送りのキー（本文が進んだ回数 / 押した回数）: " + "、".join(
                 f"`{k}` {self.worked[k]}/{self.tried[k]}" for k in self.advance_keys if self.tried[k]))
+        if self.menu_tried:
+            out.append("メニューのキー（本文を読んでいるときに押して、メニューが開いた・閉じた回数 / 押した回数）: " + "、".join(
+                f"`{k}` {self.menu_worked[k]}/{self.menu_tried[k]}" for k in self.menu_keys if self.menu_tried[k]))
         return out
 
 

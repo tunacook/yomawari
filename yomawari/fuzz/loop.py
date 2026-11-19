@@ -2466,6 +2466,8 @@ class FuzzSession:
         locale_before = values_before.get("locale")
         expected = self._expected_silent(op.target)
         line_before = (self.state.line, self.state.line_done)
+        reading_before = self.state.top_modal() is None
+        buttoned_before = self._buttoned_menus()
         # 反応しないと見込んでいるボタンは、何も起きないことを確かめるだけなので、待つ時間を短くする
         quiet = op.target is not None and (op.target.label in self._quiet() or expected is not None)
         started = time.monotonic()
@@ -2490,6 +2492,8 @@ class FuzzSession:
         texts_changed = False
         if op.kind == "advance" and op.via_key is not None:
             self._key_advanced(op.via_key, (self.state.line, self.state.line_done) != line_before)
+        if op.kind == "right_click" and op.via_key is not None and reading_before:
+            self._key_menu(op.via_key, self._buttoned_menus() != buttoned_before)
         if not responded and op.target is not None and op.target.kind == "button":
             texts_changed = responded = await self._texts_changed(op.target)
         if not responded and op.target is not None and op.target.kind == "button":
@@ -2677,6 +2681,20 @@ class FuzzSession:
             self.run.notes.append(f"本文送りのキー（{'・'.join(style.advance_keys)}）を {style.learn_tries} 回ずつ押したが"
                                   f"本文が進まなかったので、以後の本文送りはマウスで押す（起動 #{self.launch}。"
                                   "yomawari.toml の [fuzz] advance_keys で変えられる）")
+
+    def _buttoned_menus(self) -> frozenset[str]:
+        """ボタンのある画面の名前。メニューのキーが効いたかを見る（ボタンのないパネル・通知が出ただけでは数えない）。"""
+        return frozenset(m.name for m in self.state.menus.values() if m.buttons)
+
+    def _key_menu(self, key: str, worked: bool) -> None:
+        """メニューをキーで押した結果を覚える。どのキーでもメニューが開かなければ、以後は右クリックする。"""
+        style = self.run.input_style
+        style.menu_pressed(key, worked)
+        if style.menu_gave_up():
+            self.run.notes.append(f"メニューのキー（{'・'.join(style.menu_keys)}）を、本文を読んでいるときに "
+                                  f"{style.learn_tries} 回ずつ押したがメニューが開かなかったので、以後のメニューは右クリックで"
+                                  f"開く（起動 #{self.launch}。キーボードで遊ぶ人がメニューを開けないかもしれない。"
+                                  "yomawari.toml の [fuzz] menu_keys で変えられる）")
 
     async def _irregular(self, trigger: str) -> None:
         if not self._ready() or self._exiting:
