@@ -214,6 +214,9 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "advance_keys": ["enter", "space"],
     "menu_key": "esc",
     "key_learn_tries": 3,
+    "submit_key": "enter",  # フォーカスのあるボタンを押すキー
+    "nav_wait_sec": 0.6,  # 方向キーを押してから、フォーカスが動くのを待つ時間（パッケージは 0.2 秒ごとに selected を出す）
+    "nav_max_steps": 15,  # ボタンへ方向キーでたどるときの、押す回数の上限
     "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")

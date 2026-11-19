@@ -36,7 +36,7 @@ from ..state import GameState, Rect, Target
 from .decider import Decider
 from .experience import Experience, Press
 from .guard import Guard
-from .keyboard import InputStyle
+from .keyboard import DIRECTIONS, NAV, InputStyle, next_direction
 from .looks import Values, alike, brighter, brightest, dark, disabled_looks, groups, inactive, letters, masked, measure, text_inactive
 from .advisor import ChoiceAdvisor
 from .reading import assign, text_changed, unread
@@ -791,6 +791,11 @@ class FuzzSession:
         self._odds = (op.label, getattr(self.run.decider, "last_odds", {}))
         self._verify_next = False
         op = self.run.input_style.convert(op, self.run.rng)
+        if op.via_key == NAV:
+            nav = await self._navigate(op)
+            if nav is None:
+                return  # 押す前にウィンドウが出ていない・前面にできないなど
+            op = nav
         if op.kind == "expect_exit":
             await self._expect_exit(op)
         elif op.kind == "external":
@@ -2611,6 +2616,48 @@ class FuzzSession:
             )
         )
 
+    async def _navigate(self, op: Op) -> Op | None:
+        """ボタンを方向キーでたどる（fuzz/keyboard.py）。フォーカスが着いたら submit_key で押す操作を、着かなければ、
+        たどり着けなかったボタンとして覚えてマウスで押す操作を返す。キーを押せなければ None。"""
+        assert op.target is not None
+        style = self.run.input_style
+        label = op.target.label
+        wait = float(self.cfg["nav_wait_sec"])
+        tried: dict[str | None, set[str]] = {}
+        path: list[str] = []
+        reached = False
+        for _ in range(int(self.cfg["nav_max_steps"])):
+            cur = self.state.selected_target()
+            if cur is not None and cur.label == label:
+                reached = True
+                break
+            here = cur.label if cur is not None else None
+            seen = tried.setdefault(here, set())
+            if cur is None:
+                # どのボタンにもフォーカスがない: 押せばフォーカスが出るゲームがあるので、順に試す
+                key = next((k for k in DIRECTIONS if k not in seen), None)
+            else:
+                key = next_direction(cur.rect, op.target.rect, seen)
+            if key is None:
+                break
+            seen.add(key)
+            path.append(key)
+            before = self.state.selected
+            try:
+                await asyncio.to_thread(self.pointer.key, key)
+            except PointerError:
+                return None
+            started = time.monotonic()
+            while self.state.selected == before and time.monotonic() - started < wait:
+                await asyncio.sleep(0.05)
+        style.navigated(label, reached)
+        self.publish(Event("harness", "key_nav", {"target": label, "path": path, "reached": reached}, self.launch))
+        if reached:
+            return dataclasses.replace(op, via_key=style.submit_key)
+        self.run.notes.append(f"`{label}` に方向キーでたどり着けなかった（{' → '.join(path) or 'フォーカスが出ない'}。"
+                              f"起動 #{self.launch}）。以後このボタンはマウスで押す")
+        return dataclasses.replace(op, via_key=None)
+
     def _key_advanced(self, key: str, worked: bool) -> None:
         """本文送りをキーで押した結果を覚える。どのキーでも本文が進まなければ、以後はマウスで押す。"""
         style = self.run.input_style
@@ -2819,15 +2866,15 @@ class FuzzSession:
         p = self.pointer
         ax, ay = (float(v) for v in self.cfg["advance_point"])
         k = op.kind
+        if k in ("advance", "right_click", "click") and op.via_key is not None:
+            p.key(op.via_key)  # キーボードで押す（fuzz/keyboard.py）。ボタンは、方向キーでフォーカスを移してから
+            return None
         if k in ("click", "expect_exit", "external"):
             assert op.target is not None
             return p.click(op.target)
         if k == "double_click":
             assert op.target is not None
             return p.click(op.target, clicks=2)
-        if k in ("advance", "right_click") and op.via_key is not None:
-            p.key(op.via_key)  # キーボードで押す（fuzz/keyboard.py）
-            return None
         if k == "advance":
             return p.click_at(*(op.point or (ax, ay)))
         if k == "rapid_click":
