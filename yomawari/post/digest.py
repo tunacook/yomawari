@@ -192,7 +192,8 @@ def timeline(log: Log, lo: int, hi: int, limit: int, launch: int | None = None) 
             known = "（プロファイルの正解に沿う）" if d.get("follows") else "（プロファイルの正解: なし）" if not d.get("known") else ""
             add(wall, f"答えた: {picked}{known}")
         elif k == "judged":
-            add(wall, f"答えの判定: {'正解（先へ進んだ）' if d.get('right') else '外れ（同じ質問に戻った）'}")
+            # 先へ進んだだけでは正解と限らない（外れの数をあとで数えてバッドエンドにするゲームがある）ので、正解とは書かない
+            add(wall, f"答えの判定: {'先へ進んだ（同じ質問に戻らなかった）' if d.get('right') else '外れ（同じ質問に戻った）'}")
         elif k in ("save", "load") and d.get("phase") == "start":
             add(wall, f"{'セーブ' if k == 'save' else 'ロード'} {d.get('slot')}")
         elif k == "issue":
@@ -337,7 +338,7 @@ def _answers(log: Log, lo: int, hi: int) -> list[str]:
             out.append("プロファイルの正解: なし（この質問の正解はプロファイルに書いていないか、質問の行を特定できなかった）")
     if judged:
         right = sum(1 for j in judged if j.get("right"))
-        out.append(f"答えの判定: 正解 {right} 回、外れ（同じ質問に戻った） {len(judged) - right} 回")
+        out.append(f"答えの判定: 先へ進んだ {right} 回、外れ（同じ質問に戻った） {len(judged) - right} 回")
     return out
 
 
