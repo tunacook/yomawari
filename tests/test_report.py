@@ -144,7 +144,7 @@ def test_long_stall_is_an_item_with_answers_and_short_ones_are_merged(tmp_path):
         events += [_ev(t, "flow", flow="質問", step=1, note="一覧を開く"),
                    _ev(t + 1, "answer", **q, picked=["カード #2"], known=["カード #1"], follows=False,
                        deliberate=n == 0, locale_off=False),
-                   _ev(t + 2, "judged", **q, picked=["カード #2"], right=False),
+                   _ev(t + 2, "judged", **q, picked=["カード #2"], right=n == 2),
                    _ev(t + 3, "flow", flow=None, **{"from": {"flow": "質問", "step": 3}})]
     events += [_ev(2000, "line", "game", line_id="s:6", text="次"), _ev(2400, "line", "game", line_id="s:7", text="次の次"),
                _ev(2800, "heartbeat")]
@@ -156,7 +156,9 @@ def test_long_stall_is_an_item_with_answers_and_short_ones_are_merged(tmp_path):
     sec = _section(text, 1)
     assert "答えた: 3 回（カード #2 ×3）" in sec
     assert "プロファイルの正解: 分かっていた（カード #1）。正解に沿って答えた 0 回、わざと外れを答えるつもりだった 1 回" in sec
-    assert "答えの判定: 正解 0 回、外れ（同じ質問に戻った） 3 回" in sec
+    assert "答えの判定: 先へ進んだ 1 回、外れ（同じ質問に戻った） 2 回" in sec
+    # 先へ進んだだけでは正解とは書かない（外れの数をあとで数えてバッドエンドにするゲームがある）
+    assert "正解 1 回" not in sec and "正解（先へ進んだ）" not in text
     assert "流れの手順に入った回数: 「質問」手順 1（一覧を開く） 3 回" in sec
     assert "答えた: カード #2" in sec  # 経過にも出る
     assert "- いちばん長く進めなかった区間: 33 分（ランの 56%）、`s:5` から" in text
