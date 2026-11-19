@@ -127,6 +127,58 @@ def test_session_presses_the_key_and_learns_it():
     assert vias == ["enter", "space", "space"]
 
 
+def test_menu_key_is_learned_and_falls_back_to_right_click():
+    # Esc は開いている画面を閉じるだけで、メニューは開かないゲーム。Esc を押し続け、設定の画面に着けなかった
+    s = InputStyle("keyboard", 0.0, ("enter",), ("esc", "backspace"), learn_tries=2)
+    rng = random.Random(1)
+    for _ in range(2):
+        assert s.convert(Op("right_click"), rng).via_key == "esc"
+        s.menu_pressed("esc", False)
+    for _ in range(2):
+        assert s.convert(Op("right_click"), rng).via_key == "backspace"
+        s.menu_pressed("backspace", True)
+    assert s.convert(Op("right_click"), rng).via_key == "backspace"
+    assert not s.menu_gave_up()
+    assert any("メニューのキー" in n and "`backspace` 2/2" in n for n in s.notes())
+    # どのキーでも開かなければ、右クリックに戻す
+    s = InputStyle("keyboard", 0.0, ("enter",), ("esc",), learn_tries=2)
+    for _ in range(2):
+        s.menu_pressed(s.convert(Op("right_click"), rng).via_key, False)
+    assert s.menu_gave_up() is True and s.menu_gave_up() is False  # 記録に書くのは 1 回だけ
+    assert s.convert(Op("right_click"), rng).via_key is None
+    assert s.convert(Op("advance"), rng).via_key == "enter"  # 本文送りはキーのまま
+
+
+def test_session_learns_the_menu_key_only_while_reading():
+    s, st, run, _ = _session()
+    run.input_style = InputStyle("keyboard", 0.0, ("enter",), ("esc",), learn_tries=1)
+    drv = KeyDriver()
+    s.pointer.driver = drv
+    s.pointer.platform.info = WindowInfo(1, ScreenRect(100, 50, 1280, 748), True)
+    _game(s, st, "line", line_id="s:1", text="a")
+    _game(s, st, "line_done")
+    opened = [False]
+
+    async def do(op, trigger=None):
+        # Esc でボタンのない幕だけが出るゲーム（メニューは開かない）
+        s._input(op)
+        if op.via_key == "esc" and not opened[0]:
+            opened[0] = True
+            _game(s, st, "menu", name="Curtain", modal=True, buttons=[])
+        return True
+
+    s._do = do
+    s.publish = lambda e: None
+    asyncio.run(s._normal(run.input_style.convert(Op("right_click"), run.rng), "reading", False))
+    assert drv.keys == ["esc"]
+    assert run.input_style.menu_tried == {"esc": 1} and not run.input_style.menu_worked  # ボタンのない幕は数えない
+    assert any("メニューのキー（esc）" in n and "右クリック" in n for n in run.notes)
+    # モーダルな画面の上で押したものは数えない
+    run.input_style = InputStyle("keyboard", 0.0, ("enter",), ("esc",), learn_tries=1)
+    asyncio.run(s._normal(Op("right_click", via_key="esc"), "modal", False))
+    assert run.input_style.menu_tried == {}
+
+
 # --- ボタンを方向キーでたどって押す ---
 
 

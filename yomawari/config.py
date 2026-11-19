@@ -208,11 +208,11 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     # レポートの「カバレッジ」: scene・画面・状態の表に載せる行数の上限（多い順。残りは「ほか n 個」にまとめる）
     "report_coverage_rows": 30,
     # 入力の方式（fuzz/keyboard.py）: mouse（マウス中心）/ keyboard（キーボード中心）と、主でない方を混ぜる割合（0〜1）。
-    # --input・--input-mix。本文送りのキーは、どれで本文が進むかを試して覚える。メニューは menu_key
+    # --input・--input-mix。本文送り・メニューのキーは、どれで本文が進むか・メニューが開くかを試して覚える
     "input": "mouse",
     "input_mix": 0.0,
     "advance_keys": ["enter", "space"],
-    "menu_key": "esc",
+    "menu_keys": ["esc"],
     "key_learn_tries": 3,
     "submit_key": "enter",  # フォーカスのあるボタンを押すキー
     "nav_wait_sec": 0.6,  # 方向キーを押してから、フォーカスが動くのを待つ時間（パッケージは 0.2 秒ごとに selected を出す）
