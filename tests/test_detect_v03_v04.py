@@ -52,9 +52,31 @@ def test_v04_resize_in_progress_and_fullscreen_are_ignored(repo_rules):
     events = [res(0, 1280, 720, "FullScreenWindow")] + [stats(t, window=[0, 0, 1512, 982], backing=2.0)
                                                          for t in range(1, 20)]
     assert run(e, events) == []
+    # フルスクリーンで、ウィンドウより小さく描いて引き伸ばすのは正常
+    e = Engine({"V-04": repo_rules["V-04"]})
+    events = [res(0, 1920, 1080, "FullScreenWindow")] + [stats(t, window=[0, 33, 1512, 949], backing=2.0)
+                                                          for t in range(1, 20)]
+    assert run(e, events) == []
     # 外枠か倍率が分からない（古いハーネスの記録など）
     e = Engine({"V-04": repo_rules["V-04"]})
     assert run(e, [res(0, 1920, 1080)] + [stats(t) for t in range(1, 20)]) == []
+
+
+def test_v04_fullscreen_drawn_larger_than_the_window(repo_rules):
+    # ノッチのある Mac のフルスクリーン: ウィンドウはノッチの帯の下（1512x949 ポイント = 3024x1898 ピクセル）なのに、
+    # ゲームはモニター全体（3024x1964）で描いた。下の端が切れ、ハーネスが押す位置もずれる
+    e = Engine({"V-04": repo_rules["V-04"]})
+    events = [res(0, 3024, 1964, "FullScreenWindow")] + [stats(t, window=[0, 33, 1512, 949], backing=2.0)
+                                                          for t in range(1, 20)]
+    issues = run(e, events)
+    assert [(i.rule_id, i.evidence["resolution"]) for i in issues] == [("V-04", [3024, 1964])]
+    assert "3024x1964" in issues[0].detail and "3024x1898" in issues[0].detail and "はみ出した" in issues[0].detail
+    # ウィンドウに合わせて描き直したら出ない（起動直後の数秒だけ大きいのは min_sec で除く）
+    e = Engine({"V-04": repo_rules["V-04"]})
+    events = [res(0, 3024, 1964, "FullScreenWindow")] + [stats(t, window=[0, 33, 1512, 949], backing=2.0)
+                                                          for t in range(1, 20)]
+    events.insert(3, res(2.5, 3024, 1898, "FullScreenWindow"))
+    assert run(e, events) == []
 
 
 # --- V-03 ---

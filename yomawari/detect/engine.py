@@ -552,7 +552,11 @@ class ResolutionMismatchDetector(Detector):
     幅はウィンドウの外枠の幅 × 倍率と比べ、高さは外枠からタイトルバーの分（0〜title_max_pt ポイント）を引いた残りと比べる
     （DESIGN.md §8 と同じ見方。合わないとハーネスはボタンの位置を計算できない）。フルスクリーンではゲームが描画を
     引き伸ばすので、modes（Windowed）のときだけ見る。resolution が変わった直後のウィンドウの大きさの変わり途中は、
-    min_sec で除く。resolution ごとに1件。"""
+    min_sec で除く。resolution ごとに1件。
+
+    larger_modes（フルスクリーン）では、ウィンドウより大きく描いているときだけ見る。小さく描いて引き伸ばすのは正常だが、
+    大きく描くと、はみ出した部分が切れて見えない（ノッチのある Mac のフルスクリーンで、ウィンドウがノッチの帯の下に置かれ、
+    モニター全体の高さで描いたゲームの下の端が切れた。ハーネスがゲームの伝えたボタンの位置で押すと、下のほうほどずれた）。"""
 
     def __init__(self, rule: Rule) -> None:
         super().__init__(rule)
@@ -560,13 +564,21 @@ class ResolutionMismatchDetector(Detector):
         self.tolerance = float(rule.param("tolerance_px"))
         self.title_max = float(rule.param("title_max_pt"))
         self.modes = set(rule.param("modes"))
+        self.larger_modes = set(rule.param("larger_modes"))
         self.res: tuple[float, float, str] | None = None
         self.since: tuple[float, str] | None = None
         self.reported: set[tuple[int, float, float]] = set()
 
     def _mismatch(self, win: list[float], scale: float) -> str | None:
         assert self.res is not None
-        rw, rh, _ = self.res
+        rw, rh, mode = self.res
+        if mode in self.larger_modes:
+            ww, wh = win[2] * scale, win[3] * scale
+            if rw <= ww + self.tolerance and rh <= wh + self.tolerance:
+                return None
+            return (f"フルスクリーン（{mode}）で、ゲームが描く大きさ {rw:g}x{rh:g} が、ウィンドウ {ww:.0f}x{wh:.0f} ピクセル"
+                    f"（{win[2]:g}x{win[3]:g} ポイント、倍率 {scale:g}）より大きく、はみ出した部分が見えません"
+                    "（ノッチのある画面で、ノッチの帯の分を除かずに描いているなど）。ハーネスが押す位置もずれます")
         width_px = win[2] * scale
         content_pt = rh / scale
         title = win[3] - content_pt
@@ -588,7 +600,8 @@ class ResolutionMismatchDetector(Detector):
         elif ev.kind == "proc_stats":
             sysd = d.get("sys") or {}
             win, scale = sysd.get("window"), sysd.get("backing")
-            if (self.res is None or self.res[2] not in self.modes or not isinstance(win, list) or len(win) != 4
+            if (self.res is None or self.res[2] not in self.modes | self.larger_modes or not isinstance(win, list)
+                    or len(win) != 4
                     or not isinstance(scale, (int, float)) or scale <= 0):
                 self.since = None
                 return []
