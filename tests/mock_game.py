@@ -9,7 +9,8 @@ Unity と同じく -yomawari があるときだけ [YOMAWARI] 行を出し、-lo
   exception  boot の直後に例外（Player.log の本文と log_error イベント）を出し、その後は normal と同じ
   menus      boot の後に resolution とタイトルの menu を出し、--mock-after 秒後に設定画面（モーダル）を開く
   screen     boot の後に、起動の引数（-screen-width / -screen-height）の大きさで resolution を出す。--mock-resize があれば
-             --mock-after 秒後にその大きさ（「WxH」）に変わる。--mock-ignore-screen なら引数を無視して 1280x720 のまま
+             --mock-after 秒後にその大きさ（「WxH」）に変わる。--mock-ignore-screen なら引数を無視して 1280x720 のウィンドウのまま。
+             -screen-fullscreen 1 ならフルスクリーン（大きさの引数がなければ 1280x720）
 """
 
 import argparse
@@ -77,8 +78,9 @@ if a.mock_mode == "menus":
         {"name": "SettingsButton", "rect": [0.1, 0.7, 0.3, 0.8]},
     ])
 if a.mock_mode == "screen":
+    full = a.screen_fullscreen == "1" and not a.mock_ignore_screen
     w, h = (1280, 720) if a.mock_ignore_screen else (a.screen_width, a.screen_height)
-    emit("resolution", w=w, h=h, mode="Windowed")
+    emit("resolution", w=w, h=h, mode="FullScreenWindow" if full else "Windowed")
 opened = False
 while True:
     elapsed = time.monotonic() - t0

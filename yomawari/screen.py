@@ -1,4 +1,4 @@
-"""ランの画面の前提（--screen）。決めた大きさのウィンドウで起動し、ランのあいだは変えさせない（DESIGN.md §9「画面の前提」）。"""
+"""ランの画面の前提（--screen・--fullscreen）。決めた大きさのウィンドウかフルスクリーンで起動し、ランのあいだは変えさせない（DESIGN.md §9「画面の前提」）。"""
 
 from __future__ import annotations
 
@@ -16,16 +16,20 @@ class ScreenError(ValueError):
 
 @dataclass(frozen=True)
 class Screen:
-    w: int  # 描画領域のピクセル数（Unity の -screen-width。Retina では、ウィンドウのポイントの倍率倍）
-    h: int
+    # 描画領域のピクセル数（Unity の -screen-width。Retina では、ウィンドウのポイントの倍率倍）。
+    # フルスクリーンで None なら、大きさはゲームに任せる（決めるのは画面モードだけ）
+    w: int | None
+    h: int | None
+    fullscreen: bool = False  # ボーダーレスのフルスクリーン（Unity の FullScreenWindow）
 
     @property
     def mode(self) -> str:
         """ゲームが resolution の mode に出す値（Unity の FullScreenMode）。"""
-        return "Windowed"
+        return "FullScreenWindow" if self.fullscreen else "Windowed"
 
     def __str__(self) -> str:
-        return f"{self.w}x{self.h} のウィンドウ"
+        size = f"{self.w}x{self.h} の" if self.w is not None else ""
+        return f"{size}フルスクリーン" if self.fullscreen else f"{size}ウィンドウ"
 
     def args(self, args: list[str]) -> list[str]:
         """起動の引数から画面の大きさ・画面モードの指定を外し、この画面の指定を付けたもの。"""
@@ -41,7 +45,10 @@ class Screen:
             if a in _SCREEN_FLAGS:
                 continue
             out.append(a)
-        return [*out, "-screen-fullscreen", "0", "-screen-width", str(self.w), "-screen-height", str(self.h)]
+        out += ["-screen-fullscreen", "1" if self.fullscreen else "0"]
+        if self.w is not None and self.h is not None:
+            out += ["-screen-width", str(self.w), "-screen-height", str(self.h)]
+        return out
 
     @staticmethod
     def guard_roles(roles: dict[str, str]) -> dict[str, str]:
@@ -50,18 +57,18 @@ class Screen:
         return {**roles, "system_setting": "deny"}
 
     def matches(self, w: object, h: object, mode: object) -> bool:
-        return w == self.w and h == self.h and mode == self.mode
+        return mode == self.mode and (self.w is None or (w == self.w and h == self.h))
 
 
-def parse_screen(text: str) -> Screen | None:
-    """「1920x1080」を読む。空なら None（画面を決めない）。"""
+def parse_screen(text: str, fullscreen: bool = False) -> Screen | None:
+    """「1920x1080」を読む。空なら、fullscreen のときは大きさを決めないフルスクリーン、そうでなければ None（画面を決めない）。"""
     text = text.strip()
     if not text:
-        return None
+        return Screen(None, None, True) if fullscreen else None
     m = re.fullmatch(r"(\d+)\s*[xX×]\s*(\d+)", text)
     if m is None:
         raise ScreenError(f"画面の大きさは「1920x1080」の形で書いてください: {text}")
     w, h = int(m.group(1)), int(m.group(2))
     if w <= 0 or h <= 0:
         raise ScreenError(f"画面の大きさが 0 です: {text}")
-    return Screen(w, h)
+    return Screen(w, h, fullscreen)

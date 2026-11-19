@@ -23,6 +23,17 @@ def test_borderless_fullscreen_matches_bounds():
     assert area.rect == ScreenRect(0, 0, 1512, 982)
 
 
+def test_fullscreen_is_stretched_over_the_window():
+    # ノッチのある画面: ウィンドウはノッチの下（1512x949）なのに、ゲームは画面全体の解像度（3024x1964）を出す。
+    # ウィンドウモードの求め方では描画領域が外枠より高くなって押せない。フルスクリーンでは外枠全体に引き伸ばす
+    assert client_area(ScreenRect(0, 33, 1512, 949), 3024, 1964) is None
+    area = client_area(ScreenRect(0, 33, 1512, 949), 3024, 1964, fullscreen=True)
+    assert area.rect == ScreenRect(0, 33, 1512, 949) and area.scale == 2
+    # 外部モニタ（3360x1890 ポイント）で 1920x1080: 撮った画面の START の文字（y 146〜239）が、ボタン（y 0.0531〜0.1486）に合った
+    area = client_area(ScreenRect(0, 0, 3360, 1890), 1920, 1080, fullscreen=True)
+    assert area.to_screen(0, 0.0531)[1] < 146 and area.to_screen(0, 0.1486)[1] > 239
+
+
 def test_inconsistent_resolution_is_none():
     # 描画領域が外枠より高くなる（resolution が古い、別のウィンドウを見ている等）
     assert client_area(ScreenRect(0, 0, 1280, 300), 2560, 1440) is None
@@ -266,6 +277,17 @@ def test_point_outside_display_is_not_pressed_when_window_cannot_move():
     # 見える範囲の中の点は押す
     p.click_at(0.1, 0.1)
     assert len(drv.clicks) == 1
+
+
+def test_fullscreen_presses_under_the_menu_bar_without_dragging():
+    # フルスクリーンではメニューバーが隠れていて、画面の上端までゲーム。見える範囲（メニューバーの下）で断らず、動かさない
+    s = GameState()
+    s.feed(Event("game", "resolution", {"w": 3024, "h": 1964, "mode": "FullScreenWindow"}))
+    win = DragWindows(WindowInfo(7, ScreenRect(0, 0, 1512, 982), True), ScreenRect(0, 33, 1512, 949))
+    drv = DragDriver(win)
+    p = Pointer(win, drv, 7, s, activate_wait=0, fit_wait=0)
+    assert p.click_at(0.5, 0.01) == (756, 0.01 * 982)
+    assert drv.drags == [] and p.fits == [] and len(drv.clicks) == 1
 
 
 def test_window_without_visible_area_is_left_as_is():

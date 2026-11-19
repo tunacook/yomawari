@@ -29,6 +29,7 @@ RUN_DEFAULTS: dict[str, Any] = {
     "continue": False,  # ランの最初の起動から、前のランのセーブの続きを遊ぶ（既定ははじめから）。--continue
     # ランの画面の前提: 「1920x1080」なら、その大きさのウィンドウで起動し、ランのあいだは変えさせない（空なら決めない）。--screen
     "screen": "",
+    "fullscreen": False,  # ボーダーレスのフルスクリーンで起動し、ランのあいだは変えさせない（screen があればその大きさで）。--fullscreen
     # 見張り役（ウォッチドッグ）: ハーネス本体を子プロセスで動かし、落ちたら後始末する。--no-watchdog で使わない
     "watchdog": True,
     "watchdog_hang_sec": 300.0,  # ハーネス本体の記録（events.jsonl）がこの秒数増えなければ、固まったとみなして止める

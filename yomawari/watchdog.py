@@ -454,7 +454,7 @@ class Harness:
             # ビルドの args の画面の指定を置き換えて起動する（DESIGN.md §9「画面の前提」）
             self._screen = opts.screen
             self.build = dataclasses.replace(self.build, args=opts.screen.args(self.build.args))
-            self.notes.append(f"画面を {opts.screen}に決めて起動した（--screen）。ランのあいだは、解像度・画面モードを変える"
+            self.notes.append(f"画面を「{opts.screen}」に決めて起動した（--screen・--fullscreen）。ランのあいだは、解像度・画面モードを変える"
                               "ボタンを押さず、設定を変えに行くときも変えない")
         if opts.mode != "aging":
             if "S-01" not in self.rules:
