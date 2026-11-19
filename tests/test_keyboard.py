@@ -206,3 +206,27 @@ def test_session_falls_back_to_mouse_when_focus_does_not_move():
     assert len(drv.clicks) == 1
     assert run.input_style.unreachable == {"UI/C": 1}
     assert any("`UI/C` に方向キーでたどり着けなかった（down" in n for n in run.notes)
+
+
+def test_modal_opened_by_a_keyboard_advance_is_closed_with_the_same_key():
+    # 本文送りを Space で押したら UI を隠すパネルが出た。Space を覚えていなかったので、Esc・右クリック・本文送りしか試さず、
+    # 15 分抜けられなかった
+    from yomawari.fuzz.loop import FuzzSession
+
+    s, st, run, _ = _session()
+    s.pointer.driver = KeyDriver()
+    s.pointer.platform.info = WindowInfo(1, ScreenRect(100, 50, 1280, 748), True)
+    s.publish = lambda e: None
+    assert asyncio.run(FuzzSession._do(s, Op("advance", via_key="space"))) is True
+    _game(s, st, "menu", name="HidePanel", modal=True, buttons=[])
+    assert s._toggle_keys == {"HidePanel": "space"}
+    toggle = s._toggle_op("escape")
+    assert toggle is not None and toggle.label == "key space"
+
+
+def test_arrow_keys_on_the_way_to_a_button_are_remembered():
+    from yomawari.fuzz.keyboard import NAV
+
+    s, st, run, drv, published = _menu_session()
+    asyncio.run(s._navigate(Op("click", st.find("UI/C"), via_key=NAV)))
+    assert [k for _, k in s._key_ops] == ["down", "down"]
