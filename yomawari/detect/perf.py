@@ -124,8 +124,52 @@ def load_perf(path: Path) -> dict[str, Any] | None:
     return perf if isinstance(perf, dict) else None
 
 
+def screen_key(d: dict[str, Any]) -> str | None:
+    """resolution イベントの中身から、画面の大きさと画面モード（"1920x1080 Windowed"）。"""
+    if not d.get("w") or not d.get("h"):
+        return None
+    return f"{d['w']}x{d['h']} {d.get('mode') or '?'}"
+
+
+def screen_of_run(run_dir: Path) -> str | None:
+    """画面を perf.json に残していなかったランの、いちばん長く使った画面。events.jsonl の resolution から求める
+    （次の resolution までの時間、なければランの終わりまで）。分からなければ None。"""
+    spans: Counter[str] = Counter()
+    cur: tuple[str, float] | None = None
+    last_t = 0.0
+    try:
+        with (run_dir / "events.jsonl").open(encoding="utf-8") as f:
+            for line in f:
+                if '"heartbeat"' in line:
+                    try:
+                        last_t = float(json.loads(line).get("t") or last_t)
+                    except ValueError:
+                        pass
+                    continue
+                if '"resolution"' not in line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if ev.get("kind") != "resolution" or ev.get("source") != "game":
+                    continue
+                key = screen_key(ev.get("data") or {})
+                t = float(ev.get("t") or 0.0)
+                if cur is not None:
+                    spans[cur[0]] += max(0.0, t - cur[1])
+                cur = (key, t) if key is not None else None
+                last_t = max(last_t, t)
+    except OSError:
+        return None
+    if cur is not None:
+        spans[cur[0]] += max(0.0, last_t - cur[1])
+    return spans.most_common(1)[0][0] if spans else None
+
+
 def load_history(runs_dir: Path, build: str, machine: str, current: Path | None, n: int) -> list[dict[str, Any]]:
-    """同じビルド名・同じマシンの、前回までのランの perf.json（新しい順に n 個）。"""
+    """同じビルド名・同じマシンの、前回までのランの perf.json（新しい順）。画面の大きさはランの終わりまで分からないので、
+    ここでは絞らず n 回分を超えて読み、PerfMonitor が同じ画面のものを n 個選ぶ（R-10）。"""
     out: list[dict[str, Any]] = []
     if n <= 0 or not runs_dir.is_dir():
         return out
@@ -138,9 +182,8 @@ def load_history(runs_dir: Path, build: str, machine: str, current: Path | None,
             continue
         if doc.get("build") == build and doc.get("machine") == machine:
             doc["run"] = d.name
+            doc["_dir"] = d
             out.append(doc)
-            if len(out) >= n:
-                break
     return out
 
 
@@ -164,7 +207,9 @@ class PerfMonitor:
         self.after_gap = float(ex["after_gap_sec"])
         self.samples: list[Sample] = []
         self.excluded: Counter[str] = Counter()  # 理由 → 外した秒数
-        self.history: list[dict[str, Any]] = []  # 前回までのランの perf.json（R-10）
+        self.history: list[dict[str, Any]] = []  # 前回までのランの perf.json（R-10。新しい順、画面では絞っていない）
+        self.screen: str | None = None  # いまの画面の大きさと画面モード（resolution）
+        self.screen_samples: Counter[str] = Counter()  # 画面ごとのサンプルの数（いちばん多い画面を、このランの画面とする）
         self.fired: set[str] = set()
         # いまの状態
         self.launch = 0
@@ -246,6 +291,8 @@ class PerfMonitor:
             self.settle_until = max(self.settle_until, ev.t + self.settle)
         elif k == "line":
             self.line = d.get("line_id")
+        elif k == "resolution":
+            self.screen = screen_key(d)
         elif k == "transition":
             name = str(d.get("name"))
             if d.get("phase") == "start":
@@ -346,6 +393,8 @@ class PerfMonitor:
         for r in reasons:
             self.excluded[r] += dt
         self.samples.append(s)
+        if self.screen is not None:
+            self.screen_samples[self.screen] += 1
         out: list[Issue] = []
         out += self._fps_drop(s, ev.wall)
         out += self._low_fps(s, ev.wall)
@@ -841,18 +890,43 @@ class PerfMonitor:
                                    f"（{row['n']} 秒分のサンプル）", key=scene, s=None, t=now, wall=wall)
         return out
 
+    def main_screen(self) -> str | None:
+        """このランでいちばん長く使った画面（サンプルの数がいちばん多い画面）。"""
+        return self.screen_samples.most_common(1)[0][0] if self.screen_samples else None
+
+    def comparable_history(self) -> list[dict[str, Any]]:
+        """前回までのランのうち、このランと同じ画面（大きさと画面モード）のもの。新しい順に history_runs 個。
+        画面が違うと描く画素の数が違い、FPS・GPU 使用率をそのまま比べられないため（run 2026-11-19_1617: 内蔵の
+        画面いっぱいのフルスクリーンで回し、1280x720 のウィンドウで回した前回までと比べて出した）。"""
+        mine = self.main_screen()
+        if mine is None:
+            return []
+        out: list[dict[str, Any]] = []
+        for h in self.history:
+            screen = h.get("screen")
+            if screen is None and isinstance(h.get("_dir"), Path):
+                screen = screen_of_run(h["_dir"])  # 画面を残していなかったころのラン
+            if screen == mine:
+                out.append(h)
+                if len(out) >= self.history_runs:
+                    break
+        return out
+
     def _vs_history(self, now: float, wall: str) -> list[Issue]:
-        if not self.has("R-10") or not self.history:
+        if not self.has("R-10"):
+            return []
+        history = self.comparable_history()
+        if not history:
             return []
         ratio = float(self.p("R-10", "ratio"))
         adds = {"cpu": float(self.p("R-10", "cpu_add")), "gpu": float(self.p("R-10", "gpu_add"))}
         gpu_drop = float(self.p("R-10", "gpu_fps_drop_ratio"))
         need = int(self.p("R-10", "min_samples"))
         need_cmd = int(self.p("R-10", "min_cmd_runs"))
-        runs = ", ".join(h["run"] for h in self.history)
+        runs = ", ".join(h["run"] for h in history)
         out: list[Issue] = []
         for scene, row in self.scene_stats().items():
-            past = [h["scenes"][scene] for h in self.history if scene in h.get("scenes", {})
+            past = [h["scenes"][scene] for h in history if scene in h.get("scenes", {})
                     and h["scenes"][scene].get("n", 0) >= need]
             if row["n"] < need or not past:
                 continue
@@ -873,7 +947,7 @@ class PerfMonitor:
         cur_cmds = self.command_stats()
         for key, row in cur_cmds.items():
             # 1 回だけの実行（今回も前回も）は、ばらつきと区別できないので比べない
-            past = [h["commands"][key] for h in self.history if key in h.get("commands", {})
+            past = [h["commands"][key] for h in history if key in h.get("commands", {})
                     and h["commands"][key].get("n", 0) >= need_cmd]
             if row.get("n", 0) < need_cmd or not past:
                 continue
@@ -897,7 +971,7 @@ class PerfMonitor:
     # --- 保存とレポート ---
 
     def summary_json(self, build: str, machine: str, build_id: str | None) -> dict[str, Any]:
-        return {"version": 1, "build": build, "machine": machine, "build_id": build_id,
+        return {"version": 1, "build": build, "machine": machine, "build_id": build_id, "screen": self.main_screen(),
                 "scenes": self.scene_stats(), "commands": self.command_stats()}
 
     def excluded_note(self) -> str | None:
@@ -913,11 +987,12 @@ class PerfMonitor:
                "遷移中・起動や scene の直後と、ゲーム以外が原因と見なした時間（「ハーネスの記録」）を除いた値。"
                "CPU・GPU はゲームのプロセスの使用率（CPU は 1 コアを 100% とした値）。メモリは MB。", ""]
         scenes = self.scene_stats()
+        history = self.comparable_history()
         past: dict[str, float | None] = {}
         for scene in scenes:
-            past[scene] = _median(h["scenes"][scene].get("fps") for h in self.history if scene in h.get("scenes", {}))
+            past[scene] = _median(h["scenes"][scene].get("fps") for h in history if scene in h.get("scenes", {}))
         out += ["### scene ごと", "",
-                "| scene | 秒 | FPS 中央値 | FPS 下位1% | CPU 中央値 / 最大 | GPU 中央値 / 最大 | RSS 最大 | Total 最大 | Gfx 最大 | 前回までの FPS 中央値 |",
+                "| scene | 秒 | FPS 中央値 | FPS 下位1% | CPU 中央値 / 最大 | GPU 中央値 / 最大 | RSS 最大 | Total 最大 | Gfx 最大 | 前回までの FPS 中央値（同じ画面） |",
                 "|---|---|---|---|---|---|---|---|---|---|"]
         for scene, r in sorted(scenes.items(), key=lambda kv: (kv[1]["fps"] is None, kv[1]["fps"] or 0)):
             out.append(f"| `{scene}` | {r['n']} | {_fmt(r['fps'], 1)} | {_fmt(r['fps_low'], 1)} | "

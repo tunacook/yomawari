@@ -20,6 +20,7 @@ class Sim:
         self.issues = []
         self.feed("harness", "launch")
         self.feed("game", "boot")
+        self.feed("game", "resolution", w=1920, h=1080, mode="Windowed")
         self.feed("game", "scene", name="Main")
         self.feed("game", "line", line_id="Main:1.0")
 
@@ -308,6 +309,48 @@ def test_r09_scene_heavier_than_the_rest_and_r10_history(repo_rules, repo_perf, 
     assert [i.rule_id for i in issues] == ["R-10"] and "60.0 → 40.0" in issues[0].detail
 
 
+def test_r10_compares_only_runs_on_the_same_screen(repo_rules, repo_perf, tmp_path):
+    # 画面の大きさが違うと描く画素の数が違うので、FPS・GPU をそのまま比べない（run 2026-11-19_1617: 内蔵の画面いっぱいの
+    # フルスクリーンで回し、1280x720 のウィンドウで回した前回までと比べて出した）
+    s = warm(repo_rules, repo_perf, n=100)
+    for x in s.engine.perf.samples:
+        x.fps = 40.0
+    perf = s.engine.perf
+    assert perf.main_screen() == "1920x1080 Windowed"
+    fast = {"Main": {"n": 100, "fps": 60.0}}
+    perf.history = [
+        {"run": "small", "screen": "1280x720 Windowed", "scenes": fast},
+        {"run": "same", "screen": "1920x1080 Windowed", "scenes": fast},
+    ]
+    issues = [i for i in s.engine.finish(s.t) if i.rule_id == "R-10"]
+    assert len(issues) == 1 and "（same）" in issues[0].detail
+    assert any("前回までの FPS 中央値（同じ画面）" in line for line in perf.report_lines())
+
+    # 画面を perf.json に残していなかったころのランは、events.jsonl の resolution から求める（長く使った画面）
+    old = tmp_path / "2026-11-01_0000_game"
+    old.mkdir()
+    evs = [
+        {"source": "game", "kind": "resolution", "t": 0.0, "data": {"w": 1280, "h": 720, "mode": "Windowed"}},
+        {"source": "game", "kind": "resolution", "t": 10.0, "data": {"w": 1920, "h": 1080, "mode": "Windowed"}},
+        {"source": "game", "kind": "heartbeat", "t": 500.0, "data": {}},
+    ]
+    (old / "events.jsonl").write_text("\n".join(json.dumps(e) for e in evs) + "\n")
+    perf.history = [{"run": old.name, "_dir": old, "scenes": fast}]
+    assert [h["run"] for h in perf.comparable_history()] == [old.name]
+    perf.history = [{"run": "unknown", "_dir": tmp_path / "missing", "scenes": fast}]
+    assert perf.comparable_history() == []  # 画面が分からないランとは比べない
+
+
+def test_r10_takes_history_runs_of_the_same_screen(repo_rules, repo_perf):
+    s = warm(repo_rules, repo_perf)
+    perf = s.engine.perf
+    other = [{"run": f"o{i}", "screen": "3024x1898 FullScreenWindow", "scenes": {}} for i in range(10)]
+    same = [{"run": f"s{i}", "screen": "1920x1080 Windowed", "scenes": {}} for i in range(10)]
+    perf.history = other + same
+    got = [h["run"] for h in perf.comparable_history()]
+    assert got == [f"s{i}" for i in range(perf.history_runs)]
+
+
 def test_report_lines_table(repo_rules, repo_perf):
     s = warm(repo_rules, repo_perf)
     lines = s.engine.perf.report_lines()
@@ -340,7 +383,7 @@ def test_r10_commands_need_repeats_and_a_bad_change_itself(repo_rules, repo_perf
     # のときだけ（run 2026-11-07_1809: 1 回だけ実行した演出で、CPU の上がり方 -16 → +3 ポイントを Major にした）
     s = warm(repo_rules, repo_perf)
     perf = s.engine.perf
-    perf.history = [{"run": "prev", "scenes": {}, "commands": {
+    perf.history = [{"run": "prev", "screen": "1920x1080 Windowed", "scenes": {}, "commands": {
         "@back once": {"n": 5, "cpu": -16.0},
         "@back few_past": {"n": 1, "cpu": 2.0},
         "@back small": {"n": 5, "cpu": -16.0},
