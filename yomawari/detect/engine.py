@@ -905,6 +905,12 @@ class AdvanceStallDetector(Detector):
     操作の結果でモーダルがなくなっても、modal_gap_sec のうちにゲームからモーダルな画面が開いた知らせが来たら、すべて閉じたとは
     みなさない（run 2026-11-18_1622: 一覧から詳細の画面へ移るとき、一覧がモーダルでなくなってから詳細が開くまでの約 0.1 秒に
     操作の結果をとり、数え直した。ハーネスはその一瞬を見ておらず確かめ直さなかったので、120 秒後に検出して再起動した）
+    確かめたあと数えないのは、ボタンのあるモーダル（人が開いて操作しているメニュー）が開いているあいだだけ。ボタンのない
+    モーダル（全画面の幕・UI を隠すパネルなど）しか開いていなければ、人が閉じる手立てがないので、ボタンのあるモーダルが
+    なくなったときから muted_idle_sec スクリプトが進まなければ検出する（run 2026-11-19_0958: ボタンのないモーダルが閉じない
+    まま 15 分進まなかったのに、確かめたあとだったので検出しなかった）。どのモーダルの上で確かめたかでも、いちばん上の
+    モーダルでも決めない（run 2026-11-17_2240: セーブ・ロードの画面を操作しているとき、確かめた瞬間にボタンのないパネルが
+    いちばん上に出ていた。run 2026-11-17_1204: 幕の上で確かめた直後に一覧の画面が開き、そこを操作していた）
     """
 
     PROGRESS = {"line", "choices", "scene"}
@@ -929,6 +935,10 @@ class AdvanceStallDetector(Detector):
         self.checked: str | None = None
         # 確かめたあと、操作の結果でモーダルがなくなった時刻（modal_gap_sec のあいだモーダルが開かなければ、すべて閉じたとする）
         self.closed: tuple[float, str] | None = None
+        # 開いているモーダルのうち、開いてからボタンを持ったことのあるもの（menu_close で外す）
+        self.buttoned: set[str] = set()
+        self.seen: set[str] = set()  # 開いた知らせを受けたモーダル（知らせのない画面は、ボタンがあるかが分からない）
+        self.exempt_at: float | None = None  # 確かめたあと、最後に数えなかった時刻
 
     def _settle_closed(self, now: float) -> None:
         """モーダルがなくなってから modal_gap_sec のあいだ、モーダルな画面が開かなかった: すべて閉じた。閉じたときから数え直す。"""
@@ -939,17 +949,31 @@ class AdvanceStallDetector(Detector):
         if self.muted:
             self.script_at, self.script_wall, self.fired = at, wall, False
 
+    def _exempt(self) -> bool:
+        """確かめたあと、いま数えないか。ボタンのあるモーダルが開いているあいだだけ数えない。確かめたモーダルの知らせを
+        受けていなければ、ボタンがあるかが分からないので、これまでどおり数えない。"""
+        return self.checked is not None and (bool(self.buttoned) or self.checked not in self.seen)
+
     def on_event(self, ev: Event) -> list[Issue]:
         d = ev.data
         if ev.kind == "launch" or ev.kind == "proc_exit":
             self.count, self.muted, self.script_at, self.heartbeat_at, self.fired = 0, False, None, None, False
             self.progress_at, self.checked, self.closed = None, None, None
+            self.buttoned.clear()
+            self.seen.clear()
+            self.exempt_at = None
             return []
         if ev.source == "game":
             if ev.kind == "heartbeat":
                 self.heartbeat_at = ev.t
             elif ev.kind == "menu" and d.get("modal"):
                 self.closed = None  # モーダルな画面が開いた（画面から画面へ移るあいだの一瞬だった）
+                self.seen.add(str(d.get("name")))
+                if d.get("buttons"):
+                    self.buttoned.add(str(d.get("name")))
+            elif ev.kind == "menu_close":
+                self.buttoned.discard(str(d.get("name")))
+                self.seen.discard(str(d.get("name")))
             elif ev.kind == "input":
                 muted = "Continue" in (d.get("muted") or [])
                 if muted != self.muted:
@@ -979,7 +1003,8 @@ class AdvanceStallDetector(Detector):
             self.closed = None
         if (d.get("kind") == "advance" and self.muted and top is not None and not d.get("interfered")
                 and (self.progress_at is None or self.progress_at < ev.t - float(d.get("waited") or 0))):
-            self.checked = str(top)  # 入力が止められたモーダルの上で、本文送りを押しても進まなかった
+            # 入力が止められたモーダルの上で、本文送りを押しても進まなかった
+            self.checked, self.exempt_at = str(top), None
         if d.get("kind") != "advance" or d.get("interfered") or self.muted or not _alive(ev, self.alive):
             return []
         self.count += 1
@@ -1000,9 +1025,15 @@ class AdvanceStallDetector(Detector):
 
     def on_tick(self, now: float, launch: int) -> list[Issue]:
         self._settle_closed(now)
-        if self.checked is not None:
-            return []  # モーダルの上で、本文送りが進まないことを確かめた（閉じるまで数えない）
-        if not self.muted or self.fired or self.script_at is None or now - self.script_at < self.idle:
+        if self._exempt():
+            # モーダルの上で本文送りが進まないことを確かめ、ボタンのあるモーダルが開いている（閉じるまで数えない）
+            self.exempt_at = now
+            return []
+        if not self.muted or self.fired or self.script_at is None:
+            return []
+        # 確かめたあとボタンのあるモーダルがなくなり、ボタンのないモーダルだけが残った: なくなったときから数える
+        since = self.script_at if self.checked is None or self.exempt_at is None else max(self.script_at, self.exempt_at)
+        if now - since < self.idle:
             return []
         if self.heartbeat_at is None or now - self.heartbeat_at > self.alive:
             return []  # 止まっている・固まっているのは H-01 などで見る
