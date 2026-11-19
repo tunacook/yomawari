@@ -307,6 +307,29 @@ def test_save_first_does_not_count_time_inside_flow():
     assert any("セーブできなかった" in n for n in run.notes)
 
 
+def test_save_first_does_not_press_save_steps_inside_flow():
+    # run 2026-11-19_2230: 流れの途中（一覧の画面）で、セーブを開く右クリックを優先して押し続けた。一覧の上では右クリックが
+    # 反応せず、流れの途中は時間を数えないので、30 分に 329 回押した
+    s, st, run = _session(launch=0)
+    run.opened_via["QuickMenuUI"] = "right_click"
+    _show(st, "QuickMenuUI", RCLICK, RCLICK_TEXT)
+    _save_weights(s, st)
+    _feed(st, "menu_close", name="QuickMenuUI")
+    plain = _save_weights(s, st)
+    assert not s._saved_for_exit(1000.0)
+    run.flow.active = object()
+    w = _save_weights(s, st)
+    assert w["right_click"] == plain["right_click"]
+    # セーブ画面が出ていても、流れの途中はセーブのボタンを優先しない
+    _show(st, "QuickMenuUI", RCLICK, RCLICK_TEXT)
+    w = _save_weights(s, st)
+    assert w["click QuickMenuUI/ToSave"] == CLICK
+    # 流れが終われば、またセーブしようとする
+    run.flow.active = None
+    w = _save_weights(s, st)
+    assert w["click QuickMenuUI/ToSave"] == CLICK * SAVE_FACTOR
+
+
 def test_exit_without_save_waits_for_flow_to_end():
     # セーブできないまま終了を試すことにしても、流れの途中では試さない。セーブしたら、流れの途中でも今までどおり試せる
     s, st, run = _session(launch=0)
