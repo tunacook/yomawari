@@ -218,6 +218,10 @@ class FuzzRun:
     # 質問ごとの正解（DESIGN.md §9「答えの選び方」）。質問（流れの名前, 始めたときの行）→ プロファイルの answers のうち当たったもの
     ctx_answers: dict[Any, tuple[Answer, ...]] = field(default_factory=dict)
     wrong_left: dict[Any, int] = field(default_factory=dict)  # 質問 → この流れでまだわざと答える外れの数
+    # (質問, ここまでに選んだものの並び) → その選ぶ手順で見えていた、正解に沿う候補。あとの手順で、正解から外れたものを
+    # 選んだかを見る（_off_answer）
+    answer_seen: dict[tuple[Any, tuple[str, ...]], set[str]] = field(default_factory=dict)
+    off_answer_noted: set[Any] = field(default_factory=set)  # 正解から外れて選び直したことを、ハーネスの記録に書いた質問
     wrong_noted: set[Any] = field(default_factory=set)  # 正解のはずが外れだった組み合わせ（「ハーネスの記録」に書いたもの）
     wrong_given: set[Any] = field(default_factory=set)  # わざと答えた外れ (質問, 選んだものの並び)
     advice_seen: set[Any] = field(default_factory=set)
@@ -969,6 +973,11 @@ class FuzzSession:
         elif known and wrong and fresh <= known and options - known:
             # わざと外れを答えるのに、まだ答えたことのない外れがない: 外れと分かっているもののうち、選んだ回数の少ないもの
             fresh = tracker.least_picked(options - known)
+        if known and not wrong and step is not None and step.picks and tracker.ctx is not None:
+            ok = {o for o in known if (tracker.ctx, (*tracker.path, o)) not in tracker.wrong_now}
+            if ok:
+                run.answer_seen[(tracker.ctx, tuple(tracker.path))] = ok
+        off = not wrong and self._off_answer()
         press_ans = self._press_answer() if step is not None and step.picks and not wrong else ()
         if options and not fresh:
             tracker.note_exhausted()
@@ -984,6 +993,9 @@ class FuzzSession:
         # （run 2026-11-12_0959: 言葉を選ぶ → 「この言葉で答える」の画面から一覧へ戻る、を 3 時間 15 分くり返した）
         spent = (step is not None and tracker.spent() and not tracker.all_spent()
                  and (not step.picks or not options))
+        # 正解が分かっている質問で、正解に沿う候補が見えていたのに別のものを選んでいた（正解へ向かう途中で、ふだんの操作で
+        # 別の項目を押した）。そのまま答えに進まず、試し終えた枝と同じく前の手順へ戻って選び直す
+        spent = spent or (off and step is not None)
         goal = None if spent or press_ans else self._flow_goal(row, fresh, quiet, texts, known, wrong)
         out = []
         for op in cands:
@@ -1318,6 +1330,27 @@ class FuzzSession:
         if learned:
             return {o for o in options if any(len(r) > depth and r[:depth] == path and r[depth] == o for r in learned)}
         return set() if answers else None
+
+    def _off_answer(self) -> bool:
+        """正解が分かっている質問で、前の選ぶ手順で正解に沿う候補が見えていたのに、別のものを選んでいるか。
+
+        run 2026-11-19_2230: 正解の思い出へ方向キーで向かったが一覧が動かず、ふだんの操作で別の思い出を押した。流れは
+        その思い出のまま言葉を選び、正解が分かっている質問に外れを答えた（正解に沿う候補がないと、自由に選ぶため）。
+        正解がまだ見えていない（伏せ字・まだ開示されていない）選ぶ手順では、覚えていないので外れとみなさない。"""
+        run, tracker = self.run, self.run.flow
+        ctx, path = tracker.ctx, tuple(tracker.path)
+        if ctx is None:
+            return False
+        for k in range(len(path)):
+            seen = run.answer_seen.get((ctx, path[:k]))
+            if seen and path[k] not in seen:
+                if ctx not in run.off_answer_noted:
+                    run.off_answer_noted.add(ctx)
+                    run.notes.append(f"流れ「{ctx[0]}」の `{ctx[1]}` で、正解に沿う `{self._text_of(sorted(seen)[0]) or sorted(seen)[0]}`"
+                                     f" が見えていたのに `{self._text_of(path[k]) or path[k]}` を選んでいたので、答えに進まず"
+                                     "戻って選び直した")
+                return True
+        return False
 
     def _press_answer(self) -> tuple[str, ...]:
         """選ばずに押すのが正解のボタン（プロファイルの answers の press）。"""

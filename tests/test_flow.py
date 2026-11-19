@@ -1642,3 +1642,50 @@ def test_load_restores_the_line_of_the_save():
     game("load", slot="Other", type="Normal", phase="start")
     game("load", slot="Other", type="Normal", phase="end")
     assert st.line["line_id"] == "episodes/ep1:30.0" and not st.line_restored
+
+
+def _known_answer_question(pick):
+    """思い出の一覧で、正解の pick を書いた質問に着いたところ（要約を閉じるボタンは流れから外れる操作）。"""
+    s, st, run, _ = _session({"wrong_answer_prob": 0.0})
+    doc = tomllib.loads(ONCE_PROFILE)
+    doc["flow"][0]["avoid"] = ["EpisodeUI/CloseEpisodeButton"]
+    doc["flow"][0]["answers"] = [{"at": "main/chapter2_04:3*", "pick": pick}]
+    run.flow = FlowTracker(parse_flows(doc["flow"]))
+    slots = [{"name": "AlbumSlot (Clone)", "rect": [0.1 + 0.2 * i, 0.3, 0.25 + 0.2 * i, 0.5]} for i in range(3)]
+    _line(s, st, "main/chapter2_04:323.0", "どこだっけ？")
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=slots)
+    st.set_read_text({SLOT: "No.001", f"{SLOT}#1": "No.002", f"{SLOT}#2": "No.003"})
+    _weights(s, st)
+    return s, st, run
+
+
+def test_picking_off_the_known_answer_goes_back_to_pick_again():
+    # 正解の思い出が見えていたのに、ふだんの操作で別の思い出を押した: そのまま答えに進まず、要約を閉じて選び直す
+    # （run 2026-11-19_2230: 正解へ向かう途中で別の思い出を押し、その思い出の言葉で答えた）
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    s, st, run = _known_answer_question(["No.002*", "空"])
+    run.flow.pressed(f"{SLOT}#2", "AlbumSlot (Clone)", True)
+    _only(st, "EpisodeUI", SUMMARY)
+    w = _weights(s, st)
+    assert w["click EpisodeUI/CloseEpisodeButton"] == click * k
+    assert w["click EpisodeUI/ReadEpisodeButton"] < click * k and w["click EpisodeUI/ShowWordsButton"] < click * k
+    assert any("正解に沿う `No.002` が見えていたのに `No.003` を選んでいた" in n for n in run.notes)
+    # 正解の思い出を選んでいれば、そのまま進める
+    s, st, run = _known_answer_question(["No.002*", "空"])
+    run.flow.pressed(f"{SLOT}#1", "AlbumSlot (Clone)", True)
+    _only(st, "EpisodeUI", SUMMARY)
+    w = _weights(s, st)
+    assert w["click EpisodeUI/ReadEpisodeButton"] == click * k
+    assert w["click EpisodeUI/CloseEpisodeButton"] < click * k
+    assert not any("正解に沿う" in n for n in run.notes)
+
+
+def test_picking_another_while_the_known_answer_is_not_shown_goes_on():
+    # 正解の思い出がまだ一覧にない（伏せ字・まだ開示されていない）: ほかの思い出を選んでも、外れとみなさず進める
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    s, st, run = _known_answer_question(["No.009*", "空"])
+    run.flow.pressed(f"{SLOT}#2", "AlbumSlot (Clone)", True)
+    _only(st, "EpisodeUI", SUMMARY)
+    w = _weights(s, st)
+    assert w["click EpisodeUI/ReadEpisodeButton"] == click * k
+    assert not run.answer_seen
