@@ -38,6 +38,7 @@ from .purpose import MODES, PurposeError
 from .purpose import resolve as resolve_purpose
 from .runs import PruneResult, prune_runs
 from .savestate import SaveState, resolve_target
+from .screen import ScreenError, parse_screen
 from .supervisor import Supervisor, child_state_path, write_child_state
 from .sensors.window import ClientArea
 from .state import GameState
@@ -223,6 +224,11 @@ def run(
         None, "--display-off/--no-display-off",
         help="ゲームが起動したあと、画面（ディスプレイ）を消す（macOS: pmset displaysleepnow）。既定は yomawari.toml の run.display_off",
     ),
+    screen: str | None = typer.Option(
+        None, "--screen",
+        help="ランの画面の前提。「1920x1080」なら、その大きさのウィンドウで起動し、ランのあいだは解像度・画面モードを変えるボタンを"
+             "押さない（変わったら起動し直す。起動したときから違えばランを止める）。既定は yomawari.toml の run.screen（空: 決めない）",
+    ),
     forget_all: bool = typer.Option(
         False, "--forget",
         help="ランを始める前に、そのゲームで覚えたこと（runs/_experience/<ゲーム>.json）をすべて消す（.bak-<日時> に写してから）。"
@@ -234,6 +240,11 @@ def run(
         err.print(f"[red]--mode が不正です: {mode}[/]")
         raise typer.Exit(EXIT_HARNESS_ERROR)
     cfg = _config(ctx)
+    try:
+        fixed_screen = parse_screen(str(screen if screen is not None else cfg.run["screen"]))
+    except ScreenError as e:
+        err.print(f"[red]{e}[/]")
+        raise typer.Exit(EXIT_HARNESS_ERROR) from None
     if child_state_path() is None and cfg.run["watchdog"] and not no_watchdog:
         raise typer.Exit(_supervise(cfg, build, build_path, no_open))
     try:
@@ -290,7 +301,10 @@ def run(
         display_off=dark,
         display_off_delay_sec=float(rc["display_off_delay_sec"]),
         continue_previous=bool(rc["continue"] if cont is None else cont),
+        screen=fixed_screen,
     )
+    if fixed_screen is not None:
+        console.print(f"画面: {fixed_screen}で起動し、ランのあいだは変えさせません")
     if opts.continue_previous:
         console.print("前のランのセーブの続きから遊びます（セーブが見つからなければ、はじめから）")
     live = Live(Text("起動中…"), console=console, refresh_per_second=2) if console.is_terminal else None

@@ -7,7 +7,7 @@ from yomawari.detect.engine import Engine
 from yomawari.events import Event
 from yomawari.fuzz.experience import Experience
 from yomawari.fuzz.ops import Op
-from yomawari.fuzz.settings_tour import SettingsTour, VolumeHold
+from yomawari.fuzz.settings_tour import SCREEN_KEYS, SettingsTour, VolumeHold
 
 from .test_fuzz import _LANG, _PAUSE, _SETTINGS, _locale_session
 
@@ -101,6 +101,19 @@ def test_tour_pauses_and_gives_up():
     s._step_tour(16.0)
     assert run.tour.target is None and run.tour.gave_up == {"reveal_speed": 1}
     assert any("reveal_speed を変えに行ったが" in n for n in run.notes)
+
+
+def test_tour_does_not_change_the_fixed_screen():
+    # --screen で画面を決めたランでは、解像度・画面モードを変えに行かない（変わった回数がいちばん少なくても）
+    tour = SettingsTour(interval=1, timeout=50, factor=20, next_t=0.0, fixed=SCREEN_KEYS)
+    buttons = {"SettingsUI/Res": {"resolution": "1920x1080"}, "SettingsUI/Mode": {"screen_mode": "FullScreenWindow"},
+               "SettingsUI/Option_a": {"reveal_speed": 1}}
+    tour.changes["reveal_speed"] = 3
+    tour.step(0.0, buttons, random.Random(1))
+    assert tour.target == "reveal_speed"
+    # 決めた画面の設定は、変わらなくても「一度も変わらなかった」に挙げない
+    tour.keys = {"resolution", "screen_mode", "reveal_speed"}
+    assert not any("一度も変わらなかった" in n for n in tour.notes(buttons))
 
 
 def test_tour_disabled_by_default():

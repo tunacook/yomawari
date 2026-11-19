@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 from yomawari import cli
 from yomawari.config import RUN_DEFAULTS, SENSOR_DEFAULTS, BuildConfig
 from yomawari.platform.mac import MacPlatform
+from yomawari.screen import Screen
 from yomawari.watchdog import Harness, RunOptions
 
 from .conftest import RULES_PATH, scaled_rules
@@ -22,13 +23,13 @@ SENSORS = {**SENSOR_DEFAULTS, "log_poll_sec": 0.02, "process_poll_sec": 0.05, "c
 RUN = {**RUN_DEFAULTS, "quit_timeout_sec": 2.0, "max_restarts": 1}
 
 
-def run_harness(tmp_path, mock_app, fake_platform, args, seconds, run_cfg=RUN):
+def run_harness(tmp_path, mock_app, fake_platform, args, seconds, run_cfg=RUN, screen=None):
     fake_platform.save.mkdir(parents=True)
     (fake_platform.save / "slot1.dat").write_text("original")
     build = BuildConfig("mock", mock_app, args=["--mock-hb", "0.05", *args])
     exe = MacPlatform().resolve_executable(mock_app)
     h = Harness(build, exe, fake_platform, scaled_rules(SCALE), RULES_PATH, tmp_path / "runs", run_cfg, SENSORS)
-    return asyncio.run(h.run(RunOptions(hours=seconds / 3600, mode="aging", seed="1")))
+    return asyncio.run(h.run(RunOptions(hours=seconds / 3600, mode="aging", seed="1", screen=screen)))
 
 
 def events(result):
@@ -63,6 +64,40 @@ def test_crash_is_c01_and_restarts(tmp_path, mock_app, fake_platform):
     report = r.report_path.read_text()
     assert "[C-01]" in report and "回数: 2（起動 #0, #1）" in report and "打ち切り" in report
     assert_restored(fake_platform, tmp_path)
+
+
+def test_screen_is_launched_as_given(tmp_path, mock_app, fake_platform):
+    # ビルドの args の画面の指定は外して、--screen の大きさで起動する
+    r = run_harness(tmp_path, mock_app, fake_platform,
+                    ["--mock-mode", "screen", "-screen-width", "1280", "-screen-height", "720"], 1.5,
+                    screen=Screen(1920, 1080))
+    cmd = events(r)[0]["data"]["cmd"]
+    assert cmd.count("-screen-width") == 1 and cmd[cmd.index("-screen-width") + 1] == "1920"
+    report = r.report_path.read_text()
+    assert "起動回数 / 再起動回数 | 1 / 0" in report and "画面を 1920x1080 のウィンドウに決めて起動した" in report
+    assert "起動できなかった" not in report
+
+
+def test_screen_not_honored_stops_the_run(tmp_path, mock_app, fake_platform):
+    # 起動したときから違えば、起動し直しても同じなので止める
+    r = run_harness(tmp_path, mock_app, fake_platform, ["--mock-mode", "screen", "--mock-ignore-screen"], 4,
+                    screen=Screen(1920, 1080))
+    report = r.report_path.read_text()
+    assert "起動回数 / 再起動回数 | 1 / 0" in report
+    assert "決めた画面（1920x1080 のウィンドウ）で起動できなかったため、ランを止めました" in report
+    assert "ゲームの画面は 1280x720（Windowed）" in report
+    assert_restored(fake_platform, tmp_path)
+
+
+def test_screen_changed_during_the_run_relaunches(tmp_path, mock_app, fake_platform):
+    r = run_harness(tmp_path, mock_app, fake_platform,
+                    ["--mock-mode", "screen", "--mock-resize", "2560x1440", "--mock-after", "0.4"], 4,
+                    screen=Screen(1920, 1080))
+    report = r.report_path.read_text()
+    assert ("ランのあいだに画面が 2560x1440（Windowed）に変わったため、決めた画面（1920x1080 のウィンドウ）で起動し直しました"
+            "（起動 #0）") in report
+    # 起動し直したあとも変わるモックなので、再起動の上限（1 回）で打ち切る
+    assert "起動回数 / 再起動回数 | 2 / 1" in report
 
 
 def test_crash_dump_is_c02(tmp_path, mock_app, fake_platform):
@@ -153,6 +188,13 @@ def test_cli_run_without_build_and_no_tty_exits_2(tmp_path):
     res = CliRunner().invoke(cli.app, ["--config", str(cfg), "run", "--no-open"])
     assert res.exit_code == 2
     assert "端末ではありません" in res.output
+
+
+def test_cli_run_with_bad_screen_exits_2(tmp_path):
+    cfg = write_config(tmp_path, "")
+    res = CliRunner().invoke(cli.app, ["--config", str(cfg), "run", "--no-open", "--screen", "big"])
+    assert res.exit_code == 2
+    assert "1920x1080" in res.output
 
 
 def test_cli_run_and_builds(tmp_path, mock_app, monkeypatch, fake_platform):
