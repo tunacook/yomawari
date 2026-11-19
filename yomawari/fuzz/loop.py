@@ -1674,6 +1674,11 @@ class FuzzSession:
                 run.save_routes[menu] = route
         if run.save_first_until is None:
             return cands
+        if run.flow.active is not None:
+            # 流れの途中は、セーブしようとする時間を数えない（_saved_for_exit）のと同じく、セーブの操作も優先しない。
+            # 優先すると、流れの画面の上で反応しない右クリックを押し続け、時間も数えないので終わらない
+            # （run 2026-11-19_2230: 一覧の画面の上で 30 分に 329 回、45 分に 289 回、右クリックを押し続けた）
+            return cands
         cands = [op for op in cands if op.by != "list"] or cands
         boost = float(self.cfg["save_first_factor"])
         if menus:
