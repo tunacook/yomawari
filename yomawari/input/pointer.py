@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from ..platform import Platform
 from ..sensors.screen import Shot
-from ..sensors.window import ClientArea, ScreenRect, client_area
+from ..sensors.window import FULLSCREEN_MODES, ClientArea, ScreenRect, client_area
 from ..state import GameState, Target
 from .base import InputDriver
 
@@ -85,6 +85,10 @@ class Pointer:
         if not info.on_screen:
             raise PointerError("ゲームのウィンドウが画面に出ていません（最小化など）")
         area = self._client(info.bounds)
+        if self._fullscreen():
+            # メニューバー・Dock は隠れていて、画面の端までゲーム。見える範囲（メニューバーを除く）で断らない
+            self._visible = None
+            return area
         visible_area = getattr(self.platform, "visible_area", None)
         self._visible = visible_area(info.bounds) if visible_area is not None else None
         if self._visible is not None and not _inside(info.bounds, self._visible):
@@ -95,10 +99,13 @@ class Pointer:
         res = self.state.resolution
         if not res or not res.get("w") or not res.get("h"):
             raise PointerError("resolution イベントがまだ来ていません")
-        area = client_area(bounds, float(res["w"]), float(res["h"]))
+        area = client_area(bounds, float(res["w"]), float(res["h"]), self._fullscreen())
         if area is None:
             raise PointerError(f"ウィンドウの外枠 {bounds} と解像度 {res['w']}x{res['h']} が合いません")
         return area
+
+    def _fullscreen(self) -> bool:
+        return (self.state.resolution or {}).get("mode") in FULLSCREEN_MODES
 
     def _fit(self, bounds: ScreenRect, area: ClientArea, visible: ScreenRect) -> ClientArea:
         """ウィンドウが見える範囲からはみ出している（ゲームの設定でウィンドウを大きくした、など）。人がするように、

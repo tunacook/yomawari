@@ -21,6 +21,19 @@ def test_screen_args_replace_the_build_args():
                                              "-screen-width", "1920", "-screen-height", "1080"]
 
 
+def test_fullscreen():
+    assert parse_screen("", fullscreen=True) == Screen(None, None, True)
+    assert parse_screen("1920x1080", fullscreen=True) == Screen(1920, 1080, True)
+    assert str(Screen(None, None, True)) == "フルスクリーン" and str(Screen(1920, 1080, True)) == "1920x1080 のフルスクリーン"
+    # 大きさを決めなければ、画面モードの指定だけを付ける
+    assert Screen(None, None, True).args(["-screen-width", "1280", "-force-metal"]) == ["-force-metal", "-screen-fullscreen", "1"]
+    assert Screen(1920, 1080, True).args([]) == ["-screen-fullscreen", "1", "-screen-width", "1920", "-screen-height", "1080"]
+    # 大きさを決めなければ、画面モードだけを比べる
+    assert Screen(None, None, True).matches(3024, 1964, "FullScreenWindow")
+    assert not Screen(None, None, True).matches(1280, 720, "Windowed")
+    assert not Screen(1920, 1080, True).matches(3024, 1964, "FullScreenWindow")
+
+
 def test_screen_matches_the_resolution_event():
     s = Screen(1920, 1080)
     assert s.matches(1920, 1080, "Windowed")

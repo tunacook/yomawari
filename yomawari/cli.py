@@ -229,6 +229,11 @@ def run(
         help="ランの画面の前提。「1920x1080」なら、その大きさのウィンドウで起動し、ランのあいだは解像度・画面モードを変えるボタンを"
              "押さない（変わったら起動し直す。起動したときから違えばランを止める）。既定は yomawari.toml の run.screen（空: 決めない）",
     ),
+    fullscreen: bool | None = typer.Option(
+        None, "--fullscreen/--windowed",
+        help="ボーダーレスのフルスクリーンで起動し、ランのあいだは変えさせない（--screen があればその大きさで）。"
+             "既定は yomawari.toml の run.fullscreen（false）",
+    ),
     forget_all: bool = typer.Option(
         False, "--forget",
         help="ランを始める前に、そのゲームで覚えたこと（runs/_experience/<ゲーム>.json）をすべて消す（.bak-<日時> に写してから）。"
@@ -241,7 +246,8 @@ def run(
         raise typer.Exit(EXIT_HARNESS_ERROR)
     cfg = _config(ctx)
     try:
-        fixed_screen = parse_screen(str(screen if screen is not None else cfg.run["screen"]))
+        fixed_screen = parse_screen(str(screen if screen is not None else cfg.run["screen"]),
+                                    bool(cfg.run["fullscreen"] if fullscreen is None else fullscreen))
     except ScreenError as e:
         err.print(f"[red]{e}[/]")
         raise typer.Exit(EXIT_HARNESS_ERROR) from None

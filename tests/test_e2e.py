@@ -74,7 +74,18 @@ def test_screen_is_launched_as_given(tmp_path, mock_app, fake_platform):
     cmd = events(r)[0]["data"]["cmd"]
     assert cmd.count("-screen-width") == 1 and cmd[cmd.index("-screen-width") + 1] == "1920"
     report = r.report_path.read_text()
-    assert "起動回数 / 再起動回数 | 1 / 0" in report and "画面を 1920x1080 のウィンドウに決めて起動した" in report
+    assert "起動回数 / 再起動回数 | 1 / 0" in report and "画面を「1920x1080 のウィンドウ」に決めて起動した" in report
+    assert "起動できなかった" not in report
+
+
+def test_fullscreen_is_launched_as_given(tmp_path, mock_app, fake_platform):
+    r = run_harness(tmp_path, mock_app, fake_platform,
+                    ["--mock-mode", "screen", "-screen-fullscreen", "0", "-screen-width", "1280"], 1.5,
+                    screen=Screen(None, None, True))
+    cmd = events(r)[0]["data"]["cmd"]
+    assert cmd[cmd.index("-screen-fullscreen") + 1] == "1" and "-screen-width" not in cmd
+    report = r.report_path.read_text()
+    assert "起動回数 / 再起動回数 | 1 / 0" in report and "画面を「フルスクリーン」に決めて起動した" in report
     assert "起動できなかった" not in report
 
 

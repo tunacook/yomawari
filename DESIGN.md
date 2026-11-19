@@ -453,10 +453,10 @@ role_min_confidence = 0.7    # ボタンの見た目からの役割の推定（�
 - 終了時のセーブ・設定の復元。異常終了したら、次回起動時に未復元を検出して復元する
 - `caffeinate -dimsu -w <ハーネスの pid>` で、ランのあいだ画面とシステムのスリープを防ぐ（`platform` の `keep_awake`）
 - `--display-off`（`run.display_off`）なら、ゲームが起動して `run.display_off_delay_sec` 秒後に画面を消す（macOS: `pmset displaysleepnow`。`platform` の `display_off`）。開始時に、画面が消えてからロックされるまでの時間（`sysadminctl -screenLock status`。`platform` の `screen_lock_delay`）を見て、すぐロックされる設定なら注意を出し、「ハーネスの記録」にも書く。ロック中は入力を受け付けないので、下の「操作できなかった時間」に出る
-- 画面の前提: `--screen 1920x1080`（`run.screen`）なら、その大きさのウィンドウで起動し、ランのあいだは変えさせない。決まった解像度で遊ぶ人の環境を前提に見るため（`yomawari/screen.py`）
-  - ビルドの `args` から画面の大きさ・画面モードの指定（`-screen-width` / `-screen-height` / `-screen-fullscreen` / `-window-mode` / `-popupwindow`）を外し、`-screen-fullscreen 0 -screen-width <w> -screen-height <h>` を付けて起動する
+- 画面の前提: `--screen 1920x1080`（`run.screen`）なら、その大きさのウィンドウで起動し、ランのあいだは変えさせない。`--fullscreen`（`run.fullscreen`）ならボーダーレスのフルスクリーンで起動する（`--screen` があればその大きさで、なければ大きさはゲームに任せる）。決まった解像度・画面モードで遊ぶ人の環境を前提に見るため（`yomawari/screen.py`）
+  - ビルドの `args` から画面の大きさ・画面モードの指定（`-screen-width` / `-screen-height` / `-screen-fullscreen` / `-window-mode` / `-popupwindow`）を外し、`-screen-fullscreen 0`（フルスクリーンなら `1`）と、大きさを決めたなら `-screen-width <w> -screen-height <h>` を付けて起動する
   - ガードで、役割 `system_setting`（画面モード・解像度などを変える）のボタンを `deny` にする（イレギュラー操作でも押さない）。設定を変えに行くときも、`screen_mode`・`resolution` は選ばない
-  - ゲームの `resolution`（`w` / `h` / `mode`）を決めたもの（`mode` は `Windowed`）と比べる。起動して最初の `resolution` から違えば、起動し直しても同じなので、ランを止める（ディスプレイより大きいウィンドウは開けない、など。「ハーネスの記録」と中断の理由に書く）。途中で変わったら（役割をまだ知らないボタンで変わった、など）、起動し直して元の大きさに戻し、「ハーネスの記録」に書く。変えたボタンは役割 `system_setting` と確定するので、以後は押さない
+  - ゲームの `resolution`（`w` / `h` / `mode`）を決めたもの（`mode` はウィンドウなら `Windowed`、フルスクリーンなら `FullScreenWindow`。大きさを決めていなければ `mode` だけ）と比べる。起動して最初の `resolution` から違えば、起動し直しても同じなので、ランを止める（ディスプレイより大きいウィンドウは開けない、など。「ハーネスの記録」と中断の理由に書く）。途中で変わったら（役割をまだ知らないボタンで変わった、など）、起動し直して元の大きさに戻し、「ハーネスの記録」に書く。変えたボタンは役割 `system_setting` と確定するので、以後は押さない
 - 画面のロック中（`platform` の `screen_locked`）とゲームを前面にできないときは、OS が入力を受け付けない。試す間隔を `blocked_wait_sec` あけ、`blocked_note_sec` 以上続いた時間を「ハーネスの記録」に書く。`events.jsonl` には `input_blocked` / `input_resumed` を1回ずつ出す
 
 保存場所（macOS、ビルド）:
@@ -486,6 +486,8 @@ role_min_confidence = 0.7    # ボタンの見た目からの役割の推定（�
 - 「正規化座標 → クライアント座標 → スクリーン座標」の変換は1か所にまとめる
 - Retina では、キャプチャはピクセル、入力はポイント単位（2倍差）
 - 描画領域の求め方: OS から取れるのはウィンドウの外枠（タイトルバー込み、ポイント）だけなので、ゲームの `resolution`（描画領域のピクセル数）と組み合わせる。倍率 = `w` / 外枠の幅、描画領域の高さ = `h` / 倍率、描画領域は外枠の下端に揃える。辻褄が合わなければ押さない
+  - フルスクリーン（`mode` が `FullScreenWindow` / `ExclusiveFullScreen`）では、ゲームの画面が外枠全体に引き伸ばされているとみなす。ノッチのある画面では、ウィンドウはノッチの下（例: 1512x949 ポイント）なのに、ゲームは画面全体の解像度（3024x1964）を出し、縦横の比が合わない。外部モニタ（3360x1890 ポイントに 1920x1080）では、撮った画面のボタンの文字が引き伸ばしの位置に合うことを確かめた。ノッチのある画面で上が切れているかは、まだ確かめていない
+  - フルスクリーンではメニューバー・Dock が隠れているので、下の「ウィンドウが画面からはみ出したとき」の見える範囲の確認とドラッグはしない
 - 押す前に、ゲームが前面でなければ前面にする。押す直前に、押す要素が最新の状態に残っているか確かめる
 - macOS の前面のアプリは `lsappinfo front` で調べる。`NSWorkspace.frontmostApplication` は、イベントループを回していないプロセス（このハーネス）では起動時の値のまま更新されない。前面化は `NSRunningApplication.activateWithOptions_` で足りる（System Events の AppleScript は要らない）
 - ウィンドウは、画面に出ているものを優先していちばん大きいものを選ぶ。Unity のゲームは画面外に隠れたウィンドウ（500x500 など）を持つことがあり、大きさだけで選ぶと取り違える
