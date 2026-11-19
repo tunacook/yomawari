@@ -16,6 +16,9 @@
   覚えてハーネスの記録に書き、そのボタンは以後マウスで押す（キーボードで遊ぶ人が詰まるところ）
 - キーボードで押せない操作（ホイール・ドラッグ）は、キーボード中心なら重みに混ぜる割合を掛ける（0 なら、ほかに操作が
   あるあいだは入れない）
+- 一覧の目標へ方向キーで動かしても、続けて list_key_give_up 回近づかなければ（どの項目にもフォーカスがなく、方向キーで
+  一覧が動かないゲームがある）、その画面は keyless_lists に入れ、以後はホイール・ドラッグで動かす（Op の mouse_needed。
+  混ぜる割合を掛けない）。ハーネスの記録に書く（キーボードで遊ぶ人が一覧の先を見られないかもしれない）
 """
 
 from __future__ import annotations
@@ -61,6 +64,8 @@ class InputStyle:
     menu_gave_up_noted: bool = False
     unreachable: Counter[str] = field(default_factory=Counter)  # ボタン → 方向キーでたどり着けなかった回数
     reached: Counter[str] = field(default_factory=Counter)  # ボタン → 方向キーでたどり着いて押した回数
+    # 方向キーで一覧が動かなかった画面（以後、その画面の一覧はホイール・ドラッグで動かす）
+    keyless_lists: set[str] = field(default_factory=set)
 
     @classmethod
     def from_cfg(cls, cfg: dict[str, Any]) -> InputStyle:
@@ -88,7 +93,7 @@ class InputStyle:
         """キーボード中心なら、キーボードで押せない操作の重みに混ぜる割合を掛ける。ほかに操作がなければそのまま。"""
         if self.main != "keyboard":
             return cands
-        mouse_only = [op for op in cands if op.kind in MOUSE_ONLY and not op.irregular]
+        mouse_only = [op for op in cands if op.kind in MOUSE_ONLY and not op.irregular and not op.mouse_needed]
         if not mouse_only:
             return cands
         if self.mix <= 0:
@@ -175,6 +180,9 @@ class InputStyle:
         if self.unreachable:
             out.append("方向キーでたどり着けなかったボタン（以後はマウスで押した。キーボードで遊ぶ人が押せないかもしれない）: "
                        + "、".join(f"`{k}`" for k in sorted(self.unreachable)))
+        if self.keyless_lists:
+            out.append("方向キーで一覧が動かなかった画面（以後はホイール・ドラッグで動かした。キーボードで遊ぶ人が一覧の先を"
+                       "見られないかもしれない）: " + "、".join(f"`{m}`" for m in sorted(self.keyless_lists)))
         if self.tried:
             out.append("本文送りのキー（本文が進んだ回数 / 押した回数）: " + "、".join(
                 f"`{k}` {self.worked[k]}/{self.tried[k]}" for k in self.advance_keys if self.tried[k]))

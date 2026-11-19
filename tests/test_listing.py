@@ -11,7 +11,7 @@ from yomawari.fuzz.decider import RandomDecider
 from yomawari.fuzz.guard import Guard
 from yomawari.fuzz.listing import Ledger, blind_candidates, direction, distance, stuck_rows, view_of
 from yomawari.fuzz.loop import FuzzRun, FuzzSession
-from yomawari.fuzz.ops import normal_candidates
+from yomawari.fuzz.ops import Op, normal_candidates
 from yomawari.input.pointer import Pointer
 from yomawari.sensors.window import ScreenRect, WindowInfo
 from yomawari.state import GameState
@@ -163,6 +163,50 @@ def test_goal_that_does_not_come_closer_is_given_up():
     s._moving = ("ListUI/Slot", goal.label, "drag up", goal.dist + 1.0)
     s._list_ops([])
     assert goal.misses == 0
+
+
+def test_list_that_keys_do_not_move_is_moved_with_the_mouse():
+    # どの項目にもフォーカスがなく、方向キーでは一覧が動かないゲームがある。キーボード中心ではホイール・ドラッグを
+    # 入れないので、方向キーで近づかなければ、その画面は以後ホイール・ドラッグで動かす（混ぜる割合を掛けない）
+    from yomawari.fuzz.keyboard import InputStyle
+
+    st = _grid(modal=True)
+    s, run, _ = _session(st)
+    run.input_style = InputStyle("keyboard", 0.0)
+    s._list_ops([])
+    goal = run.ledger.goals["ListUI/Slot"]
+    ops = s._list_ops([])
+    keys = [o for o in ops if o.kind == "key"]
+    assert keys and not any(o.mouse_needed for o in ops)
+    # 混ぜる割合 0 では、ホイール・ドラッグは候補に入らない
+    assert all(o.kind == "key" for o in run.input_style.scale(ops + [o for o in ops if o.kind == "key"]))
+    give_up = FUZZ_DEFAULTS["list_key_give_up"]
+    for i in range(give_up):
+        s._moving = ("ListUI/Slot", goal.label, keys[0].label, goal.dist)
+        ops = s._list_ops([])
+        if i < give_up - 1:
+            assert "ListUI" not in run.input_style.keyless_lists
+    assert "ListUI" in run.input_style.keyless_lists
+    assert any("方向キー" in n and "ホイール・ドラッグで動かす" in n for n in run.notes)
+    # 方向キーで近づかなかった回数は、目標をあきらめる回数に入れない
+    assert goal.misses == 0 and goal.label not in run.ledger.unreachable
+    ops = s._list_ops([])
+    assert ops and all(o.kind != "key" and o.mouse_needed for o in ops)
+    advance = Op("advance")
+    assert set(run.input_style.scale(ops + [advance])) == set(ops + [advance])
+    assert any("方向キーで一覧が動かなかった画面" in n for n in run.input_style.notes())
+
+
+def test_mouse_moves_that_do_not_come_closer_do_not_switch_to_the_mouse():
+    st = _grid(modal=True)
+    s, run, _ = _session(st)
+    s._list_ops([])
+    goal = run.ledger.goals["ListUI/Slot"]
+    drag = next(o for o in s._list_ops([]) if o.kind == "drag")
+    for _ in range(FUZZ_DEFAULTS["list_key_give_up"] + 1):
+        s._moving = ("ListUI/Slot", goal.label, drag.label, goal.dist)
+        s._list_ops([])
+    assert not run.input_style.keyless_lists
 
 
 def test_detour_list_has_no_goal_after_filling():
