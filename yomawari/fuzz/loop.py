@@ -36,6 +36,7 @@ from ..state import GameState, Rect, Target
 from .decider import Decider
 from .experience import Experience, Press
 from .guard import Guard
+from .keyboard import InputStyle
 from .looks import Values, alike, brighter, brightest, dark, disabled_looks, groups, inactive, letters, masked, measure, text_inactive
 from .advisor import ChoiceAdvisor
 from .reading import assign, text_changed, unread
@@ -231,6 +232,7 @@ class FuzzRun:
     locale_missing: bool = False  # プロファイルの言語が、ゲームの使える言語（settings の locales）になかった
     # 設定を変えに行く（fuzz/settings_tour.py）。既定は変えに行かない（watchdog が [fuzz] の設定で作る）
     tour: SettingsTour = field(default_factory=lambda: SettingsTour(0.0, 0.0, 0.0))
+    input_style: InputStyle = field(default_factory=InputStyle)  # 入力の方式（--input・--input-mix。fuzz/keyboard.py）
     # 音量を変えたら、A-03 が比べる区間のあいだほかの設定を変えない（fuzz/settings_tour.py）。既定は待たない
     volume_hold: VolumeHold = field(default_factory=VolumeHold)
     # 画面の文字を読む（fuzz/reading.py）
@@ -757,6 +759,7 @@ class FuzzSession:
         cands = self._apply_tour(cands)
         cands = self.run.volume_hold.apply(cands, self.run.experience.setting_buttons, now)
         cands = self._one_mover(cands)
+        cands = self.run.input_style.scale(cands)
         top = self.state.top_modal()
         if top is not None and not top.buttons and not self.state.busy:
             self._modal_since = self._modal_since or now
@@ -787,6 +790,7 @@ class FuzzSession:
             return  # 暗転中などで押せない。応答確認は次に押せるときまで持ち越す
         self._odds = (op.label, getattr(self.run.decider, "last_odds", {}))
         self._verify_next = False
+        op = self.run.input_style.convert(op, self.run.rng)
         if op.kind == "expect_exit":
             await self._expect_exit(op)
         elif op.kind == "external":
@@ -2446,6 +2450,7 @@ class FuzzSession:
         values_before = dict(self.state.settings or {})
         locale_before = values_before.get("locale")
         expected = self._expected_silent(op.target)
+        line_before = (self.state.line, self.state.line_done)
         # 反応しないと見込んでいるボタンは、何も起きないことを確かめるだけなので、待つ時間を短くする
         quiet = op.target is not None and (op.target.label in self._quiet() or expected is not None)
         started = time.monotonic()
@@ -2468,6 +2473,8 @@ class FuzzSession:
         waited = time.monotonic() - started
         responded = self.state.signature() != before
         texts_changed = False
+        if op.kind == "advance" and op.via_key is not None:
+            self._key_advanced(op.via_key, (self.state.line, self.state.line_done) != line_before)
         if not responded and op.target is not None and op.target.kind == "button":
             texts_changed = responded = await self._texts_changed(op.target)
         if not responded and op.target is not None and op.target.kind == "button":
@@ -2603,6 +2610,15 @@ class FuzzSession:
                 self.launch,
             )
         )
+
+    def _key_advanced(self, key: str, worked: bool) -> None:
+        """本文送りをキーで押した結果を覚える。どのキーでも本文が進まなければ、以後はマウスで押す。"""
+        style = self.run.input_style
+        style.advanced(key, worked)
+        if style.gave_up():
+            self.run.notes.append(f"本文送りのキー（{'・'.join(style.advance_keys)}）を {style.learn_tries} 回ずつ押したが"
+                                  f"本文が進まなかったので、以後の本文送りはマウスで押す（起動 #{self.launch}。"
+                                  "yomawari.toml の [fuzz] advance_keys で変えられる）")
 
     async def _irregular(self, trigger: str) -> None:
         if not self._ready() or self._exiting:
@@ -2809,6 +2825,9 @@ class FuzzSession:
         if k == "double_click":
             assert op.target is not None
             return p.click(op.target, clicks=2)
+        if k in ("advance", "right_click") and op.via_key is not None:
+            p.key(op.via_key)  # キーボードで押す（fuzz/keyboard.py）
+            return None
         if k == "advance":
             return p.click_at(*(op.point or (ax, ay)))
         if k == "rapid_click":

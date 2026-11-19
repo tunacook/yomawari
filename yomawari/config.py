@@ -207,6 +207,13 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "report_text_change_ratio": 0.5,
     # レポートの「カバレッジ」: scene・画面・状態の表に載せる行数の上限（多い順。残りは「ほか n 個」にまとめる）
     "report_coverage_rows": 30,
+    # 入力の方式（fuzz/keyboard.py）: mouse（マウス中心）/ keyboard（キーボード中心）と、主でない方を混ぜる割合（0〜1）。
+    # --input・--input-mix。本文送りのキーは、どれで本文が進むかを試して覚える。メニューは menu_key
+    "input": "mouse",
+    "input_mix": 0.0,
+    "advance_keys": ["enter", "space"],
+    "menu_key": "esc",
+    "key_learn_tries": 3,
     "weights": {"advance": 20, "right_click": 1, "wheel_up": 1, "click": 5, "move": 2, "leave": 1},
 }
 GUARD_KINDS = ("expect_exit", "external", "irregular_only", "deny")

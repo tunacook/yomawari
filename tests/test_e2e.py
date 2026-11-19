@@ -208,6 +208,13 @@ def test_cli_run_with_bad_screen_exits_2(tmp_path):
     assert "1920x1080" in res.output
 
 
+def test_cli_run_with_bad_input_exits_2(tmp_path):
+    cfg = write_config(tmp_path, "")
+    for args, words in ((["--input", "pad"], "mouse / keyboard"), (["--input-mix", "2"], "0〜1")):
+        res = CliRunner().invoke(cli.app, ["--config", str(cfg), "run", "--no-open", *args])
+        assert res.exit_code == 2 and words in res.output
+
+
 def test_cli_run_and_builds(tmp_path, mock_app, monkeypatch, fake_platform):
     monkeypatch.setattr(cli, "get_platform", lambda: fake_platform)
     cfg = write_config(tmp_path, "[run]\nopen_report = false\nwatchdog = false\n")
