@@ -126,7 +126,7 @@ def test_mute_check_presses_advance_once_on_a_muted_modal():
     _game(s, st, "menu", name="SaveMenu", modal=True,
           buttons=[{"name": "Back", "rect": [0.1, 0.1, 0.2, 0.2], "type": "button"}])
     assert s._mute_check(0.0) is None  # 入力が止められていない
-    _game(s, st, "input", muted=["Continue", "Skip"])
+    _game(s, st, "input", muted=["Continue", "Skip"], advance_muted=True)
     assert s._mute_check(10.0) is None
     assert s._mute_check(69.0) is None
     op = s._mute_check(70.0)
@@ -151,7 +151,7 @@ def test_mute_check_clicks_where_no_button_is():
     _game(s, st, "menu", name="LoadMenu", modal=True,
           buttons=[{"name": "Slot", "rect": slot, "type": "button"},
                    {"name": "Back", "rect": [0.0, 0.0, 0.1, 0.1], "type": "button"}])
-    _game(s, st, "input", muted=["Continue"])
+    _game(s, st, "input", muted=["Continue"], advance_muted=True)
     s._mute_check(0.0)
     op = s._mute_check(60.0)
     assert op is not None and op.kind == "advance" and op.point is not None
@@ -166,7 +166,7 @@ def test_mute_check_does_not_click_when_buttons_cover_the_screen():
     s, st, run, _ = _session(mute_check_sec=60)
     _game(s, st, "menu", name="LoadMenu", modal=True,
           buttons=[{"name": "Slot", "rect": [0.0, 0.0, 1.0, 1.0], "type": "button"}])
-    _game(s, st, "input", muted=["Continue"])
+    _game(s, st, "input", muted=["Continue"], advance_muted=True)
     s._mute_check(0.0)
     assert s._mute_check(60.0) is None
     assert s._mute_check(120.0) is None  # 押せなかったときも、閉じるまで確かめ直さない
@@ -177,7 +177,7 @@ def test_mute_check_keeps_advance_point_when_it_is_free():
     s, st, run, _ = _session(mute_check_sec=60)
     _game(s, st, "menu", name="SaveMenu", modal=True,
           buttons=[{"name": "Back", "rect": [0.1, 0.1, 0.2, 0.2], "type": "button"}])
-    _game(s, st, "input", muted=["Continue"])
+    _game(s, st, "input", muted=["Continue"], advance_muted=True)
     s._mute_check(0.0)
     op = s._mute_check(60.0)
     assert op is not None and op.point is None  # これまでどおり advance_point を押す

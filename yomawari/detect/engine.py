@@ -906,7 +906,7 @@ class ResponseCheckDetector(Detector):
 class AdvanceStallDetector(Detector):
     """S-02: 本文を送るクリックを続けても、line / choices / scene が来ない。
 
-    ゲームが本文送りの入力を止めているあいだ（パッケージの input の muted に Continue がある。`@processInput` や、
+    ゲームが本文送りの入力を止めているあいだ（パッケージの input の advance_muted が true。Naninovel の `@processInput` や、
     UI を隠すあいだの入力の止め方など）は、押しても進まないのが仕様なので、本文送りを数えない
     （run 2026-11-16_2241: 入力を止めたオープニングの演出で、コマンドが進んでいるのに検出した）。
     人もこのあいだにクリックすることはあるので、ハーネスは押すのをやめない。
@@ -937,7 +937,7 @@ class AdvanceStallDetector(Detector):
         self.gap = float(rule.param("modal_gap_sec"))
         self.count = 0
         self.lead: list[str] = []  # 進まなくなる前の操作（本文送りが続くと「直前の操作」から押し出されるため）
-        self.muted = False  # 本文送り（Continue）の入力が止められている
+        self.muted = False  # 本文送りの入力が止められている（input の advance_muted）
         self.script_at: float | None = None  # 入力が止められてから、最後にスクリプトが進んだ時刻
         self.script_wall = ""
         self.heartbeat_at: float | None = None
@@ -988,7 +988,7 @@ class AdvanceStallDetector(Detector):
                 self.buttoned.discard(str(d.get("name")))
                 self.seen.discard(str(d.get("name")))
             elif ev.kind == "input":
-                muted = "Continue" in (d.get("muted") or [])
+                muted = d.get("advance_muted") is True
                 if muted != self.muted:
                     self.muted, self.count, self.fired, self.checked, self.closed = muted, 0, False, None, None
                     self.script_at, self.script_wall = (ev.t, ev.wall) if muted else (None, "")

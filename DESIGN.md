@@ -100,7 +100,7 @@ Unity のゲームでも、ノベルゲームのアセットによって進め�
 - パッケージは2層に分ける。Unity 共通の部分（`Yomawari`）は、どのゲームでも同じ Unity の仕組み（ログ・フレーム・メモリ・uGUI）から出せるものを出す。アセットごとのアダプタ（いまは `Yomawari.Naninovel` だけ）は、そのアセットのサービス・イベントから、本文・選択肢・シナリオの区切り・セーブとロード・設定・入力の状態を出す
 - イベントの意味（下の「イベント一覧」）はアセットによらず1つに決め、アダプタはアセットの振る舞いをその意味に合わせて出す。アセットの癖（ロードでは本文を出し直さない、選択肢の id が表示のたびに変わる、値の向きが逆など）は、アダプタの中で吸収する。各アダプタがどのサービスから何を出すか、アセットの癖をどう吸収したかは、下の「Naninovel のアダプタ」のように、アダプタごとの節に書く
 - ハーネスは、どのアダプタが出したかを区別しない（`boot` にもアセットの名前は出さない）。アダプタが出せないイベント・フィールドは出さなくてよく、ハーネスは出ないときも動くようにする（例: アダプタが本文を出さないゲームでも、起動・ハング・エラーログは見られる）
-- アダプタが吸収しきれない違いや、古いアダプタの抜けは、ハーネスがアセットを決め打ちせず、どのアセットでもありうる振る舞いとして扱う（例: 画面が先へ進んでも `scene` が変わらない → §9「ゲームの流れ」の手順の進み方）。アセットの名前・コマンド名・サービス名を、ハーネスの判定やコードの既定値に入れない（いま残っているものは `docs/game-integration.md` §6「ハーネスに残っている Naninovel の前提」に挙げ、順に直す）
+- アダプタが吸収しきれない違いや、古いアダプタの抜けは、ハーネスがアセットを決め打ちせず、どのアセットでもありうる振る舞いとして扱う（例: 画面が先へ進んでも `scene` が変わらない → §9「ゲームの流れ」の手順の進み方）。アセットの名前・コマンド名・サービス名を、ハーネスの判定やコードの既定値に入れない（これまでに外したものは `docs/game-integration.md` §6「ハーネスから外した Naninovel の前提」）
 - 新しいアセットに対応するときは、`docs/game-integration.md` §6 の「アダプタが吸収すること」を順に確かめる
 
 ### パッケージの構成
@@ -126,7 +126,7 @@ Unity のゲームでも、ノベルゲームのアセットによって進め�
 |---|---|---|
 | `boot` | `version`, `build_type`, `build_guid`, `unity` | 起動確認、ビルド取り違え検出（ビルド時刻は実行時に取れないので `build_guid` で代える） |
 | `heartbeat` | `fps`, `frame_max`, `gc_mem`, `mem_total`, `mem_gfx`, `audio_db` | 1秒ごと。ハング検出、エイジング、パフォーマンス（§10「パフォーマンス」）。`frame_max` はその1秒でいちばん長かったフレームの時間（ms）。`mem_total` / `mem_gfx` は `ProfilerRecorder` の Total Used Memory / Gfx Used Memory（バイト。読めなければ出さない）。`audio_db` はその1秒の最終出力（`AudioListener.GetOutputData` の左チャンネル）の実効値（dBFS。無音は -100）で、音量の設定が音に効いているかを見る（§10 A-03。パッケージ 0.13.0 から）。パッケージ 0.7.1 までは `fps` と `gc_mem` だけ |
-| `command` | `name`, `target`, `line_id` | 本文以外のシナリオのコマンド（演出・制御）を実行し始めたとき。本文は `line` で出す。`name` はシナリオに書く名前、`target` は対象（キャラ・背景・曲など。式なら出さない）。演出の前後でパフォーマンスが落ちないかを見る（§10 R-07・R-08）。パッケージ 0.8.0 から |
+| `command` | `name`, `kind`, `target`, `line_id` | 本文以外のシナリオのコマンド（演出・制御）を実行し始めたとき。本文は `line` で出す。`name` はシナリオに書く名前、`target` は対象（キャラ・背景・曲など。式なら出さない）。`kind` はアダプタが分かる種類で、`control`（シナリオの流れを変える: 止める・飛ぶ・戻る）、`custom`（ゲームが足したコマンド）、どちらでもなければ null。ハーネスはコマンドの名前ではなく `kind` で、経過に載せるかを決める（名前の付け方はアセットごとに違うため。`kind` は 0.17.0 から）。演出の前後でパフォーマンスが落ちないかを見る（§10 R-07・R-08）。パッケージ 0.8.0 から |
 | `scene` | `name` | 進行把握。シナリオの区切り（Unity の Scene、スクリプト、ラベルなど。何を区切りにするかはアダプタが決める）が変わったとき。ロードで別の区切りに戻ったときも、ロードを終えたときに出す。ハーネスは、画面が先へ進んでも `scene` が変わらないことがあるとして扱う（§9「ゲームの流れ」の手順の進み方） |
 | `line` | `label`, `line_id`, `speaker`, `text`, `printer`, `append` | 進行把握、テンポ。`label` は本文のある区切り（`scene` の `name` と同じ書き方）、`line_id` は周回・起動をまたいで同じ行を指す文字列 |
 | `line_done` | `line_id` | 文字送り完了。操作の待ち合わせ |
@@ -136,7 +136,7 @@ Unity のゲームでも、ノベルゲームのアセットによって進め�
 | `menu_close` | `name` | 応答確認 |
 | `transition` | `phase: start/end`, `name` | 操作待ち、進行不能判定 |
 | `resolution` | `w`, `h`, `mode` | 起動直後と変化時（`Update` で監視）。描画領域の位置と Retina 倍率の計算（§8）、解像度テスト |
-| `input` | `muted` | 起動直後と変化時（0.2 秒ごとに監視）。ゲームが止めているプレイヤーの入力の id の並び。id はアセットの入力の名前で、本文送りの id はアダプタごとに決まる。ハーネスは、本文送りが止められているあいだの本文送りを S-02 に数えない。パッケージ 0.16.0 から |
+| `input` | `muted`, `advance_muted` | 起動直後と変化時（0.2 秒ごとに監視）。`muted` はゲームが止めているプレイヤーの入力の id の並びで、id はアセットの入力の名前（レポートで見るためのもの。ハーネスの判定には使わない）。`advance_muted` は本文送りの入力が止められているか（どの入力が本文送りかはアダプタが決める。0.17.0 から）。ハーネスは、`advance_muted` が true のあいだの本文送りを S-02 に数えない。パッケージ 0.16.0 から |
 | `settings` | `locale`, `locales`, `reveal_speed`, `auto_delay`, `master_volume`, `bgm_volume`, `sfx_volume`, `voice_volume`, `voice_locale`, `skip_mode`, `font`, `font_size`, `quality`, `screen_mode`, `resolution` | 起動直後と変化時（0.2 秒ごとに監視、値は小数第 3 位まで）。ゲームの設定の値。フィールドの名前と値の決まりはアセットによらず1つで、アダプタはアセットの設定をこの名前に当てて出し、アセットにない項目は出さない。`locale` は言語タグ（`locales` は使える言語の一覧）、`reveal_speed` は本文の出る速さ（大きいほど速い）、音量は 0〜1、`resolution` は `"1280x720"`。`quality`・`screen_mode`・`resolution` は Unity 共通の値（`QualitySettings`・`Screen`）。ゲームがこのうちどれをプレイヤーに変えさせるかは、パッケージには分からないので、プロファイルの `[settings]` に書く（§9「設定を変えに行く」）。設定画面がゲーム独自の部品でも、値はアセットのサービスから読める。ハーネスは、押して値が変われば反応ありとする（設定画面の選択肢・スライダーは、押しても画面の並びが変わらない）。パッケージ 0.10.0 から |
 | `selected` | `menu`, `name`, `nth` | 変化時（0.2 秒ごとに監視）。エンジンのフォーカス（`EventSystem.current.currentSelectedGameObject`）があるボタン。Enter・Space で押されるのはこのボタン。`menu` はそのボタンを含む表示中の `menu` のうちいちばん内側のもの、`nth` は `menu` の `buttons` と同じ数え方で、同じ名前のボタンの何番目か（0 から）。`menu` の外のもの・押せないものにフォーカスがあるときは `menu` と `name` を `null` にする。ハーネスは、通常の操作で押さないボタン（ガードの区分が `expect_exit` / `external` / `deny` など）にフォーカスがあるあいだ、Enter を押さない（§9「ガード」）。パッケージ 0.12.0 から |
 | `save` / `load` | `slot`, `type`, `phase: start/end` | セーブ検証、分岐の巻き戻し。ロードで戻った位置の `scene` は、`load` の `end` のあとに出す（上の `scene`） |
@@ -152,10 +152,10 @@ Naninovel 1.21 以上があるときだけコンパイルする。Naninovel は�
 |---|---|---|
 | `scene` | `IScriptPlayer.OnExecute` のメイントラックで、再生位置（`PlaybackSpot`）のスクリプトのパスが変わったとき。`name` はスクリプトのパス | ロードでは再生位置だけが戻り、止まった位置（`@stop` など）ならコマンドを実行しない。`IStateManager.OnGameLoadFinished` でもメイントラックの再生位置を見て、スクリプトが前と違えば出す（0.17.0 から。0.16.0 までは、ロードで別のスクリプトに戻っても、次のコマンドまで出さなかった） |
 | `line` | `ITextPrinterManager.OnPrintStarted`。`label` はスクリプトのパス、`line_id` は `<パス>:<行>.<インライン>` | ロードでは本文を出し直さない。ハーネスはいま、セーブを始めたときの本文の行をスロットごとに覚えて戻している（§9「答えの選び方」） |
-| `command` | `IScriptPlayer.OnExecute` のメイントラック。`name` はスクリプトに書く名前（`char`・`back`・`spawn`・`bgm` など。別名があれば別名）、`target` は名前のない引数 | 本文の `print` も コマンドなので、`command` には出さない |
+| `command` | `IScriptPlayer.OnExecute` のメイントラック。`name` はスクリプトに書く名前（`char`・`back`・`spawn`・`bgm` など。別名があれば別名）、`target` は名前のない引数。`kind` は、`Stop`・`Goto`・`Gosub`・`Return` なら `control`、Naninovel のアセンブリの外で定義したコマンドなら `custom` | 本文の `print` もコマンドなので、`command` には出さない |
 | `choices` / `choices_done` | `IChoiceHandlerManager` の選択肢のアクターと、`OnChoiceHandled` | 選択肢の `id` は表示のたびに変わる。ハーネスは選択肢を本文で数える |
 | `save` / `load` | `IStateManager` の `OnGameSave*` / `OnGameLoad*` | |
-| `input` | `IInputManager` の標準の入力（`Continue`・`Skip`・`ToggleSkip`・`AutoPlay`・`Rollback`・`Pause`・`ToggleUI`・`ShowBacklog`）のうち `IsMuted` が true のもの。本文送りは `Continue`。`@processInput`、`AddMuter` で一時的に止める方法、入力の処理自体が止まっているのも含めた、実際に効いている状態。入力の割り当てがない id も止められているものとして出る | |
+| `input` | `IInputManager` の標準の入力（`Continue`・`Skip`・`ToggleSkip`・`AutoPlay`・`Rollback`・`Pause`・`ToggleUI`・`ShowBacklog`）のうち `IsMuted` が true のもの。`advance_muted` は `Continue` が止められているか。`@processInput`、`AddMuter` で一時的に止める方法、入力の処理自体が止まっているのも含めた、実際に効いている状態。入力の割り当てがない id も止められているものとして出る | |
 | `settings` | `ILocalizationManager.SelectedLocale` / `AvailableLocales`（0.11.0 から）、`ITextPrinterManager.BaseRevealSpeed` / `BaseAutoDelay`、`IAudioManager` の各音量と `VoiceLocale`、0.15.0 から `IScriptPlayer.SkipMode`（`skip_mode`。列挙の名前）、`IUIManager.FontName` / `FontSize`（`font`・`font_size`。既定は null・-1） | Naninovel の標準の設定画面にある項目がそろう。`BaseRevealSpeed` は大きいほど速いので、そのまま出す |
 | `bgm_play` / `bgm_stop` / `voice` / `voice_stop` | `IAudioManager.CollectPlayedBgm` / `GetPlayedVoice`。`id` はリソースのパス | `OnPlayBgm` などは再生・停止を頼まれたときのイベントで、ボイスが最後まで鳴って終わったときには来ないので、鳴っているかを見に行く |
 | `menu` の `role` | `TitleExitButton`（exit）、`ControlPanelTitleButton`（to_title）、`TitleNewGameButton`（new_game）、`GameSettingsLanguage` / `Resolution` / `ScreenMode` / `GraphicsDropdown`（system_setting） | §9「ゲーム固有の仕様」① |
@@ -1323,7 +1323,7 @@ class Judge(Protocol):
    - 検出の数字: 回数と起動、同じ起動で検出より前の起動時刻と最後に始めたロード（起動してすぐ途中のセーブを読み込んで止まった、などが経過の窓の外でも分かるように）
    - 検出の一覧（5 件まで）: 同じ起動で `suspect_error_window_sec`（120 秒）前までのエラーログ（L-01）があれば、手がかりとして添える。直前の操作も添える
    - 進めなかった区間の数字: 操作の数と反応しなかった数、多かった操作、読んだことのある本文を読み直した行の数とロードの回数、ゲームの流れ（§9）の手順に入った回数、答えた回数と選んだもの、プロファイルの正解が分かっていたか・正解に沿って答えた回数・わざと外れを答えるつもりだった回数、答えの当たり外れ（同じ質問に戻ったら「外れ」、戻らなければ「先へ進んだ」。外れの数をあとで数えてバッドエンドにするゲームもあるので、先へ進んだだけでは「正解」と書かない）、このあいだの検出と起動し直し。答えたものは、ハーネスが `events.jsonl` に残す `answer`（流れを最後まで進めたとき）と `judged`（当たり外れが分かったとき）から数える
-   - 経過: `events.jsonl` から、検出なら最初の検出の `report_timeline_before_sec`（30 秒）前から `report_timeline_after_sec`（5 秒）後まで、進めなかった区間ならその始めから終わりまでを抜き出す。押した操作（反応しなかったもの）、本文、scene、開いた・閉じた画面、`report_timeline_commands` のコマンド（ほかに大文字で始まるもの）、流れの手順、答えたものと判定、セーブとロード、検出、起動と終了を並べる。同じ行が続けば「×n」にまとめ、`report_timeline_lines`（40 行）を超えれば始めと終わりを残して間を省く
+   - 経過: `events.jsonl` から、検出なら最初の検出の `report_timeline_before_sec`（30 秒）前から `report_timeline_after_sec`（5 秒）後まで、進めなかった区間ならその始めから終わりまでを抜き出す。押した操作（反応しなかったもの）、本文、scene、開いた・閉じた画面、流れを変えるコマンドとゲームが足したコマンド（`command` の `kind` が `control`・`custom`。ほかに `report_timeline_commands` に書いた名前）、流れの手順、答えたものと判定、セーブとロード、検出、起動と終了を並べる。同じ行が続けば「×n」にまとめ、`report_timeline_lines`（40 行）を超えれば始めと終わりを残して間を省く
    - ゲームの流れの途中で届いた新しい本文（質問に答えるために読む回想など）は、先へ進んだとはみなさない（1 つの質問で止まっていたのが、読むたびに短い区間に切れないように）。そのため、流れを最後まで進めたときも `events.jsonl` に `flow`（`flow` が null）を残す
 4. ランの情報（ビルド・開始と終了・目的・モードとシード・深刻度別件数・前回比）、パフォーマンス、一度も反応しなかったボタン（ボタンごと）、実行環境とハーネスの記録
 5. 設定（`post/settings.py`）: §3 の `settings` の項目ごとに、プロファイルの `[settings] offered` での扱い（変えさせる・外した。書いていなければ —）、このランで変わった回数（起動ごとに数える）、最後の値。変えさせるのに一度も変わらなかった項目と、外したのに変わった項目を挙げる（§9「設定を変えに行く」）。ゲームが `settings` を出していなければ節ごと出さない

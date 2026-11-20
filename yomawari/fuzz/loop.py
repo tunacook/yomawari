@@ -829,7 +829,7 @@ class FuzzSession:
         ボタンのない場所がなければ、押さずに確かめたことにしない。
         """
         st = self.state
-        if st.top_modal() is None or "Continue" not in st.muted:
+        if st.top_modal() is None or not st.advance_muted:
             self._mute_since, self._mute_checked = None, False
             return None
         if self._mute_since is None:

@@ -138,8 +138,11 @@ def _short(text: Any, n: int = 30) -> str:
     return s[:n] + ("…" if len(s) > n else "")
 
 
-def _command_shown(name: str, keep: list[str]) -> bool:
-    return name in keep or (name[:1].isupper())
+def _command_shown(d: dict[str, Any], keep: list[str]) -> bool:
+    """経過に載せるコマンドか。アダプタが付けた種類（kind）が、シナリオの流れを変えるもの（control）か、ゲームが足した
+    もの（custom）なら載せる。コマンドの名前の付け方はアセットごとに違うので、名前では決めない（keep は、プロファイルや
+    yomawari.toml で足したい名前）。"""
+    return d.get("kind") in ("control", "custom") or str(d.get("name")) in keep
 
 
 def timeline(log: Log, lo: int, hi: int, limit: int, launch: int | None = None) -> list[str]:
@@ -179,7 +182,7 @@ def timeline(log: Log, lo: int, hi: int, limit: int, launch: int | None = None) 
         elif k == "menu_close" and d.get("name"):
             opened.discard(d["name"])
             add(wall, f"画面が閉じた `{d['name']}`")
-        elif k == "command" and d.get("name") and _command_shown(str(d["name"]), keep):
+        elif k == "command" and d.get("name") and _command_shown(d, keep):
             target = f" {d['target']}" if d.get("target") else ""
             add(wall, f"コマンド @{d['name']}{target}（`{d.get('line_id')}`）")
         elif k == "flow":
@@ -199,7 +202,7 @@ def timeline(log: Log, lo: int, hi: int, limit: int, launch: int | None = None) 
         elif k == "issue":
             add(wall, f"検出 [{d.get('rule_id')}] {d.get('title')}")
         elif k == "input" and e.get("source") == "game":
-            muted = "Continue" in (d.get("muted") or [])
+            muted = d.get("advance_muted") is True
             if muted != continue_muted:
                 continue_muted = muted
                 add(wall, "ゲームが本文送りの入力を止めた" if muted else "ゲームが本文送りの入力を戻した")

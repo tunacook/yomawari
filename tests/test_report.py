@@ -108,7 +108,7 @@ def test_timeline_around_the_first_detection(tmp_path):
               *[_ev(2 + n * 0.1, "op", kind="advance", label="advance") for n in range(3)],
               _ev(3, "op", kind="click", label="click ListUI/Close"), _ev(3.5, "op_result", responded=False),
               _ev(4, "menu", "game", name="ListUI"), _ev(4.1, "menu", "game", name="ListUI"),
-              _ev(5, "command", "game", name="goto", target="b", line_id="a:2"),
+              _ev(5, "command", "game", name="goto", kind="control", target="b", line_id="a:2"),
               _ev(5.1, "command", "game", name="print", line_id="a:3"),
               _ev(6, "load", "game", slot="Save1", phase="start"),
               _ev(7, "line", "game", launch=1, line_id="z:1", text="別の起動"),
@@ -229,3 +229,26 @@ def test_issue_whose_state_is_not_a_screen_does_not_break_the_report(tmp_path):
     text = render(_summary(), issues, tmp_path)
     assert "[V-03]" in _rows(text)[0]
     assert "最初の検出のときの画面" not in _section(text, 1)
+
+
+def test_timeline_uses_what_the_adapter_says_not_engine_names():
+    # コマンドの名前の付け方や、本文送りの入力の名前はアセットごとに違う。経過に載せるかは、アダプタが付けた
+    # command の kind と、input の advance_muted で決める（名前では決めない）
+    from yomawari.post.digest import Log, timeline
+
+    def ev(i, ev_kind, **d):
+        return {"wall": f"2026-11-20T10:00:{i:02d}.000+09:00", "kind": ev_kind, "data": d, "source": "game", "launch": 0}
+
+    events = [
+        ev(1, "command", name="stop", kind="control", line_id="a:1.0"),
+        ev(2, "command", name="Level", kind="custom", line_id="a:2.0"),
+        ev(3, "command", name="char", kind=None, line_id="a:3.0"),
+        ev(4, "command", name="Wait", line_id="a:4.0"),  # 種類がない: 大文字で始まっていても載せない
+        ev(5, "command", name="bgm", line_id="a:5.0"),
+        ev(6, "input", muted=["Continue"]),  # 入力の名前だけでは、本文送りが止められたとしない
+        ev(7, "input", muted=["Next"], advance_muted=True),
+    ]
+    rows = timeline(Log(events, {"report_timeline_commands": ["bgm"]}), 0, len(events), 40)
+    assert [r for r in rows if "コマンド" in r] == [
+        "10:00:01 コマンド @stop（`a:1.0`）", "10:00:02 コマンド @Level（`a:2.0`）", "10:00:05 コマンド @bgm（`a:5.0`）"]
+    assert [r for r in rows if "入力" in r] == ["10:00:07 ゲームが本文送りの入力を止めた"]
