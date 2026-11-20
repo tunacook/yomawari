@@ -441,6 +441,7 @@ class FuzzSession:
         self._blind: dict[str, list[str]] = {}  # 向きを決めずに探す操作の label → その menu
         self._list_row: dict[str, str] = {}  # 一覧の目標へ向かう操作の label → その一覧（Row.key）
         self._rows: dict[str, Row] = {}  # いまの一覧（Row.key → Row）
+        self._flow_press: tuple[str, ...] = ()  # いまの手順で、選ぶ代わりに押すのが正解のボタン（プロファイルの answers の press）
         # 目標へ向かって動かした操作の結果を、次に画面が落ち着いたときに確かめる: (一覧, 目標, 操作の label, 動かす前の距離)
         self._moving: tuple[str, str, str, float] | None = None
         self._odds: tuple[str, dict[str, Any]] | None = None  # Decider が最後に選んだ操作の label と確率
@@ -914,6 +915,7 @@ class FuzzSession:
         """
         run, cfg = self.run, self.cfg
         tracker = run.flow
+        self._flow_press = ()
         if run.rest_until is not None and now >= run.rest_until:
             self._back_to_question()
         if not tracker.flows or not cfg["use_flow"] or run.intent == "explore":
@@ -982,6 +984,7 @@ class FuzzSession:
                 run.answer_seen[(tracker.ctx, tuple(tracker.path))] = ok
         off = not wrong and self._off_answer()
         press_ans = self._press_answer() if step is not None and step.picks and not wrong else ()
+        self._flow_press = press_ans
         if options and not fresh:
             if not wrong:
                 # わざと外れを答えるときは、外れと分かっている組み合わせも答えてよいので、試し終えたとは書かない
@@ -1386,7 +1389,8 @@ class FuzzSession:
     def _is_answer(self, ctx: Any, path: tuple[str, ...]) -> bool:
         answers = self.run.ctx_answers.get(ctx, ()) if self.cfg["answer_source"] == "profile" else ()
         if answers:
-            return any(len(a.pick) == len(path) and all(self._picked(p, a.pick[k]) for k, p in enumerate(path))
+            return any((len(a.pick) == len(path) and all(self._picked(p, a.pick[k]) for k, p in enumerate(path)))
+                       or (a.press and len(path) == 1 and matches(path[0], path[0].rsplit("/", 1)[-1], (a.press,)))
                        for a in answers)
         return path in self.run.flow.known_right(ctx)
 
@@ -2598,8 +2602,12 @@ class FuzzSession:
             before = (tracker.active.name if tracker.active else None, tracker.index)
             # 選択肢は、画面が変わっただけでなく、ゲームがその選択肢を選んだと知らせたとき（choices_done）だけ、答えたとする
             picked = responded and (t.kind != "choice" or self.state.chosen == t.name)
-            tracker.pressed(t.label, t.name, picked, t.text if t.kind == "choice" else None,
-                            t.text if t.kind == "button" else None)
+            if (picked and t.kind == "button" and self._flow_press and tracker.active is not None
+                    and matches(t.label, t.name, self._flow_press)):
+                tracker.answer_pressed(t.label)  # 選ぶ代わりに押すのが正解のボタンで答えた
+            else:
+                tracker.pressed(t.label, t.name, picked, t.text if t.kind == "choice" else None,
+                                t.text if t.kind == "button" else None)
             if sum(st.completed for st in tracker.stats.values()) > done:
                 self._note_flow(before, (None, 0))  # 最後まで進めた（events.jsonl に流れの終わりを残す）
                 self._answered()
