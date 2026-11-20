@@ -76,14 +76,27 @@ def _pick_matches(text: str | None, pattern: str) -> bool:
     return text_matches(text, (pattern, f"*{pattern}*"))
 
 
-def _nearest_answers(answers: tuple[Answer, ...], ids: list[str]) -> tuple[Answer, ...]:
+def _nearest_answers(answers: tuple[Answer, ...], ids: list[str],
+                     texts: dict[str, str] | None = None) -> tuple[tuple[Answer, ...], list[tuple[Answer, str, str, str]]]:
     """直近の本文の行（古い順）のうち、いちばん新しい行で at に当たる正解。その前の行で当たるものは、前の質問の正解なので含めない
-    （run 2026-11-08_2227: 質問が続く場面で、前の質問の正解まで当たり、前の質問の思い出を選び続けた）。"""
+    （run 2026-11-08_2227: 質問が続く場面で、前の質問の正解まで当たり、前の質問の思い出を選び続けた）。
+    at_text を書いた正解は、ゲームが出したその行の本文と比べ、違えば使わずに、(正解, 行, 出た本文, at_text) を2つめに返す
+    （run 2026-11-20_2206: スクリプトを直して行番号がずれ、at が隣の質問の行を指し、別の質問の正解で答え続けた）。"""
+    texts = texts or {}
     for line in reversed(ids):
-        hit = tuple(a for a in answers if any(fnmatchcase(line, p) for p in a.at))
-        if hit:
-            return hit
-    return ()
+        hit, stale = [], []
+        for a in answers:
+            k = next((i for i, p in enumerate(a.at) if fnmatchcase(line, p)), None)
+            if k is None:
+                continue
+            got = texts.get(line)
+            if a.at_text and got is not None and not text_matches(got, (a.at_text[k],)):
+                stale.append((a, line, got, a.at_text[k]))
+            else:
+                hit.append(a)
+        if hit or stale:
+            return tuple(hit), stale
+    return (), []
 
 
 @dataclass
@@ -215,6 +228,7 @@ class FuzzRun:
     question: list[str] = field(default_factory=list)  # 流れを始めたときの、質問の前の本文
     read_lines: list[str] = field(default_factory=list)  # 流れの途中で読んだ本文
     line_ids: deque[str] = field(default_factory=lambda: deque(maxlen=100))  # 最近の本文の行（line_id）
+    line_texts: dict[str, str] = field(default_factory=dict)  # 最近の本文の行 → 本文（タグを除く）。正解の at_text と比べる
     # 質問ごとの正解（DESIGN.md §9「答えの選び方」）。質問（流れの名前, 始めたときの行）→ プロファイルの answers のうち当たったもの
     ctx_answers: dict[Any, tuple[Answer, ...]] = field(default_factory=dict)
     wrong_left: dict[Any, int] = field(default_factory=dict)  # 質問 → この流れでまだわざと答える外れの数
@@ -544,9 +558,15 @@ class FuzzSession:
 
     def _remember_line(self, d: dict[str, Any]) -> None:
         """本文を覚える（AI に文脈として渡す。行はプロファイルの正解の質問と照らす）。"""
-        if d.get("line_id") is not None:
-            self.run.line_ids.append(str(d["line_id"]))
         text = " ".join(re.sub(r"<[^>]*>", "", str(d.get("text") or "")).split())  # <br> などのタグは詰める
+        if d.get("line_id") is not None:
+            line_id = str(d["line_id"])
+            self.run.line_ids.append(line_id)
+            texts = self.run.line_texts
+            texts.pop(line_id, None)
+            texts[line_id] = text
+            while len(texts) > 200:
+                del texts[next(iter(texts))]
         if not text:
             return
         speaker = d.get("speaker")
@@ -1298,7 +1318,12 @@ class FuzzSession:
             return
         if flow.answers:
             ids = list(run.line_ids)[-int(cfg["ai_context_lines"]):]
-            hit = _nearest_answers(flow.answers, ids)
+            hit, stale = _nearest_answers(flow.answers, ids, run.line_texts)
+            for a, line, got, want in stale:
+                note = (f"プロファイルの正解{f'（{a.note}）' if a.note else ''}の at `{line}` の本文が「{got}」で、at_text"
+                        f"「{want}」と違うので、この正解を使わなかった（スクリプトを直して行番号がずれたなどで、at が古い可能性がある）")
+                if note not in run.notes:
+                    run.notes.append(note)
             if hit:
                 # 外れへの返事のあとに同じ質問に戻ったときは、質問の行が直近にないことがあるので、前に当たったものを使う
                 run.ctx_answers[ctx] = hit

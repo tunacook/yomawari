@@ -126,6 +126,7 @@ steps = [{ choose = true, note = "選択肢を選ぶ" }]  # 選ぶ手順 1
 
 [[flow.answers]]
 at = "main/chapter1:120.0"       # 質問の本文の行（line_id。events.jsonl の line や report.md の「場所」に出る。ワイルドカード可）
+at_text = "どうしよう……"         # at の行の本文（任意）。違えば行番号がずれたとみなし、この正解を使わない
 pick = ["彼女を追いかける"]       # 選ぶ手順ごとに、選ぶものの画面に見える文字
 note = "「ここで待つ」はバッドエンド"
 
