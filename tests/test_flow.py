@@ -1375,6 +1375,56 @@ def _album_question(pick):
     return s, st, run
 
 
+def test_known_answer_not_found_yet_looks_through_the_list_before_picking():
+    # 正解が分かっている質問で、正解に沿う候補がまだ見つからない: 見えている候補は押さず、一覧を見終えてから選ぶ。
+    # 正解の思い出は、開示される前に読んだ伏せ字のまま台帳に残っていることがある（run 2026-11-20_0932: 一覧を見ている
+    # 途中で、見えていた別の思い出を押した。正解の思い出は画面の外にあり、見にいけば読み直せた）
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    low, lf = FUZZ_DEFAULTS["flow_avoid_factor"], FUZZ_DEFAULTS["list_factor"]
+    s, st, run, _ = _session({"wrong_answer_prob": 0.0})
+    doc = tomllib.loads(ONCE_PROFILE)
+    doc["flow"][0]["answers"] = [{"at": "main/chapter2_04:3*", "pick": ["No.002*", "空"]}]
+    run.flow = FlowTracker(parse_flows(doc["flow"]))
+    run.masked_chars = "?？"
+
+    def slots(top_shown):
+        out = [{"name": "AlbumSlot (Clone)", "rect": [0.1 + 0.2 * i, 0.6, 0.25 + 0.2 * i, 0.8]} for i in range(2)]
+        y = 0.3 if top_shown else -0.7
+        out += [{"name": "AlbumSlot (Clone)", "rect": [0.1 + 0.2 * i, y, 0.25 + 0.2 * i, y + 0.2]} for i in range(2)]
+        for b in out[2:]:
+            if not top_shown:
+                b["hidden"] = True
+        return out
+
+    _line(s, st, "main/chapter2_04:323.0", "どこだっけ？")
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=slots(top_shown=False))
+    st.set_read_text({SLOT: "No.001", f"{SLOT}#1": "No.003"})
+    _weights(s, st)
+    # 画面の外の #2 は、開示される前に伏せ字と読んだまま
+    run.ledger.items[f"{SLOT}#2"].text = "No.0 ？"
+    run.ledger.items[f"{SLOT}#2"].status = "masked"
+    w = _weights(s, st)
+    assert w[f"click {SLOT}"] == pytest.approx(click * low) and w[f"click {SLOT}#1"] == pytest.approx(click * low)
+    assert w["wheel_up 3"] == w["drag down"] == click * lf  # 見えていない項目を見にいく
+    # 見にいった: #2 は開示されていて、正解の思い出と読めた
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=slots(top_shown=True))
+    st.set_read_text({f"{SLOT}#2": "No.002 屋上の昼", f"{SLOT}#3": "No.004"})
+    w = _weights(s, st)
+    assert run.ledger.items[f"{SLOT}#2"].status == "unknown"
+    assert w[f"click {SLOT}#2"] == click * k
+    assert w[f"click {SLOT}"] == pytest.approx(click * low)
+
+
+def test_known_answer_not_in_the_whole_list_picks_freely():
+    # 一覧を見終えても正解に沿う候補がない（まだ開示されていない）: これまでどおり、見えている候補から選ぶ
+    click = FUZZ_DEFAULTS["weights"]["click"]
+    s, st, run = _album_question(["No.009*", "空"])
+    st.set_read_text({SLOT: "No.001", f"{SLOT}#1": "No.002", f"{SLOT}#2": "No.003"})
+    w = _weights(s, st)
+    assert not run.ledger.unshown(next(iter(s._rows.values())))
+    assert max(w[f"click {SLOT}"], w[f"click {SLOT}#1"], w[f"click {SLOT}#2"]) >= click
+
+
 def test_profile_answer_matches_any_spelling_and_any_past_reading():
     # 番号が読めず題名だけ読めた思い出も、書き方を並べておけば正解に当たる（run 2026-11-08_2022）
     k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
