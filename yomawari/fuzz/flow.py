@@ -490,6 +490,13 @@ class FlowTracker:
                                   and flow.steps[j].when.match(state, opened_by)), None)
                     if later is not None:
                         i = later
+                    elif i == self.index == len(flow.steps) - 1 and any(
+                            s.when.screen is not None and s.when.match(state, opened_by) for s in flow.steps[:i]):
+                        # 最後の手順（思い出を最後まで読む）を終えて、前の手順の画面（思い出の要約）が手前に戻った。scene が
+                        # 変わらないので条件から外れず、前の手順へ戻って同じ思い出を読み直していた
+                        # （run 2026-11-20_1416: 右クリックメニューから思い出を 1 つ読みに行き、30 分読み続けた）
+                        self._complete("最後の手順を終えて、前の手順の画面に戻った")
+                        return None
                 if i != self.index:
                     if self._entry is not None and self._entry[1] == self.index and i > self.index:
                         self.step_entries.pop(self._entry, None)  # 前に入った手順から、先の手順へ進めた

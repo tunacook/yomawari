@@ -1819,3 +1819,39 @@ def test_deliberate_wrong_answer_may_use_a_combination_known_to_be_wrong():
     w = _weights(s, st)
     assert w["click AnswerDialogUI/Accept"] == click * k
     assert not any("すべて試しても" in e for e in run.flow.events)
+
+
+def test_flow_ending_with_reading_completes_when_back_to_an_earlier_screen():
+    # run 2026-11-20_1416: 思い出を読み終えて要約に戻っても scene が思い出のまま変わらず、最後の手順（本文を送る）の条件から
+    # 外れなかった。流れは要約の画面で前の手順（この思い出を読む）へ戻り、同じ思い出を読み直し続けた
+    flows = parse_flows(tomllib.loads("""
+[[flow]]
+name = "思い出を読む"
+start = { screen = "AlbumUI", by = "harness" }
+steps = [
+  { screen = "AlbumUI", press = "AlbumSlot*" },
+  { screen = "EpisodeUI", press = "ReadEpisodeButton" },
+  { scene = "episodes/*", advance = true },
+]
+""")["flow"])
+    tracker = FlowTracker(flows)
+    st = GameState()
+    opened = {"AlbumUI": "QuickMenuUI/ToAlbum"}
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=LIST)
+    tracker.update(st, opened, 0, 10)
+    tracker.pressed("AlbumUI/AlbumSlot (Clone)", "AlbumSlot (Clone)", True)
+    _feed(st, "menu", name="EpisodeUI", modal=True, buttons=SUMMARY)
+    assert tracker.update(st, opened, 1, 10).press == ("ReadEpisodeButton",)
+    tracker.pressed("EpisodeUI/ReadEpisodeButton", "ReadEpisodeButton", True)
+    for m in ("EpisodeUI", "AlbumUI"):
+        _feed(st, "menu_close", name=m)
+    _feed(st, "scene", name="episodes/m1")
+    _feed(st, "menu", name="EpisodePlaying", modal=False, buttons=[])
+    _feed(st, "line", line_id="episodes/m1:1", text="a")
+    assert tracker.update(st, {}, 2, 10).advance
+    # 読み終えて、ゲームが一覧と要約を開き直した（scene は思い出のまま）
+    _feed(st, "menu_close", name="EpisodePlaying")
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=LIST)
+    _feed(st, "menu", name="EpisodeUI", modal=True, buttons=SUMMARY)
+    assert tracker.update(st, {}, 3, 10) is None
+    assert tracker.active is None and tracker.stats["思い出を読む"].completed == 1
