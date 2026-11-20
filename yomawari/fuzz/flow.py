@@ -801,13 +801,31 @@ class FlowTracker:
                 if self.ctx in self.exhausted_noted:
                     self.exhausted_picks[self.ctx] += 1
         if self.index == len(flow.steps) - 1:
-            if self.ctx is not None:
-                self.leaves.add((self.ctx, tuple(self.path)))
-                self.last_done, self.lines_after = self.ctx, 0
-                self.last_leaf = (self.ctx, tuple(self.path))
-                self.scene_after = False
-                self.question_at = self._question_start(flow, self.ctx[1])
-            self._complete(f"`{label}`")
+            self._answer(label)
+
+    def answer_pressed(self, label: str) -> None:
+        """選ぶ代わりに押すのが正解のボタン（プロファイルの answers の press。何も選ばずに一覧を閉じるなど）を押して、
+        反応があった。最後の手順まで進めたときと同じく、答えたとする。押したボタンを、選んだものの並びの最後に置く。
+
+        答えたとしないと、流れが続いたまま次の質問の画面が開き、前の質問のつもりで同じボタンを押し続ける
+        （run 2026-11-20_1416: 何も選ばずに閉じる質問のすぐあとの質問で、閉じるボタンを 3 分半押し続けた）。"""
+        if self.active is None:
+            return
+        self.path = [*self.path[:self._picks_before(self.index)], label]
+        if self.ctx is not None:
+            self.picked[(self.ctx, tuple(self.path))] += 1
+        self._answer(label)
+
+    def _answer(self, label: str) -> None:
+        flow = self.active
+        assert flow is not None
+        if self.ctx is not None:
+            self.leaves.add((self.ctx, tuple(self.path)))
+            self.last_done, self.lines_after = self.ctx, 0
+            self.last_leaf = (self.ctx, tuple(self.path))
+            self.scene_after = False
+            self.question_at = self._question_start(flow, self.ctx[1])
+        self._complete(f"`{label}`")
 
     def _complete(self, how: str) -> None:
         assert self.active is not None

@@ -1855,3 +1855,49 @@ steps = [
     _feed(st, "menu", name="EpisodeUI", modal=True, buttons=SUMMARY)
     assert tracker.update(st, {}, 3, 10) is None
     assert tracker.active is None and tracker.stats["思い出を読む"].completed == 1
+
+
+def test_press_answer_completes_the_question():
+    # run 2026-11-20_1416: 何も選ばずに閉じるのが正解の質問（answers の press）で閉じるボタンを押しても、答えたとしなかった。
+    # 流れが続いたまま、すぐあとの別の質問の一覧が開き、前の質問のつもりで閉じるボタンを押し続けた（ゲームは同じ質問に戻る）
+    import asyncio
+
+    from yomawari.fuzz.ops import Op
+
+    from .test_looks import _Mouse
+
+    s, st, run, events = _session({"wrong_answer_prob": 0.0})
+    doc = tomllib.loads(PROFILE)
+    doc["flow"][0]["answers"] = [
+        {"at": "main/s6:10.0", "press": "AlbumUI/SelectButton"},
+        {"at": "main/s6:30.0", "pick": ["No.002*", "空"]},
+    ]
+    run.flow = FlowTracker(parse_flows(doc["flow"]))
+    st.feed(Event("game", "resolution", {"w": 2000, "h": 1000}, 0))
+    s.pointer = Pointer(FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1), _Mouse(), 1, st,
+                        activate_wait=0)
+    s.pointer.driver.click = lambda *a, **k: _feed(st, "menu_close", name="AlbumUI")  # 押すと一覧が閉じる
+    k, low = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"]
+    click = FUZZ_DEFAULTS["weights"]["click"]
+    texts = {SLOT: "No.001 教室", f"{SLOT}#1": "No.002 屋上"}
+
+    _line(s, st, "main/s6:10.0", "あの時、何と答えたっけ")
+    _only(st, "AlbumUI", LIST[:2] + LIST[3:])
+    st.set_read_text(texts)
+    assert _weights(s, st)["click AlbumUI/SelectButton"] == click * k
+    close = next(t for t in st.targets() if t.name == "SelectButton")
+    asyncio.run(s._normal(Op("click", close), "modal:AlbumUI", False))
+    assert run.flow.active is None  # 答えた
+    assert [e.data["picked"] for e in events if e.kind == "answer"] == [["AlbumUI/SelectButton"]]
+    assert [e.data["follows"] for e in events if e.kind == "answer"] == [True]
+
+    # すぐあとの別の質問: 前の質問の閉じるボタンではなく、この質問の正解の思い出を選ぶ
+    _line(s, st, "main/s6:20.0", "そうだ、何も言わなかった")
+    _line(s, st, "main/s6:30.0", "あれは、確か……")
+    _only(st, "AlbumUI", LIST[:2] + LIST[3:])
+    st.set_read_text(texts)
+    w = _weights(s, st)
+    assert run.flow.ctx == ("質問に答える", "main/s6:30.0")
+    assert w["click AlbumUI/SelectButton"] == pytest.approx(click * low)
+    assert w[f"click {SLOT}#1"] == click * k
+    assert run.flow.right == {(("質問に答える", "main/s6:10.0"), ("AlbumUI/SelectButton",))}
