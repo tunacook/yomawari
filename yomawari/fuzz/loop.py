@@ -997,6 +997,11 @@ class FuzzSession:
         # 別の項目を押した）。そのまま答えに進まず、試し終えた枝と同じく前の手順へ戻って選び直す
         spent = spent or (off and step is not None)
         goal = None if spent or press_ans else self._flow_goal(row, fresh, quiet, texts, known, wrong)
+        # 正解が分かっている質問で、正解に沿う候補がまだ見つからないまま台帳を埋めている: 見えている候補は押さず、一覧を
+        # 見終えてから選ぶ（run 2026-11-20_0932: 一覧を見ている途中で、見えていた別の思い出を押した。正解の思い出は、
+        # 開示される前に読んだ伏せ字のまま台帳に残っていて、見にいけば読み直せた）
+        searching = (goal is None and not spent and not wrong and known is not None and not known
+                     and row is not None and bool(run.ledger.unshown(row)))
         out = []
         for op in cands:
             t = op.target
@@ -1018,7 +1023,8 @@ class FuzzSession:
                 # 選ぶ手順: 目標（決めた順番の先頭）だけを優先する。正解が分からなければ、ほかの候補はふだんの重み。試し終えたものは後回し
                 # 正解が分かっている質問（わざと外れを答えるときを除く）では、ほかの候補も後回しにする。目標へ動かしている途中で
                 # 別の候補を押さないように（run 2026-11-08_2022: 正解へ向かう途中で、見えていた別の思い出を押して読み始めた）
-                f = boost if o == goal else (low if o in options and (o not in fresh or (known and not wrong)) else 1.0)
+                f = boost if o == goal else (low if o in options and (o not in fresh or (known and not wrong) or searching)
+                                             else 1.0)
             elif o is not None:
                 f = boost  # 決まったボタンの手順（この思い出を読む・言葉を選ぶ・答えを決める）
             if f >= boost and not spent:
