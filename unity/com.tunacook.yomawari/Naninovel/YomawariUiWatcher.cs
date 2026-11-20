@@ -17,7 +17,7 @@ namespace Yomawari
      * - choices: 表示中の選択肢ボタン（id, text, rect, locked）
      * - selected: EventSystem のフォーカスがあるボタン（menu, name, nth）。Enter で押されるのはこのボタン
      * - bgm_play / bgm_stop / voice / voice_stop: IAudioManager で実際に鳴っている BGM・ボイス（id はリソースのパス）
-     * - input: 止められている Naninovel の入力（muted。IInputManager.IsMuted）
+     * - input: 止められている Naninovel の入力（muted。IInputManager.IsMuted）と、本文送りが止められているか（advance_muted）
      * - 開いているドロップダウン（標準の Dropdown / TMP_Dropdown）のリスト: "&lt;ドロップダウンの name&gt;.List" のモーダルな menu。
      *   リストはドロップダウンの子に作られるので、元の画面の buttons には入れない
      * ボタンの位置はホバーの拡大などで少し動くので、変化の判定は 1/20 単位に丸めて行う（出す値は丸めない）
@@ -208,8 +208,9 @@ namespace Yomawari
 
         // 止められている入力を、最初と変わったときだけ出す（input）。@processInput の止め方も、AddMuter で一時的に止める
         // 方法（UI を隠すあいだなど）も、入力の処理自体が止まっている（Enabled が false）のも含めた、実際に効いている状態
-        // （IInputManager.IsMuted）。ハーネスは、本文送り（Continue）が止められているあいだ、押しても進まないのを
-        // 進行不能（S-02）と数えない。入力の割り当てがない id も止められているものとして出る
+        // （IInputManager.IsMuted）。入力の割り当てがない id も止められているものとして出る。
+        // 本文送りの入力（Naninovel では Continue）が止められているかは advance_muted で出す。ハーネスは、そのあいだ
+        // 押しても進まないのを進行不能（S-02）と数えない（入力の名前はアセットごとに違うので、ハーネスは muted を見ない）
         void ScanInput()
         {
             if (!Engine.TryGetService<IInputManager>(out var input)) return;
@@ -220,7 +221,8 @@ namespace Yomawari
                 if (muted.Length > 1) muted.Append(',');
                 muted.Append(YomawariFormat.Str(id));
             }
-            var body = "\"muted\":" + muted.Append(']');
+            var body = "\"muted\":" + muted.Append(']') +
+                       ",\"advance_muted\":" + (input.IsMuted(Inputs.Continue) ? "true" : "false");
             if (body == inputSignature) return;
             inputSignature = body;
             YomawariLog.Emit("input", body);

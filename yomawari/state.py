@@ -167,8 +167,10 @@ class GameState:
     slot_lines: dict[str, dict[str, Any]] = field(default_factory=dict)
     # 最後のロードで line を戻したか（ロードが始まったら False に戻す）
     line_restored: bool = False
-    # ゲームが止めている入力の名前（input イベントの muted。Continue があれば本文送りが止められている）
+    # ゲームが止めている入力の名前（input イベントの muted。名前はアセットごとに違うので、判定には使わない）
     muted: frozenset[str] = frozenset()
+    # 本文送りの入力が止められている（input イベントの advance_muted。どの入力が本文送りかはアダプタが知っている）
+    advance_muted: bool = False
     _played_since_title: bool = False
     _order: int = 0
 
@@ -206,6 +208,7 @@ class GameState:
 
     def _on_input(self, d: dict[str, Any], t: float) -> None:
         self.muted = frozenset(str(x) for x in d.get("muted") or [])
+        self.advance_muted = d.get("advance_muted") is True
 
     def _on_selected(self, d: dict[str, Any], t: float) -> None:
         menu, name = d.get("menu"), d.get("name")

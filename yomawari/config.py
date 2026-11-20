@@ -198,9 +198,9 @@ FUZZ_DEFAULTS: dict[str, Any] = {
     "report_timeline_before_sec": 30.0,
     "report_timeline_after_sec": 5.0,
     "report_timeline_lines": 40,
-    # 「経過」に載せるスクリプトのコマンド。ほかに、ゲームが足したコマンド（大文字で始まる名前）も載せる
-    # （Naninovel の標準のコマンドは小文字で始まり、背景・立ち絵などの演出が多いため）
-    "report_timeline_commands": ["stop", "goto", "gosub", "return"],
+    # 「経過」に、アダプタが流れを変える（control）・ゲームが足した（custom）と種類を付けたコマンドのほかに載せる、
+    # コマンドの名前。名前の付け方はアセットごとに違うので、既定では名前で載せない
+    "report_timeline_commands": [],
     # 進めなかった区間のうち、この秒数以上のものは 1 つずつ項目にする。短いものはまとめて 1 項目にする
     "report_stall_item_sec": 900.0,
     # ボタンを押しても反応しないと検出したとき、押す前と後で読めた同じ画面のボタンのうち、この割合（0〜1）以上の文字が

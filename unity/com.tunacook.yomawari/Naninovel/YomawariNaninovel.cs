@@ -97,8 +97,17 @@ namespace Yomawari
             var spot = track.PlaybackSpot;
             YomawariLog.Emit("command",
                 "\"name\":" + YomawariFormat.Str(name) +
+                ",\"kind\":" + YomawariFormat.Str(KindOf(command)) +
                 ",\"target\":" + YomawariFormat.Str(target) +
                 ",\"line_id\":" + YomawariFormat.Str(spot.Valid ? spot.ScriptPath + ":" + spot.LineNumber + "." + spot.InlineIndex : null));
+        }
+
+        // コマンドの種類（command の kind）。control: シナリオの流れを変える（止める・飛ぶ・戻る）、custom: ゲームが足した
+        // コマンド（Naninovel のアセンブリの外で定義した型）、それ以外は null（演出など Naninovel の標準のコマンド）
+        static string KindOf(Command command)
+        {
+            if (command is Stop || command is Goto || command is Gosub || command is Return) return "control";
+            return command.GetType().Assembly != typeof(Command).Assembly ? "custom" : null;
         }
 
         static (string, FieldInfo) InfoOf(System.Type type)

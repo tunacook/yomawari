@@ -652,7 +652,7 @@ def test_s02_skips_advances_while_continue_is_muted():
     engine = Engine(scaled_rules(1.0))
     adv = {"kind": "advance", "label": "advance", "responded": False, "interfered": False,
            "heartbeat_age": 0.5, "recent": [], "state": {"line_id": "a:1.0"}}
-    engine.feed(Event("game", "input", {"muted": ["Continue", "Skip"]}, 0, t=100.0))
+    engine.feed(Event("game", "input", {"muted": ["Continue", "Skip"], "advance_muted": True}, 0, t=100.0))
     out = []
     for i in range(30):
         out += engine.feed(Event("harness", "op_result", adv, 0, t=100.0 + i))
@@ -674,7 +674,7 @@ def test_s02_detects_input_left_muted():
     engine = Engine(rules)
     engine.feed(Event("harness", "op_result", {"kind": "advance", "heartbeat_age": 0.5,
                                                  "state": {"line_id": "a:5.0"}}, 0, t=0.0))
-    engine.feed(Event("game", "input", {"muted": ["Continue"]}, 0, t=1.0))
+    engine.feed(Event("game", "input", {"muted": ["Continue"], "advance_muted": True}, 0, t=1.0))
     engine.feed(Event("game", "line", {"line_id": "a:6.0"}, 0, t=2.0))
     engine.feed(Event("game", "heartbeat", {}, 0, t=1.0 + idle))
     assert engine.tick(1.0 + idle, 0) == []  # 最後に本文が来てから、まだ muted_idle_sec たっていない
@@ -697,7 +697,7 @@ def test_s02_modal_muted_counts_until_advance_is_checked():
     def run(check: bool) -> tuple[Engine, list]:
         engine = Engine(rules)
         engine.feed(Event("game", "line", {"line_id": "a:5.0"}, 0, t=0.0))
-        engine.feed(Event("game", "input", {"muted": ["Continue"]}, 0, t=1.0))
+        engine.feed(Event("game", "input", {"muted": ["Continue"], "advance_muted": True}, 0, t=1.0))
         engine.feed(Event("harness", "op_result", {"kind": "click", "heartbeat_age": 0.5, "state": modal}, 0, t=2.0))
         if check:
             engine.feed(Event("harness", "op_result", {"kind": "advance", "heartbeat_age": 0.5, "waited": 5.0,
@@ -728,7 +728,7 @@ def test_s02_buttonless_modal_is_not_exempted():
         engine = Engine(rules)
         engine.feed(Event("game", "line", {"line_id": "a:5.0"}, 0, t=0.0))
         engine.feed(Event("game", "menu", {"name": "Panel", "modal": True, "buttons": buttons}, 0, t=1.0))
-        engine.feed(Event("game", "input", {"muted": ["Continue"]}, 0, t=1.0))
+        engine.feed(Event("game", "input", {"muted": ["Continue"], "advance_muted": True}, 0, t=1.0))
         engine.feed(Event("harness", "op_result", {"kind": "advance", "heartbeat_age": 0.5, "waited": 5.0,
                                                      "state": {"line_id": "a:5.0", "top_modal": "Panel"}}, 0, t=60.0))
         engine.feed(Event("game", "heartbeat", {}, 0, t=1.0 + idle))
@@ -747,7 +747,7 @@ def test_s02_check_holds_over_a_buttonless_overlay():
     engine.feed(Event("game", "line", {"line_id": "a:5.0"}, 0, t=0.0))
     engine.feed(Event("game", "menu", {"name": "SettingsMenu", "modal": True,
                                        "buttons": [{"name": "Back", "rect": [0.1, 0.8, 0.2, 0.9]}]}, 0, t=1.0))
-    engine.feed(Event("game", "input", {"muted": ["Continue"]}, 0, t=1.0))
+    engine.feed(Event("game", "input", {"muted": ["Continue"], "advance_muted": True}, 0, t=1.0))
     engine.feed(Event("harness", "op_result", {"kind": "advance", "heartbeat_age": 0.5, "waited": 1.0,
                                                  "state": {"top_modal": "SettingsMenu"}}, 0, t=60.0))
     engine.feed(Event("game", "menu", {"name": "Overlay", "modal": True, "buttons": []}, 0, t=70.0))
@@ -771,7 +771,7 @@ def test_s02_check_on_a_buttonless_overlay_counts_when_a_buttoned_modal_is_open(
         engine.feed(Event("game", "line", {"line_id": "a:5.0"}, 0, t=0.0))
         engine.feed(Event("game", "menu", {"name": "SaveMenu", "modal": True,
                                            "buttons": [{"name": "Back", "rect": [0.1, 0.8, 0.2, 0.9]}]}, 0, t=1.0))
-        engine.feed(Event("game", "input", {"muted": ["Continue"]}, 0, t=1.0))
+        engine.feed(Event("game", "input", {"muted": ["Continue"], "advance_muted": True}, 0, t=1.0))
         menus = ["Overlay", "SaveMenu"]
         if close_menu:
             engine.feed(Event("game", "menu_close", {"name": "SaveMenu"}, 0, t=50.0))
@@ -795,7 +795,7 @@ def test_s02_buttoned_modal_opened_after_the_check_holds_counting():
     engine = Engine(rules)
     engine.feed(Event("game", "line", {"line_id": "a:5.0"}, 0, t=0.0))
     engine.feed(Event("game", "menu", {"name": "Curtain", "modal": True, "buttons": []}, 0, t=1.0))
-    engine.feed(Event("game", "input", {"muted": ["Continue"]}, 0, t=1.0))
+    engine.feed(Event("game", "input", {"muted": ["Continue"], "advance_muted": True}, 0, t=1.0))
     engine.feed(Event("harness", "op_result", {"kind": "advance", "heartbeat_age": 0.5, "waited": 1.0,
                                                  "state": {"top_modal": "Curtain"}}, 0, t=2.0))
     engine.feed(Event("game", "menu", {"name": "ListMenu", "modal": True,
@@ -817,7 +817,7 @@ def test_s02_modal_check_holds_while_moving_between_modals():
     idle = float(rules["S-02"].param("muted_idle_sec"))
     engine = Engine(rules)
     engine.feed(Event("game", "line", {"line_id": "a:5.0"}, 0, t=0.0))
-    engine.feed(Event("game", "input", {"muted": ["Continue"]}, 0, t=1.0))
+    engine.feed(Event("game", "input", {"muted": ["Continue"], "advance_muted": True}, 0, t=1.0))
     engine.feed(Event("harness", "op_result", {"kind": "advance", "heartbeat_age": 0.5, "waited": 1.0,
                                                  "state": {"top_modal": "SaveMenu"}}, 0, t=60.0))
     for i, top in enumerate(("PopupMenu", "SettingsMenu")):
@@ -841,7 +841,7 @@ def test_s02_modal_check_holds_over_a_moment_without_modal():
     def run(reopen: bool) -> list:
         engine = Engine(rules)
         engine.feed(Event("game", "line", {"line_id": "a:5.0"}, 0, t=0.0))
-        engine.feed(Event("game", "input", {"muted": ["Continue"]}, 0, t=1.0))
+        engine.feed(Event("game", "input", {"muted": ["Continue"], "advance_muted": True}, 0, t=1.0))
         engine.feed(Event("harness", "op_result", {"kind": "advance", "heartbeat_age": 0.5, "waited": 1.0,
                                                      "state": {"top_modal": "ListMenu"}}, 0, t=60.0))
         engine.feed(Event("harness", "op_result", {"kind": "click", "heartbeat_age": 0.5,
@@ -867,7 +867,7 @@ def test_s02_modal_advance_that_progressed_is_not_a_check():
     idle = float(rules["S-02"].param("muted_idle_sec"))
     modal = {"line_id": "a:5.0", "top_modal": "SaveMenu"}
     engine = Engine(rules)
-    engine.feed(Event("game", "input", {"muted": ["Continue"]}, 0, t=1.0))
+    engine.feed(Event("game", "input", {"muted": ["Continue"], "advance_muted": True}, 0, t=1.0))
     engine.feed(Event("game", "line", {"line_id": "a:6.0"}, 0, t=58.0))
     engine.feed(Event("harness", "op_result", {"kind": "advance", "heartbeat_age": 0.5, "waited": 5.0,
                                                  "state": modal}, 0, t=60.0))
