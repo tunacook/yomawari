@@ -1,7 +1,7 @@
 """ゲームの進め方（DESIGN.md §9「ゲームの流れ」）。
 
 ゲームのプロファイルの [[flow]] に、人がこのゲームの遊び方を説明するように、ひと続きの手順を書く
-（例: Rachel の「質問に答える」: 質問で思い出を選ぶ → 思い出を読む → 言葉（フラグメント）を選ぶ → この言葉で答える）。
+（例: 「質問に答える」: 質問で思い出を選ぶ → 思い出を読む → 言葉（フラグメント）を選ぶ → この言葉で答える）。
 ハーネスは、始まりの条件（start）に当てはまったら流れを追い始め、いまの手順の画面で押すボタン（press）や
 本文送り（advance）、選択肢を選んで答えること（choose）の重みを上げ、流れの途中で押すと流れから外れるボタン（avoid）の重みを下げる。
 
@@ -484,19 +484,14 @@ class FlowTracker:
             if flow.steps[i].when.match(state, opened_by):
                 if flow.steps[i].when.screen is None:
                     # scene だけで書いた手順（思い出を読む）は、あとの手順の画面が手前に出ていれば、そちらを先にする。
-                    # Rachel では、思い出を読み終えて要約に戻っても、答えるまで scene が思い出の scene のまま変わらない
+                    # パッケージ 0.16.0 までは、ロードで別のスクリプトに戻っても scene を出さなかった（Naninovel は
+                    # Unity の Scene を1つのまま、スクリプトの再生位置を戻す）。思い出を読み終えて、ロードで要約に戻っても、
+                    # 次のコマンドを実行するまで scene が思い出のスクリプトのままだった
                     later = next((j for j in range(i + 1, len(flow.steps))
                                   if flow.steps[j].when.screen is not None and not self.is_done(j)
                                   and flow.steps[j].when.match(state, opened_by)), None)
                     if later is not None:
                         i = later
-                    elif i == self.index == len(flow.steps) - 1 and any(
-                            s.when.screen is not None and s.when.match(state, opened_by) for s in flow.steps[:i]):
-                        # 最後の手順（思い出を最後まで読む）を終えて、前の手順の画面（思い出の要約）が手前に戻った。scene が
-                        # 変わらないので条件から外れず、前の手順へ戻って同じ思い出を読み直していた
-                        # （run 2026-11-20_1416: 右クリックメニューから思い出を 1 つ読みに行き、30 分読み続けた）
-                        self._complete("最後の手順を終えて、前の手順の画面に戻った")
-                        return None
                 if i != self.index:
                     if self._entry is not None and self._entry[1] == self.index and i > self.index:
                         self.step_entries.pop(self._entry, None)  # 前に入った手順から、先の手順へ進めた

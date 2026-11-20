@@ -58,19 +58,29 @@ namespace Yomawari
             state.OnGameSaveStarted += a => EmitSaveLoad("save", a, "start");
             state.OnGameSaveFinished += a => EmitSaveLoad("save", a, "end");
             state.OnGameLoadStarted += a => EmitSaveLoad("load", a, "start");
-            state.OnGameLoadFinished += a => EmitSaveLoad("load", a, "end");
+            state.OnGameLoadFinished += a =>
+            {
+                EmitSaveLoad("load", a, "end");
+                EmitScene(player.MainTrack);
+            };
+        }
+
+        // メイントラックのスクリプトが変わったら scene を出す。Naninovel は Unity の Scene を1つのまま、スクリプトを
+        // 切り替えて進める。ロードではスクリプトの再生位置だけが戻り、止まった位置（@stop など）ならコマンドを実行しない
+        // ので、ロードを終えたときにも見る（思い出の再生から、本編の質問の位置に戻ったなど）
+        static void EmitScene(IScriptTrack track)
+        {
+            var path = track?.PlaybackSpot.ScriptPath;
+            if (string.IsNullOrEmpty(path) || path == lastScript) return;
+            lastScript = path;
+            YomawariLog.Emit("scene", "\"name\":" + YomawariFormat.Str(path));
         }
 
         // メイントラックのスクリプトが変わったら scene を出す。本文以外のコマンドは command で出す
         static void OnExecute(IScriptPlayer player, IScriptTrack track)
         {
             if (track != player.MainTrack) return;
-            var path = track.PlaybackSpot.ScriptPath;
-            if (!string.IsNullOrEmpty(path) && path != lastScript)
-            {
-                lastScript = path;
-                YomawariLog.Emit("scene", "\"name\":" + YomawariFormat.Str(path));
-            }
+            EmitScene(track);
             EmitCommand(track);
         }
 
