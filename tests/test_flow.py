@@ -1689,3 +1689,83 @@ def test_picking_another_while_the_known_answer_is_not_shown_goes_on():
     w = _weights(s, st)
     assert w["click EpisodeUI/ReadEpisodeButton"] == click * k
     assert not run.answer_seen
+
+
+NO_BUTTON_PROFILE = """
+[[flow]]
+name = "質問に言葉で答える"
+start = { screen = "AlbumUI", by = "game" }
+steps = [
+  { screen = "AlbumUI", press = "AlbumSlot*", note = "開示済みの思い出を選ぶ" },
+  { screen = "EpisodeUI", press = "ShowWordsButton", note = "言葉を選ぶ" },
+  { screen = "WordListUI", press = "WordSlot*", note = "開示済みの言葉を選ぶ" },
+  { screen = "WordUI", press = "AnswerButton", note = "この言葉で答える" },
+]
+"""
+RETURN = {"name": "ReturnButton", "rect": [0.07, 0.9, 0.13, 0.95]}
+ANSWER = {"name": "AnswerButton", "rect": [0.4, 0.8, 0.6, 0.85]}
+
+
+def _to_word(word_buttons):
+    s, st, run, _ = _session()
+    run.flow = FlowTracker(parse_flows(tomllib.loads(NO_BUTTON_PROFILE)["flow"]))
+    _line(s, st, "main/s6:70", "ねぇ、どこだって？")
+    _only(st, "AlbumUI", LIST)
+    _press(s, st, run, SLOT)
+    _only(st, "EpisodeUI", SUMMARY)
+    _press(s, st, run, "EpisodeUI/ShowWordsButton")
+    _only(st, "WordListUI", [*FRAGS, RETURN])
+    _press(s, st, run, FRAG)
+    _only(st, "WordUI", word_buttons)
+    return s, st, run, _weights(s, st)
+
+
+def test_answer_button_missing_means_not_a_question():
+    # 言葉の画面に答えるボタンがない（ゲームが思い出を読ませるために一覧を開いた場面）: 言葉ごとに行き止まりと数えず、
+    # この場面では流れに沿うのをやめる（run 2026-11-20_0932: 言葉を 6 つ選んでは戻り、「すべて試しても先に進めなかった」と書いた）
+    s, st, run, w = _to_word([RETURN])
+    ctx = ("質問に言葉で答える", "main/s6:70")
+    assert run.flow.active is None and ctx in run.flow.abandoned
+    assert not any(c == ctx for c, _p in run.flow.leaves)
+    assert any("ボタンが画面になかったので、答える場面ではないとみなし" in e for e in run.flow.events)
+    assert not any("すべて試しても" in e or "可能性" in e for e in run.flow.events)
+    # 答えるボタンがあれば、これまでどおり押す
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    s, st, run, w = _to_word([RETURN, ANSWER])
+    assert run.flow.active is not None and run.flow.index == 3
+    assert w["click WordUI/AnswerButton"] == click * k
+    # 画面がまだボタンを並べていない（ボタンが 1 つもない）ときは、ないとみなさない
+    s, st, run, w = _to_word([])
+    assert run.flow.active is not None and not run.flow.abandoned
+
+
+def test_deliberate_wrong_answer_may_use_a_combination_known_to_be_wrong():
+    # わざと外れを答えるとき、選んだ思い出の言葉がどれも外れと分かっていても、試し終えたとは書かず、戻らずに答える
+    # （run 2026-11-20_0932: 正解が分かっている質問で「すべて試しても先に進めなかった」と書き、言葉を選んでは戻るのを
+    # 1 分半続けた）
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    s, st, run, _ = _session({"wrong_answer_prob": 1.0})
+    doc = tomllib.loads(TRIAL)
+    doc["flow"][0]["answers"] = [{"at": "main/s6:7*", "pick": ["No.002*", "空"]}]
+    run.flow = FlowTracker(parse_flows(doc["flow"]))
+    ctx = ("質問に答える", "main/s6:70")
+    run.flow.remember({(ctx, (SLOT, FRAG)), (ctx, (SLOT, f"{FRAG}#1"))})  # 前のランまでに外れと分かっていた
+    _feed(st, "scene", name="main/s6")
+    _line(s, st, "main/s6:70", "ねぇ、どこだって？")
+    _only(st, "AlbumUI", LIST)
+    st.set_read_text({SLOT: "No.001", f"{SLOT}#1": "No.002", f"{SLOT}#2": "No.003"})
+    _press(s, st, run, SLOT)
+    assert run.wrong_left[ctx] > 0
+    _only(st, "EpisodeUI", SUMMARY)
+    _weights(s, st)
+    run.flow.pressed("EpisodeUI/ReadEpisodeButton", "ReadEpisodeButton", True)
+    run.flow.index = 3
+    _press(s, st, run, "EpisodeUI/ShowWordsButton")
+    _only(st, "WordListUI", FRAGS)
+    st.set_read_text({FRAG: "海", f"{FRAG}#1": "山"})
+    w = _press(s, st, run, FRAG)
+    assert max(w[f"click {FRAG}"], w[f"click {FRAG}#1"]) == click * k
+    _only(st, "AnswerDialogUI", [{"name": "Accept", "rect": [0.5, 0.6, 0.7, 0.7]}])
+    w = _weights(s, st)
+    assert w["click AnswerDialogUI/Accept"] == click * k
+    assert not any("すべて試しても" in e for e in run.flow.events)

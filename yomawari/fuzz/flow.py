@@ -590,6 +590,11 @@ class FlowTracker:
         """いままで選んだものの枝（いま選んでいる思い出）を、すべて試し終えたか（言葉をすべて試した、言葉が1つもない）。"""
         return self.ctx is not None and bool(self.path) and self._exhausted(self.ctx, tuple(self.path), 0)
 
+    def dead_path(self) -> bool:
+        """いままで選んだもののどこかが、行き止まり（言葉がまだない思い出など）か。"""
+        return self.ctx is not None and any((self.ctx, tuple(self.path[:k])) in self.dead
+                                            for k in range(1, len(self.path) + 1))
+
     def all_spent(self) -> bool:
         """いまの質問で、試せる組み合わせをすべて試し終えたか（ほかに選び直す道がない）。"""
         return self.ctx is not None and self._exhausted(self.ctx, (), 0)
@@ -607,6 +612,24 @@ class FlowTracker:
         )
         self._break("試し終えた質問をあきらめた")
         return True
+
+    def no_button(self) -> None:
+        """決まったボタンを押す手順の画面に、そのボタンがない（ほかのボタンはある）。どの選び方でも先へ進めないので、
+        選び方の行き止まりにはせず、この場面では流れに沿うのをやめる（開示の状態が変わるまで）。
+
+        run 2026-11-20_0932: ゲームが思い出を読ませるために一覧を開いた場面を、質問に答える流れとみなした。言葉の画面に
+        答えるボタンがなかったので、言葉ごとに行き止まりと数え、「すべて試しても先に進めなかった」と書いた。一覧を
+        閉じれば先へ進む場面だった。"""
+        flow, ctx = self.active, self.ctx
+        if flow is None or ctx is None:
+            return
+        step = flow.steps[self.index]
+        self.abandoned.add(ctx)
+        self.events.append(
+            f"流れ「{flow.name}」の `{ctx[1]}` で、手順 {self.index + 1}（{step.note or step.when}）のボタンが画面に"
+            "なかったので、答える場面ではないとみなし、この場面では流れに沿うのをやめた（開示の状態が変わるまで）"
+        )
+        self._break("手順のボタンが画面になかった")
 
     def charge(self, now: float, limit: float, gap: float) -> bool:
         """いまの質問で流れに沿っている時間を数える。limit 秒を超えたら、このランではその質問の流れに沿うのをやめて

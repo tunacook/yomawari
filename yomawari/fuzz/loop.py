@@ -924,6 +924,9 @@ class FuzzSession:
         after = (tracker.active.name if tracker.active else None, tracker.index)
         if tracker.abandon(int(cfg["flow_exhausted_picks"])):
             step, after = None, (None, tracker.index)
+        if step is not None and self._step_button_missing(step):
+            tracker.no_button()
+            step, after = None, (None, tracker.index)
         timed_out = tracker.charge(now, float(cfg["flow_question_max_sec"]), float(cfg["flow_idle_sec"]))
         if timed_out:
             step, after = None, (None, tracker.index)
@@ -980,7 +983,11 @@ class FuzzSession:
         off = not wrong and self._off_answer()
         press_ans = self._press_answer() if step is not None and step.picks and not wrong else ()
         if options and not fresh:
-            tracker.note_exhausted()
+            if not wrong:
+                # わざと外れを答えるときは、外れと分かっている組み合わせも答えてよいので、試し終えたとは書かない
+                # （run 2026-11-20_0932: 選んだ思い出の言葉が、どれも前のランまでに外れと分かっていたので、正解が分かって
+                # いる質問で「すべて試しても先に進めなかった」と書いた）
+                tracker.note_exhausted()
             # 試せる組み合わせをすべて試した。ほかの道もないので、このランで選んだ回数の少ないものから選び直す
             # （同じものを選び続けない。run 2026-11-07_1343: 2 つとも外れと覚えた選択肢で、先頭の「話す」を 16 回選んだ）
             fresh = tracker.least_picked(options)
@@ -993,6 +1000,10 @@ class FuzzSession:
         # （run 2026-11-12_0959: 言葉を選ぶ → 「この言葉で答える」の画面から一覧へ戻る、を 3 時間 15 分くり返した）
         spent = (step is not None and tracker.spent() and not tracker.all_spent()
                  and (not step.picks or not options))
+        if wrong and spent and not tracker.dead_path():
+            # わざと外れを答える: 外れと分かっている枝でも、そのまま答える（行き止まりの枝だけ戻る）。戻ると、同じ思い出の
+            # 言葉を選んでは戻る、をくり返す（run 2026-11-20_0932: 外れを答えるまでに、言葉を選んでは戻るのを 1 分半続けた）
+            spent = False
         # 正解が分かっている質問で、正解に沿う候補が見えていたのに別のものを選んでいた（正解へ向かう途中で、ふだんの操作で
         # 別の項目を押した）。そのまま答えに進まず、試し終えた枝と同じく前の手順へ戻って選び直す
         spent = spent or (off and step is not None)
@@ -1180,6 +1191,16 @@ class FuzzSession:
                      else not (step.advance or step.choose is not None))):
             return t.label
         return None
+
+    def _step_button_missing(self, step: Any) -> bool:
+        """決まったボタンを押す手順（選ばない手順）で、手順の画面が手前に出ていてほかのボタンはあるのに、手順のボタンが
+        1つもない（押せる場面ではない）。画面がまだボタンを並べていないとき（ボタンが1つもない）は、ないとみなさない。"""
+        if step.picks or not step.targets or step.choose is not None or step.when.screen is None:
+            return False
+        top = self.state.top_modal()
+        if top is None or top.name != step.when.screen or not top.buttons:
+            return False
+        return not any(step.presses(b.label, b.name, b.text) for b in top.buttons)
 
     def _step_options(self, step: Any, cands: list[Op], sure: set[str]) -> tuple[Row | None, set[str], dict[str, str]]:
         """手順で選べるもの（候補）。(手順の画面の一覧, 候補, 候補の文字)。
