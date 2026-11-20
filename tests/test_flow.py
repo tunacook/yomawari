@@ -1821,6 +1821,47 @@ def test_deliberate_wrong_answer_may_use_a_combination_known_to_be_wrong():
     assert not any("すべて試しても" in e for e in run.flow.events)
 
 
+def test_flow_ending_with_reading_completes_when_loaded_back_to_the_story():
+    # run 2026-11-20_1416: 思い出を読み終えると、ゲームがロードで本編の質問の位置（@stop）に戻り、一覧と要約を開き直す。
+    # Naninovel はスクリプトの再生位置だけを戻してコマンドを実行しないので、パッケージ 0.16.0 までは scene を出さず、
+    # 最後の手順（思い出のスクリプトで本文を送る）の条件から外れなかった。流れは前の手順（この思い出を読む）へ戻り、
+    # 思い出を読み直し続けた。パッケージ 0.17.0 からは、ロードを終えたときに戻った先のスクリプトを scene で出す
+    flows = parse_flows(tomllib.loads("""
+[[flow]]
+name = "思い出を読む"
+start = { screen = "AlbumUI", by = "harness" }
+steps = [
+  { screen = "AlbumUI", press = "AlbumSlot*" },
+  { screen = "EpisodeUI", press = "ReadEpisodeButton" },
+  { scene = "episodes/*", advance = true },
+]
+""")["flow"])
+    tracker = FlowTracker(flows)
+    st = GameState()
+    opened = {"AlbumUI": "QuickMenuUI/ToAlbum"}
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=LIST)
+    tracker.update(st, opened, 0, 10)
+    tracker.pressed("AlbumUI/AlbumSlot (Clone)", "AlbumSlot (Clone)", True)
+    _feed(st, "menu", name="EpisodeUI", modal=True, buttons=SUMMARY)
+    assert tracker.update(st, opened, 1, 10).press == ("ReadEpisodeButton",)
+    tracker.pressed("EpisodeUI/ReadEpisodeButton", "ReadEpisodeButton", True)
+    for m in ("EpisodeUI", "AlbumUI"):
+        _feed(st, "menu_close", name=m)
+    _feed(st, "scene", name="episodes/m1")
+    _feed(st, "menu", name="EpisodePlaying", modal=False, buttons=[])
+    _feed(st, "line", line_id="episodes/m1:1", text="a")
+    assert tracker.update(st, {}, 2, 10).advance
+    # 読み終えて、ゲームがロードで本編に戻り、一覧と要約を開き直した
+    _feed(st, "menu_close", name="EpisodePlaying")
+    _feed(st, "load", slot="Return", phase="start")
+    _feed(st, "load", slot="Return", phase="end")
+    _feed(st, "scene", name="main/s2")
+    _feed(st, "menu", name="AlbumUI", modal=True, buttons=LIST)
+    _feed(st, "menu", name="EpisodeUI", modal=True, buttons=SUMMARY)
+    assert tracker.update(st, {}, 3, 10) is None
+    assert tracker.active is None and tracker.stats["思い出を読む"].completed == 1
+
+
 def test_press_answer_completes_the_question():
     # run 2026-11-20_1416: 何も選ばずに閉じるのが正解の質問（answers の press）で閉じるボタンを押しても、答えたとしなかった。
     # 流れが続いたまま、すぐあとの別の質問の一覧が開き、前の質問のつもりで閉じるボタンを押し続けた（ゲームは同じ質問に戻る）

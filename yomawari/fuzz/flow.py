@@ -1,7 +1,7 @@
 """ゲームの進め方（DESIGN.md §9「ゲームの流れ」）。
 
 ゲームのプロファイルの [[flow]] に、人がこのゲームの遊び方を説明するように、ひと続きの手順を書く
-（例: Rachel の「質問に答える」: 質問で思い出を選ぶ → 思い出を読む → 言葉（フラグメント）を選ぶ → この言葉で答える）。
+（例: 「質問に答える」: 質問で思い出を選ぶ → 思い出を読む → 言葉（フラグメント）を選ぶ → この言葉で答える）。
 ハーネスは、始まりの条件（start）に当てはまったら流れを追い始め、いまの手順の画面で押すボタン（press）や
 本文送り（advance）、選択肢を選んで答えること（choose）の重みを上げ、流れの途中で押すと流れから外れるボタン（avoid）の重みを下げる。
 
@@ -484,7 +484,10 @@ class FlowTracker:
             if flow.steps[i].when.match(state, opened_by):
                 if flow.steps[i].when.screen is None:
                     # scene だけで書いた手順（思い出を読む）は、あとの手順の画面が手前に出ていれば、そちらを先にする。
-                    # Rachel では、思い出を読み終えて要約に戻っても、答えるまで scene が思い出の scene のまま変わらない
+                    # scene が何をいつ出すかはエンジンごとに違い、画面が先へ進んでも scene が変わらないことがある
+                    # （Naninovel のパッケージ 0.16.0 までは、思い出を読み終えてロードで要約に戻っても、次のコマンドを実行
+                    # するまで scene が思い出のスクリプトのままだった。Naninovel は Unity の Scene を1つのまま、ロードで
+                    # スクリプトの再生位置だけを戻すため）
                     later = next((j for j in range(i + 1, len(flow.steps))
                                   if flow.steps[j].when.screen is not None and not self.is_done(j)
                                   and flow.steps[j].when.match(state, opened_by)), None)
