@@ -484,9 +484,10 @@ class FlowTracker:
             if flow.steps[i].when.match(state, opened_by):
                 if flow.steps[i].when.screen is None:
                     # scene だけで書いた手順（思い出を読む）は、あとの手順の画面が手前に出ていれば、そちらを先にする。
-                    # パッケージ 0.16.0 までは、ロードで別のスクリプトに戻っても scene を出さなかった（Naninovel は
-                    # Unity の Scene を1つのまま、スクリプトの再生位置を戻す）。思い出を読み終えて、ロードで要約に戻っても、
-                    # 次のコマンドを実行するまで scene が思い出のスクリプトのままだった
+                    # scene が何をいつ出すかはエンジンごとに違い、画面が先へ進んでも scene が変わらないことがある
+                    # （Naninovel のパッケージ 0.16.0 までは、思い出を読み終えてロードで要約に戻っても、次のコマンドを実行
+                    # するまで scene が思い出のスクリプトのままだった。Naninovel は Unity の Scene を1つのまま、ロードで
+                    # スクリプトの再生位置だけを戻すため）
                     later = next((j for j in range(i + 1, len(flow.steps))
                                   if flow.steps[j].when.screen is not None and not self.is_done(j)
                                   and flow.steps[j].when.match(state, opened_by)), None)
