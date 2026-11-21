@@ -417,12 +417,17 @@ class FuzzSession:
         publish: Callable[[Event], None],
         launch: int,
         on_expect_exit: Callable[[bool], None],
+        first: bool | None = None,
     ) -> None:
         self.run = run
         self.state = state
         self.pointer = pointer
         self.publish = publish
         self.launch = launch
+        # ランの最初の起動とみなすか（既定は起動 #0）。セーブの場所が違って起動し直したときは、ゲームがまだ何も進めて
+        # いないので、最初の起動と同じく扱う（run 2026-11-21_1738: 起動し直したとみなして続きから遊ぼうとし、
+        # セーブがなく 180 秒むだにした）
+        self.first = launch == 0 if first is None else first
         self.on_expect_exit = on_expect_exit
         self._lock = asyncio.Lock()
         self._verify_next = False
@@ -469,7 +474,7 @@ class FuzzSession:
         self._recovery: dict[str, Any] | None = None
         self._choose_intent("起動した")
         self._start_resume()
-        if launch > 0:
+        if not self.first:
             self._forget_progress("起動し直した")
             run.decider.forget_last()
 
@@ -1537,7 +1542,7 @@ class FuzzSession:
         （--continue なら、最初の起動でも前のランのセーブの続きを遊ぶ）。"""
         run = self.run
         run.resume_load = None
-        if (self.launch == 0 and not run.continue_previous) or float(self.cfg["resume_sec"]) <= 0:
+        if (self.first and not run.continue_previous) or float(self.cfg["resume_sec"]) <= 0:
             return
         run.resume_until = time.monotonic() + float(self.cfg["resume_sec"])
         run.resume_pages = 0
@@ -1546,7 +1551,7 @@ class FuzzSession:
 
     def _end_resume(self, how: str) -> None:
         self.run.resume_until = None
-        why = "前のランの続きから遊ぶ（--continue）ので" if self.launch == 0 else "起動し直したので"
+        why = "前のランの続きから遊ぶ（--continue）ので" if self.first else "起動し直したので"
         self.run.notes.append(f"{why}続きから遊ぼうとした: {how}（起動 #{self.launch}）")
 
     def _note_best(self, saved: list[Target]) -> None:

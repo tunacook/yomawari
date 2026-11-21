@@ -41,7 +41,7 @@ def _label(i):
     return "SaveLoadUI/SaveLoadSlot (Clone)" + (f"#{i}" if i else "")
 
 
-def _session(launch, cont=False):
+def _session(launch, cont=False, first=None):
     st = GameState()
     cfg = {**FUZZ_DEFAULTS, "hover_wait_sec": 0}
     run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2),
@@ -51,7 +51,8 @@ def _session(launch, cont=False):
     run.plays = 1 if launch else 0
     windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
     events = []
-    s = FuzzSession(run, st, Pointer(windows, None, 1, st, activate_wait=0), events.append, launch, lambda _: None)
+    s = FuzzSession(run, st, Pointer(windows, None, 1, st, activate_wait=0), events.append, launch, lambda _: None,
+                    first=first)
     return s, st, run
 
 
@@ -136,6 +137,21 @@ def test_first_launch_and_timeout_do_not_resume():
     assert w["click TitleUI/NewGameButton"] == CLICK  # セーブが見つからないまま時間がたったら、はじめからも選ぶ
     assert run.resume_until is None
     assert any("ロードも本文の始まりもなかった" in n for n in run.notes)
+
+
+def test_relaunch_for_save_dir_plays_like_the_first_launch():
+    # run 2026-11-21_1738: セーブの場所が違って起動し直した起動 #1 を、ラン中に起動し直したとみなして続きから遊ぼうとし、
+    # セーブがなく 180 秒むだにした。ゲームはまだ何も進めていないので、最初の起動と同じく、はじめから遊ぶ
+    s, st, run = _session(launch=1, first=True)
+    assert run.resume_until is None
+    _show(st, "TitleUI", TITLE, TITLE_TEXT)
+    w = _weights(s, st, 0.0)
+    assert w["click TitleUI/NewGameButton"] == CLICK
+    # --continue なら、最初の起動と同じく前のランの続きから遊ぶ
+    s, st, run = _session(launch=1, cont=True, first=True)
+    assert run.resume_until is not None
+    s.on_event(Event("game", "load", {"slot": "GameSave016", "phase": "start"}, 1))
+    assert any("前のランの続きから遊ぶ（--continue）ので" in n for n in run.notes)
 
 
 def test_continue_option_resumes_on_first_launch():
