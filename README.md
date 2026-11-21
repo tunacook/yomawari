@@ -16,7 +16,7 @@ Unity のビルド（`.app` / `.exe`）を、人がゲームを見ていない�
 | macOS の API | [PyObjC](https://pyobjc.readthedocs.io/)（Quartz・Cocoa）、ctypes | ウィンドウの位置と倍率、前面のアプリ、画面収録・アクセシビリティの権限の確認 |
 | 画像の判定 | [Ollama](https://ollama.com/)（ローカル）＋画像対応モデル `qwen2.5vl:7b`、[httpx](https://www.python-httpx.org/) | ボタンの見た目からの役割の推定などの補助。判定の主役はルール（`rules.yaml`）で、AI の答えから Critical は出さない |
 | テスト | [pytest](https://docs.pytest.org/) | 実ゲームなしで、Player.log のサンプルや模擬ゲームを流し込んで確かめる |
-| ゲーム側 | Unity 2022.3 以上、UPM パッケージ `com.tunacook.yomawari`（C#）、Naninovel 1.21 以上（任意） | 起動引数 `-yomawari` のときだけ Player.log に `[YOMAWARI]` 行（1行 JSON）を出す |
+| ゲーム側 | Unity 6000.3 以上、UPM パッケージ `com.tunacook.yomawari`（C#）、Naninovel 1.21 以上（任意） | 起動引数 `-yomawari` のときだけ Player.log に `[YOMAWARI]` 行（1行 JSON）を出す |
 
 ゲームからハーネスへは Player.log の `[YOMAWARI]` 行、ハーネスからゲームへは OS の入力、の一方向ずつで通信する。主な実行環境は Apple Silicon の Mac。Windows 対応は後日（DESIGN.md フェーズ7）。
 
