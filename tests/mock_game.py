@@ -11,6 +11,7 @@ Unity と同じく -yomawari があるときだけ [YOMAWARI] 行を出し、-lo
   screen     boot の後に、起動の引数（-screen-width / -screen-height）の大きさで resolution を出す。--mock-resize があれば
              --mock-after 秒後にその大きさ（「WxH」）に変わる。--mock-ignore-screen なら引数を無視して 1280x720 のウィンドウのまま。
              -screen-fullscreen 1 ならフルスクリーン（大きさの引数がなければ 1280x720）
+--mock-data-path があれば、boot の data_path にそのパスを出し、--mock-save-after 秒後にそこへセーブ（slot1.dat）を書く
 """
 
 import argparse
@@ -30,6 +31,8 @@ p.add_argument("-screen-height", type=int, default=720)
 p.add_argument("-screen-fullscreen")
 p.add_argument("--mock-resize")
 p.add_argument("--mock-ignore-screen", action="store_true")
+p.add_argument("--mock-data-path")
+p.add_argument("--mock-save-after", type=float, default=1.0)
 a, _ = p.parse_known_args()
 
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
@@ -52,7 +55,19 @@ if a.mock_mode == "noboot":
     while True:
         time.sleep(1)
 
-emit("boot", version="0.0.1-mock", build_type="development", build_time="2026-10-18T00:00:00")
+boot = {"data_path": a.mock_data_path} if a.mock_data_path else {}
+emit("boot", version="0.0.1-mock", build_type="development", build_time="2026-10-18T00:00:00", **boot)
+if a.mock_data_path:
+    import pathlib
+    import threading
+
+    def write_save() -> None:
+        time.sleep(a.mock_save_after)
+        d = pathlib.Path(a.mock_data_path)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "slot1.dat").write_text("written by game")
+
+    threading.Thread(target=write_save, daemon=True).start()
 emit("scene", name="Title")
 if a.mock_mode == "exception":
     out.write(

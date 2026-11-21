@@ -124,7 +124,7 @@ Unity のゲームでも、ノベルゲームのアセットによって進め�
 ### イベント一覧（初期）
 | ev | 主なフィールド | 用途 |
 |---|---|---|
-| `boot` | `version`, `build_type`, `build_guid`, `unity` | 起動確認、ビルド取り違え検出（ビルド時刻は実行時に取れないので `build_guid` で代える） |
+| `boot` | `version`, `build_type`, `build_guid`, `unity`, `data_path` | 起動確認、ビルド取り違え検出（ビルド時刻は実行時に取れないので `build_guid` で代える）。`data_path` はセーブなどを書く場所（Unity では `Application.persistentDataPath`）。OS とビルドの設定（製品名・バンドル ID など）で決まるので、ハーネスは推測せずにこれを退避して見る（§7） |
 | `heartbeat` | `fps`, `frame_max`, `gc_mem`, `mem_total`, `mem_gfx`, `audio_db` | 1秒ごと。ハング検出、エイジング、パフォーマンス（§10「パフォーマンス」）。`frame_max` はその1秒でいちばん長かったフレームの時間（ms）。`mem_total` / `mem_gfx` は `ProfilerRecorder` の Total Used Memory / Gfx Used Memory（バイト。読めなければ出さない）。`audio_db` はその1秒の最終出力（`AudioListener.GetOutputData` の左チャンネル）の実効値（dBFS。無音は -100）で、音量の設定が音に効いているかを見る（§10 A-03。パッケージ 0.13.0 から）。パッケージ 0.7.1 までは `fps` と `gc_mem` だけ |
 | `command` | `name`, `kind`, `target`, `line_id` | 本文以外のシナリオのコマンド（演出・制御）を実行し始めたとき。本文は `line` で出す。`name` はシナリオに書く名前、`target` は対象（キャラ・背景・曲など。式なら出さない）。`kind` はアダプタが分かる種類で、`control`（シナリオの流れを変える: 止める・飛ぶ・戻る）、`custom`（ゲームが足したコマンド）、どちらでもなければ null。ハーネスはコマンドの名前ではなく `kind` で、経過に載せるかを決める（名前の付け方はアセットごとに違うため。`kind` は 0.17.0 から）。演出の前後でパフォーマンスが落ちないかを見る（§10 R-07・R-08）。パッケージ 0.8.0 から |
 | `scene` | `name` | 進行把握。シナリオの区切り（Unity の Scene、スクリプト、ラベルなど。何を区切りにするかはアダプタが決める）が変わったとき。ロードで別の区切りに戻ったときも、ロードを終えたときに出す。ハーネスは、画面が先へ進んでも `scene` が変わらないことがあるとして扱う（§9「ゲームの流れ」の手順の進み方） |
@@ -458,6 +458,9 @@ role_min_confidence = 0.7    # ボタンの見た目からの役割の推定（�
 ## 7. ラン・ライフサイクルとウォッチドッグ
 
 1. 準備: セーブ（`persistentDataPath`）と設定（PlayerPrefs）を退避、テスト用初期セーブを配置、`runs/<id>/` 作成
+   - セーブの場所は設定（`builds.<name>.save_dir`）、前のランでゲームが `boot` の `data_path` で教えた場所（`runs/_save_dirs.json` にビルドごとに覚える）、OS とビルドからの推測（macOS ではバンドル ID の名前のフォルダ）の順に使う。推測はビルドの設定で外れる（run 2026-11-21_1613: 製品名を英語にしたビルドは、会社名/製品名のフォルダに書いた。ハーネスは書かれない方を退避して見ていたので、本物のセーブにランのセーブが書かれ、F-01 を誤って出した）
+   - 起動して `boot` の `data_path` が退避した場所と違ったら、セーブが書かれる前にゲームを止め、退避した場所を戻してから教わった場所を退避し直し（`runs/<id>/save_dir_moved/backup`）、起動し直す。再起動の上限には数えない。1 ランで 1 回だけ（場所が変わり続けても起動し直し続けない）。設定で `save_dir` を決めたビルドは変えず、違うことをハーネスの記録に書く
+   - `--continue` で使う前のランのセーブは、退避し直したランでは `save_dir_moved` の下のラン後の状態を使う
 2. 起動: `-yomawari -logFile runs/<id>/player.log` を付けて起動し、`boot` を待つ（30秒）
 3. 実行: ファジングループ。クラッシュ時は証跡回収→再起動→継続
 4. 終了処理: ゲーム終了、クラッシュダンプ回収、セーブ・設定の復元
@@ -486,13 +489,18 @@ role_min_confidence = 0.7    # ボタンの見た目からの役割の推定（�
 - 画面のロック中（`platform` の `screen_locked`）とゲームを前面にできないときは、OS が入力を受け付けない。試す間隔を `blocked_wait_sec` あけ、`blocked_note_sec` 以上続いた時間を「ハーネスの記録」に書く。`events.jsonl` には `input_blocked` / `input_resumed` を1回ずつ出す
 
 保存場所（macOS、ビルド）:
-- セーブ: `~/Library/Application Support/<バンドルID>/`（`Info.plist` の `CFBundleIdentifier`。例: `com.Company.Product`）
+- セーブ: ゲームが `boot` の `data_path` で教えた場所（準備の項）。教わる前の推測は `~/Library/Application Support/<バンドルID>/`（`Info.plist` の `CFBundleIdentifier`。例: `com.Company.Product`）
+  - 推測は外れることがある。run 2026-11-21_1613 では、製品名を変えたビルドが `~/Library/Application Support/<Company>/<Product>/` に書いた。どちらに書くかはビルドの設定で変わるので、決め打ちせず `data_path` を使う
 - PlayerPrefs: `~/Library/Preferences/<バンドルID>.plist`
-- `~/Library/Application Support/<Company>/<Product>/` と `~/Library/Preferences/unity.<company>.<product>.plist` はエディタのもの。ビルドの退避・復元の対象にしない
 - Player.log 既定: `~/Library/Logs/<Company>/<Product>/Player.log`
 - クラッシュ: `~/Library/Logs/DiagnosticReports/*.ips`
 
 （Windows: セーブ `%USERPROFILE%\AppData\LocalLow\<Company>\<Product>\`、PlayerPrefs `HKCU\Software\<Company>\<Product>`、クラッシュ `%TEMP%\<Company>\<Product>\Crashes\`）
+
+Windows 対応（フェーズ7）への申し送り（セーブ・PlayerPrefs の場所）:
+- セーブ: `data_path` で教わった場所を覚えて退避し、外れたら起動し直して退避し直す流れ（準備の項）は OS によらないので、そのまま使う。`platform/win.py` の `default_save_dir` は教わる前の推測（`LocalLow\<Company>\<Product>`）を返せばよい
+- パスの比べ方: Unity は `data_path` を `/` 区切り（`C:/Users/.../AppData/LocalLow/...`）で出す。ハーネスは `Path` どうしで比べる（Windows のパスは区切りと大文字・小文字の違いを同じとみなす）ので、同じ場所を違うと判定して起動し直すことはないはず。実機で確かめる
+- PlayerPrefs: レジストリ（`HKCU\Software\<Company>\<Product>`）にあり、`data_path` の下にない。macOS ではバンドル ID で決まり推測が当たるが、Windows では会社名・製品名から推測するので、製品名を変えたビルドなどで外れうる。`boot` に `Application.companyName` / `Application.productName` を足し、セーブの場所と同じく教わった値で退避する（足すときはパッケージ・ハーネス・§3 を同じ PR で変える）。退避・復元は `prefs_export` / `prefs_replace` をレジストリのキーの書き出し・書き戻し（`reg export` / `reg import` など）で作る
 
 ---
 
@@ -1216,7 +1224,7 @@ answers = [                             # 質問ごとの正解（§9「答え�
 | A-01 | BGM が 2 つ以上、`min_sec`（5 秒）以上重なって鳴り続ける（前の BGM を止めずに次の BGM を鳴らした）。止めて次へ移るフェードは、止めた時点で外れるので数えない。重なった組ごとに起動につき1件（フェーズ2で先に入れた） | Major |
 | A-02 | タイトルに戻った（起動して最初にボタンを持って出た menu が、閉じたあとまた出た）あとも、戻る前に鳴り始めたボイスが `min_sec`（5 秒）以上鳴り続ける。BGM の重なりは A-01 で見る。起動につき1件（フェーズ2で先に入れた） | Minor |
 | A-03 | `master_volume`・`bgm_volume` を変えたのに、出力の大きさ（`heartbeat` の `audio_db`）の変わり方が、見込み（20·log10(後 / 前) dB。0 は `min_volume` として数える）の `effect_ratio`（0.3）未満。見込みが `min_change_db`（6 dB）以上のときだけ、変える前の `window_sec`（5 秒）と、変えて `settle_sec`（1.5 秒）たってからの `window_sec` の中央値で比べる。そのあいだに BGM・ボイス・ほかの設定が変わったとき、音が `silent_db`（-60 dB）未満のとき、heartbeat が `min_samples`（3）回に足りないときは判定しない。効果音・ボイスの音量は、ほかの音と分けられないので見ない。設定ごとに起動につき1件（フェーズ2で先に入れた。§9「設定を変えに行く」） | Major |
-| F-01 | `save`（`phase: end`）が来たのに、セーブの場所（persistentDataPath か `builds.<name>.save_dir`）の下に、そのセーブを始めたあとに更新されたファイルが1つもない。ファイルの名前の付け方はゲームごとに違うので、どのファイルかは問わない。ハーネスがセーブの終わりから `check_after_sec` 待って見て `save_file` イベントを出し、それで判定する（フェーズ2で先に入れた） | Critical |
+| F-01 | `save`（`phase: end`）が来たのに、セーブの場所（ゲームが `boot` で教えた `data_path` か `builds.<name>.save_dir`。§7）の下に、そのセーブを始めたあとに更新されたファイルが1つもない。ファイルの名前の付け方はゲームごとに違うので、どのファイルかは問わない。ハーネスがセーブの終わりから `check_after_sec` 待って見て `save_file` イベントを出し、それで判定する（フェーズ2で先に入れた） | Critical |
 | F-02 | セーブ中強制終了→再起動後のロードで例外、またはスロット消失 | Critical |
 | F-03 | 設定を変えたあと、正常に終わって（ハーネスが止めた場合も含む）起動し直したら、最初の `settings` が前の起動の終わりの値と違う。比べるのは、前の起動で最後に設定の画面（押して設定の値だけが変わったボタンのある menu）を閉じたときの値。ゲームが自分で終わったときに開いたままだったなら、最後の値でもよい（設定を保存するのは画面を閉じたときというゲームが多い）。前の起動が落ちた・`on_detect: restart` の問題で終わったときと、ハーネスが止めたときに設定の画面が開いたままだったときは比べない（保存する前に止めている）。まだ設定の画面と分かっていなくても、開いてから設定の値が変わったモーダルな画面が開いていれば、設定の画面とみなす（run 2026-11-19_1112: 言語を押した直後に画面が変わってハーネスが起動し直し、押した結果を見ていなかったので設定の画面と分からず、最後の値と比べて検出した）。起動の引数で決まる値（`-screen-width` / `-screen-height` → `resolution`、`-screen-fullscreen` / `-window-mode` / `-popupwindow` → `screen_mode`、`-screen-quality` → `quality`。`[builds.<名前>] args`）は、ゲームが保存した値ではないので、その起動では比べない（フェーズ2で先に入れた。§9「設定を変えに行く」） | Major |
 | F-04 | 書き込み不可フォルダでセーブ→クラッシュ（`error_shown` で継続できれば合格） | Critical |

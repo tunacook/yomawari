@@ -18,6 +18,8 @@ from .config import BuildConfig
 from .platform import GameIdentity, Platform
 
 MARKER_NAME = "restore_pending.json"
+# ゲームが boot で教えたセーブの場所（persistentDataPath）を、ビルドごとに覚えるファイル（runs/ の下）
+SAVE_DIRS_NAME = "_save_dirs.json"
 
 
 @dataclass
@@ -26,13 +28,42 @@ class SaveTarget:
     prefs_domain: str | None
 
 
-def resolve_target(build: BuildConfig, platform: Platform) -> SaveTarget:
+def resolve_target(build: BuildConfig, platform: Platform, learned: Path | None = None) -> SaveTarget:
+    """退避するセーブの場所と PlayerPrefs のドメイン。セーブの場所は、設定（builds.<name>.save_dir）、ゲームが前に boot で
+    教えた場所（learned）、OS とビルドからの推測の順に使う。推測は、製品名などのビルドの設定によって外れることがある
+    （run 2026-11-21_1613: 製品名を英語にしたビルドで、バンドル ID の名前ではなく会社名/製品名のフォルダに書いた）。"""
     guess = platform.guess_identity(build.path)
     ident = GameIdentity(build.company or guess.company, build.product or guess.product, guess.bundle_id)
     return SaveTarget(
-        save_dir=build.save_dir or platform.default_save_dir(ident),
+        save_dir=build.save_dir or learned or platform.default_save_dir(ident),
         prefs_domain=build.prefs_domain or platform.default_prefs_domain(ident),
     )
+
+
+def learned_save_dir(runs_dir: Path, build_name: str) -> Path | None:
+    """ゲームが前のランの boot で教えたセーブの場所（覚えていなければ None）。"""
+    try:
+        known = json.loads((runs_dir / SAVE_DIRS_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    p = known.get(build_name) if isinstance(known, dict) else None
+    return Path(p) if isinstance(p, str) and p else None
+
+
+def remember_save_dir(runs_dir: Path, build_name: str, save_dir: Path) -> None:
+    """ゲームが boot で教えたセーブの場所を、次のランの退避に使うために覚える。"""
+    path = runs_dir / SAVE_DIRS_NAME
+    try:
+        known = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        known = {}
+    if not isinstance(known, dict):
+        known = {}
+    known[build_name] = str(save_dir)
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(known, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
 
 
 def _unique(p: Path) -> Path:
@@ -55,7 +86,10 @@ def previous_run_save(runs_dir: Path, build_name: str, exclude: Path | None = No
     for d in dirs:
         if exclude is not None and d.resolve() == exclude.resolve():
             continue
-        saves = [a / "save" for a in (d / "backup").glob("after_run*") if (a / "save").is_dir()]
+        # ゲームが教えたセーブの場所が違って退避し直したランは、実際のセーブが save_dir_moved の下に残る（最初の退避の
+        # after_run より後に作られるので、新しい方を使う）
+        saves = [a / "save" for b in (d / "backup", d / "save_dir_moved" / "backup") for a in b.glob("after_run*")
+                 if (a / "save").is_dir()]
         if saves:
             return max(saves, key=lambda p: p.parent.stat().st_mtime)
     return None

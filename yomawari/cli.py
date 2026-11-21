@@ -38,7 +38,7 @@ from .profile import apply_rules, load_spec
 from .purpose import MODES, PurposeError
 from .purpose import resolve as resolve_purpose
 from .runs import PruneResult, prune_runs
-from .savestate import SaveState, resolve_target
+from .savestate import SaveState, learned_save_dir, resolve_target
 from .screen import ScreenError, parse_screen
 from .supervisor import Supervisor, child_state_path, write_child_state
 from .sensors.window import ClientArea
@@ -522,7 +522,7 @@ def builds_check(ctx: typer.Context, name: str = typer.Argument(..., help="ビ�
     _print_msgs(msgs)
     if exe is None:
         raise typer.Exit(EXIT_HARNESS_ERROR)
-    target = resolve_target(b, plat)
+    target = resolve_target(b, plat, learned_save_dir(cfg.runs_dir, b.name))
     console.print(f"  セーブの場所: {target.save_dir or '不明'}")
     console.print(f"  PlayerPrefs: {target.prefs_domain or '不明'}")
     ok = _boot_check(cfg, b, exe, load_rules(cfg.rules_path))

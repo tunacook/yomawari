@@ -47,7 +47,7 @@ from .platform import Platform
 from .profile import GameSpec
 from .post.report import RunSummary, write_report
 from .purpose import Purpose
-from .savestate import SaveState, previous_run_save, resolve_target
+from .savestate import SaveState, SaveTarget, learned_save_dir, previous_run_save, remember_save_dir, resolve_target
 from .screen import Screen
 from .sensors.savefile import SaveFileWatch
 from .state import GameState
@@ -153,6 +153,10 @@ class Harness:
         self._fuzz_task: asyncio.Task[None] | None = None
         self._crash_seen: set[Path] = set()
         self._save_watch: SaveFileWatch | None = None  # F-01: セーブしたらファイルが更新されたかを見る
+        self._save_target: SaveTarget | None = None  # 退避したセーブの場所と PlayerPrefs のドメイン
+        # ゲームが boot で教えたセーブの場所が、退避した場所と違った。セッションを終え、退避し直してから起動し直す
+        self._save_moved: Path | None = None
+        self._save_resolved = False  # 退避し直した（1 ランで 1 回だけ。場所が変わり続けても起動し直し続けない）
         self._screen: Screen | None = None  # ランの画面の前提（--screen）
         self._screen_seen: set[int] = set()  # 画面の大きさを一度でも見た起動
         self._screen_abort = ""  # 決めた画面で起動できなかった（ランを止める理由）
@@ -180,6 +184,7 @@ class Harness:
         if ev.kind == "boot" and ev.source == "game":
             d = ev.data
             self.roles.build = "/".join(str(d[k]) for k in ("version", "build_guid") if d.get(k)) or None
+            self._check_save_dir(d.get("data_path"))
         elif ev.kind == "proc_exit" and ev.data["code"] == 0 and ev.data.get("after_op"):
             # 押した直後に正常に終わった
             key = str(ev.data["after_op"])
@@ -340,8 +345,34 @@ class Harness:
         # ハーネス自身の停止（_stopping）とは分けて持つ（押すのに失敗して取り消すときに、停止中の印まで消さないように）
         self._expect_exit = expecting
 
+    def _check_save_dir(self, data_path: object) -> None:
+        """ゲームが boot で教えたセーブの場所（persistentDataPath）を覚え、退避した場所と違えば、セーブが書かれる前に
+        セッションを終える（ランの続きで、退避し直してから起動し直す）。設定（builds.<name>.save_dir）で決めたビルドは変えない。"""
+        if not isinstance(data_path, str) or not data_path or self._save_target is None:
+            return
+        reported = Path(data_path)
+        remember_save_dir(self.runs_dir, self.build.name, reported)
+        if reported == self._save_target.save_dir:
+            return
+        if self.build.save_dir is not None:
+            note = (f"ゲームが教えたセーブの場所（{reported}）が、設定（builds.{self.build.name}.save_dir）の"
+                    f"{self.build.save_dir} と違う。設定の場所を退避して見ている")
+            if note not in self.notes:
+                self.notes.append(note)
+            return
+        if self._save_resolved:
+            note = (f"ゲームが教えたセーブの場所（{reported}）が、退避し直した場所（{self._save_target.save_dir}）とも違った。"
+                    f"起動し直し続けないように、このランではこれ以上退避し直さない")
+            if note not in self.notes:
+                self.notes.append(note)
+            return
+        if self._save_moved is None and self._restart_req is not None:
+            self._save_moved = reported
+            self._restart_req.set()
+
     async def _session(self, launch: int, deadline: float, run_dir: Path) -> str:
-        """ゲームを1回起動して監視する。戻り値は "restart"、"relaunch"（終了を期待する操作で終わった）か "deadline"。"""
+        """ゲームを1回起動して監視する。戻り値は "restart"、"relaunch"（終了を期待する操作で終わった）、"save_dir"（セーブの
+        場所が退避した場所と違った）か "deadline"。"""
         log_path = run_dir / ("player.log" if launch == 0 else f"player.{launch}.log")
         self._stopping = False
         self._expect_exit = False
@@ -398,6 +429,8 @@ class Harness:
                 await asyncio.wait_for(self._restart_req.wait(), timeout=remaining)
                 ended = proc.poll() is not None
                 reason = "relaunch" if (self._expect_exit or self._exit_after_op) and ended else "restart"
+                if self._save_moved is not None:
+                    reason = "save_dir"
             except TimeoutError:
                 pass
         except asyncio.CancelledError:
@@ -577,20 +610,28 @@ class Harness:
         try:
             if saves.pending():
                 self.notes += ["前回のランの未復元の退避を見つけたため復元しました"] + saves.restore()
-            target = resolve_target(self.build, self.platform)
-            if prev_save is not None:
-                self.notes += saves.backup(run_dir, target, prev_save, "前のランが終わったときのセーブ（--continue）")
-            else:
-                self.notes += saves.backup(run_dir, target, self.build.initial_save)
-            backed_up = True
-            if "F-01" in self.rules:
-                if target.save_dir is not None:
-                    f01 = self.rules["F-01"]
-                    self._save_watch = SaveFileWatch(target.save_dir, self._publish, float(f01.param("check_after_sec")),
-                                                     float(f01.param("slack_sec")))
+            target = resolve_target(self.build, self.platform, learned_save_dir(self.runs_dir, self.build.name))
+
+            def backup(target: SaveTarget, where: Path = run_dir) -> None:
+                if prev_save is not None:
+                    self.notes.extend(saves.backup(where, target, prev_save, "前のランが終わったときのセーブ（--continue）"))
                 else:
-                    self.notes.append("セーブの場所が分からないため、F-01（セーブしたのにファイルが更新されない）を"
-                                      "評価していません（builds.<name>.save_dir で指定できます）")
+                    self.notes.extend(saves.backup(where, target, self.build.initial_save))
+                self._save_target = target
+                if self._save_watch is not None:
+                    self._save_watch.close()
+                    self._save_watch = None
+                if "F-01" in self.rules:
+                    if target.save_dir is not None:
+                        f01 = self.rules["F-01"]
+                        self._save_watch = SaveFileWatch(target.save_dir, self._publish, float(f01.param("check_after_sec")),
+                                                         float(f01.param("slack_sec")))
+                    else:
+                        self.notes.append("セーブの場所が分からないため、F-01（セーブしたのにファイルが更新されない）を"
+                                          "評価していません（builds.<name>.save_dir で指定できます）")
+
+            backup(target)
+            backed_up = True
             deadline = self._started + opts.hours * 3600
             launch = 0
             max_restarts = int(self.run_cfg["max_restarts"])
@@ -604,6 +645,20 @@ class Harness:
                     break
                 if reason == "relaunch":
                     # 終了を期待する操作で終わった。再起動の上限には数えない
+                    launch += 1
+                    continue
+                if reason == "save_dir" and self._save_moved is not None:
+                    # ゲームが教えたセーブの場所が、退避した場所と違った。退避した場所を戻してから、教わった場所を退避し直し、
+                    # 起動し直す（再起動の上限には数えない）。次のランからは、教わった場所を起動前に退避する
+                    moved, self._save_moved = self._save_moved, None
+                    self._save_resolved = True
+                    old = self._save_target.save_dir if self._save_target is not None else None
+                    self.notes.append(f"ゲームが教えたセーブの場所（{moved}）が、退避した場所（{old}）と違ったので、"
+                                      f"ゲームを止めて退避し直し、起動し直した（起動 #{launch}）")
+                    self.notes.extend(saves.restore())
+                    prefs = self._save_target.prefs_domain if self._save_target is not None else None
+                    # 最初の退避（run_dir/backup）とは別の場所に退避する（ラン後の状態も、それぞれの退避の下に残る）
+                    backup(SaveTarget(moved, prefs), run_dir / "save_dir_moved")
                     launch += 1
                     continue
                 if self.restarts >= max_restarts:
