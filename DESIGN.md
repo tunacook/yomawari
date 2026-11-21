@@ -490,8 +490,8 @@ role_min_confidence = 0.7    # ボタンの見た目からの役割の推定（�
 
 保存場所（macOS、ビルド）:
 - セーブ: ゲームが `boot` の `data_path` で教えた場所（準備の項）。教わる前の推測は `~/Library/Application Support/<バンドルID>/`（`Info.plist` の `CFBundleIdentifier`。例: `com.Company.Product`）
-  - 推測は外れることがある。run 2026-11-21_1613 では、製品名を変えたビルドが `~/Library/Application Support/<Company>/<Product>/`（エディタのプレイモードと同じ場所）に書いた。どちらに書くかはビルドの設定で変わるので、決め打ちせず `data_path` を使う
-- PlayerPrefs: `~/Library/Preferences/<バンドルID>.plist`（`~/Library/Preferences/unity.<company>.<product>.plist` はエディタのもの）
+  - 推測は外れることがある。run 2026-11-21_1613 では、製品名を変えたビルドが `~/Library/Application Support/<Company>/<Product>/` に書いた。どちらに書くかはビルドの設定で変わるので、決め打ちせず `data_path` を使う
+- PlayerPrefs: `~/Library/Preferences/<バンドルID>.plist`
 - Player.log 既定: `~/Library/Logs/<Company>/<Product>/Player.log`
 - クラッシュ: `~/Library/Logs/DiagnosticReports/*.ips`
 
