@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..events import Event
-from ..input.pointer import InputBlocked, Pointer, PointerError
+from ..input.pointer import InputBlocked, Pointer, PointerError, ScreenChanged
 from ..sensors.screen import Shot
 from ..state import GameState, Rect, Target
 from .decider import Decider
@@ -459,6 +459,9 @@ class FuzzSession:
         # 目標へ向かって動かした操作の結果を、次に画面が落ち着いたときに確かめる: (一覧, 目標, 操作の label, 動かす前の距離)
         self._moving: tuple[str, str, str, float] | None = None
         self._odds: tuple[str, dict[str, Any]] | None = None  # Decider が最後に選んだ操作の label と確率
+        # 操作を決めたときの state.ui_seq と、入力を送る直前に押せるものが変わっていて、続けて送らなかった回数
+        self._decided_ui: int | None = None
+        self._stale_skips = 0
         self._title_returns = state.title_returns
         self._resolution_changes = state.resolution_changes
         self._play_start = 0  # このプレイを始めたときに届いていた本文・scene・選択肢の数
@@ -777,6 +780,7 @@ class FuzzSession:
             await self._irregular("random")
             return
 
+        decided_ui = self.state.ui_seq  # 候補を作る画面（入力を送る直前に、押せるものが変わっていないかを比べる）
         allow_exit = now - (self.run.last_exit_t or self.run.started) >= self._exit_interval()
         if allow_exit:
             allow_exit = self._saved_for_exit(now)
@@ -825,12 +829,15 @@ class FuzzSession:
             return  # 暗転中などで押せない。応答確認は次に押せるときまで持ち越す
         self._odds = (op.label, getattr(self.run.decider, "last_odds", {}))
         self._verify_next = False
+        self._decided_ui = decided_ui
         op = self.run.input_style.convert(op, self.run.rng)
         if op.via_key == NAV:
             nav = await self._navigate(op)
             if nav is None:
                 return  # 押す前にウィンドウが出ていない・前面にできないなど
             op = nav
+            # 方向キーで一覧を動かすと、見えているボタンの並びが変わる。ハーネスが動かした分なので、移り終えた画面で比べる
+            self._decided_ui = self.state.ui_seq
         if op.kind == "expect_exit":
             await self._expect_exit(op)
         elif op.kind == "external":
@@ -2968,12 +2975,24 @@ class FuzzSession:
         self._save_screen_last = self._on_save_screen(op)
         if self._save_screen_last:
             self._save_screen_at = time.monotonic()
+        decided, self._decided_ui = self._decided_ui, None
+        # 操作を決めてから入力を送るまでに、押せるもの（選択肢・ボタンのある画面）が変わっていれば送らない。
+        # イレギュラー操作は、画面の切り替わりの途中に押すのが目的なので確かめない。画面が変わり続けて送れないときは、
+        # 続けて stale_screen_skips 回送らなかったら、確かめずに送る
+        guard = decided is not None and not op.irregular and self._stale_skips < int(self.cfg["stale_screen_skips"])
         async with self._lock:
             try:
                 try:
+                    self.pointer.expect_ui = decided if guard else None
                     pos = await asyncio.to_thread(self._input, op)
+                except ScreenChanged as e:
+                    self._stale_skips += 1
+                    self.publish(Event("harness", "op_skipped", {**op.to_json(), "why": str(e)}, self.launch))
+                    return False
                 finally:
+                    self.pointer.expect_ui = None
                     self._drain_fits()
+                self._stale_skips = 0
             except InputBlocked as e:
                 self.run.stats["error"] += 1
                 if self.run.block(str(e), time.time()):
