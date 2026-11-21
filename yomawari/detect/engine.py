@@ -1171,11 +1171,13 @@ class NothingRespondsDetector(Detector):
         self.alive = float(rule.param("heartbeat_alive_sec"))
         self.responded: set[str] = set()  # このランで前に反応したボタン
         self.since: float | None = None
+        self.since_wall = ""
         self.ops: list[str] = []
         self.known = 0
 
     def _reset(self) -> None:
         self.since = None
+        self.since_wall = ""
         self.ops = []
         self.known = 0
 
@@ -1198,13 +1200,13 @@ class NothingRespondsDetector(Detector):
             # イレギュラー操作（Esc・右クリックなど）は、画面によって何も起きないのが仕様なので数えない
             return []
         if self.since is None:
-            self.since = ev.t
+            self.since, self.since_wall = ev.t, ev.wall
         self.ops.append(str(d.get("label")))
         if d.get("kind") == "click" and str(d.get("target")) in self.responded:
             self.known += 1
         if len(self.ops) < self.min_ops or ev.t - self.since < self.min_sec or self.known < self.min_known:
             return []
-        sec, ops = ev.t - self.since, self.ops
+        sec, ops, since_wall = ev.t - self.since, self.ops, self.since_wall
         self._reset()
         state = d.get("state") or {}
         where = ",".join(state.get("menus") or []) or state.get("scene") or "?"
@@ -1214,7 +1216,8 @@ class NothingRespondsDetector(Detector):
                 f"{sec:.0f} 秒のあいだ、{len(ops)} 回の操作（{'、'.join(kinds[:5])}{' ほか' if len(kinds) > 5 else ''}）の"
                 f"どれにも画面が反応しません",
                 key=where, launch=ev.launch, t=ev.t, wall=ev.wall,
-                ops=kinds, count=len(ops), sec=round(sec, 1), recent=d.get("recent"), state=state,
+                ops=kinds, count=len(ops), sec=round(sec, 1), since_wall=since_wall, recent=d.get("recent"),
+                state=state,
             )
         ]
 

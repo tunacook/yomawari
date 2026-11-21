@@ -1891,6 +1891,7 @@ class FuzzSession:
             self._recovery = None
             ops = " → ".join(f"`{o}`" for o in r["ops"])
             self.run.notes.append(f"{r['rule']} のあと、{ops} を試しても抜け出せなかったので、再起動した（起動 #{self.launch}）")
+            self.publish(Event("harness", "recover_failed", {"rule": r["rule"], "ops": r["ops"]}, self.launch))
             r["on_fail"]()
             return
         # 押せるもの（ガードに従う）と、Esc・右クリック・本文送りを、同じ重みで順に試す
