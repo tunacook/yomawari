@@ -38,7 +38,9 @@ namespace Yomawari
                 "\"version\":" + YomawariFormat.Str(Application.version) +
                 ",\"build_type\":" + YomawariFormat.Str(Debug.isDebugBuild ? "development" : "release") +
                 ",\"build_guid\":" + YomawariFormat.Str(Application.buildGUID) +
-                ",\"unity\":" + YomawariFormat.Str(Application.unityVersion));
+                ",\"unity\":" + YomawariFormat.Str(Application.unityVersion) +
+                // セーブなどを書く場所。OS とビルドの設定（製品名・バンドル ID など）で決まり、ハーネスはここを退避して見る
+                ",\"data_path\":" + YomawariFormat.Str(Application.persistentDataPath));
         }
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad), Preserve]

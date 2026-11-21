@@ -47,7 +47,7 @@ rules:
     severity: critical
     title: セーブしたのにファイルが更新されない
     description: >-
-      ゲームがセーブを終えた（save の phase: end）のに、セーブの場所（persistentDataPath。builds.<name>.save_dir で変えられる）
+      ゲームがセーブを終えた（save の phase: end）のに、セーブの場所（ゲームが boot で教えた persistentDataPath。builds.<name>.save_dir で変えられる）
       の下に、そのセーブを始めたあとに更新されたファイルが1つもない。どのファイルかはゲーム・エンジンごとに違うので問わない。
       セーブの場所が分からないビルドでは評価しない
     params:

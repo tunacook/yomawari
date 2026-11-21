@@ -331,3 +331,33 @@ def test_cli_repeated_sigint_still_writes_report(tmp_path, mock_app):
     assert "| 終わり方 | 手動で中断した（Ctrl+C）。予定の 1 時間より前に止めた" in report.read_text()
     assert (save / "slot1.dat").read_text() == "original"
     assert not (tmp_path / "runs" / "restore_pending.json").exists()
+
+
+def test_save_dir_told_by_the_game_is_backed_up_before_it_writes(tmp_path, mock_app, fake_platform):
+    # run 2026-11-21_1613: ゲームはバンドル ID の名前でなく会社名/製品名のフォルダに書き、ハーネスは書かれない方を退避して
+    # いた（本物のセーブにランのセーブが書かれ、F-01 を誤って出した）。boot の data_path が退避した場所と違えば、
+    # セーブが書かれる前にゲームを止め、教わった場所を退避し直して起動し直す。次のランからは、教わった場所を起動前に退避する
+    real = tmp_path / "os" / "real"
+    real.mkdir(parents=True)
+    (real / "slot1.dat").write_text("original")
+    args = ["--mock-data-path", str(real), "--mock-save-after", "1.0"]
+    r = run_harness(tmp_path, mock_app, fake_platform, args, 3)
+    report = r.report_path.read_text()
+    assert f"ゲームが教えたセーブの場所（{real}）が、退避した場所（{fake_platform.save}）と違ったので" in report
+    assert "起動回数 / 再起動回数 | 2 / 0" in report  # 再起動の上限には数えない
+    assert (real / "slot1.dat").read_text() == "original"  # ランのあいだに書かれたセーブは戻した
+    assert not (tmp_path / "runs" / "restore_pending.json").exists()
+    assert json.loads((tmp_path / "runs" / "_save_dirs.json").read_text()) == {"mock": str(real)}
+    # --continue で使う前のランのセーブは、退避し直した場所のラン後の状態（ゲームが書いたもの）
+    from yomawari.savestate import previous_run_save
+    cont = previous_run_save(tmp_path / "runs", "mock")
+    assert cont is not None and (cont / "slot1.dat").read_text() == "written by game"
+    # 次のランでは、教わった場所を起動前に退避するので、起動し直さない
+    build = BuildConfig("mock", mock_app, args=["--mock-hb", "0.05", *args])
+    exe = MacPlatform().resolve_executable(mock_app)
+    h = Harness(build, exe, fake_platform, scaled_rules(SCALE), RULES_PATH, tmp_path / "runs", RUN, SENSORS)
+    r2 = asyncio.run(h.run(RunOptions(hours=2 / 3600, mode="aging", seed="1")))
+    report2 = r2.report_path.read_text()
+    assert "退避した場所" not in report2 and "起動回数 / 再起動回数 | 1 / 0" in report2
+    assert f"セーブを退避: {real}" in report2
+    assert (real / "slot1.dat").read_text() == "original"

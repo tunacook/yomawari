@@ -20,7 +20,7 @@ from .events import Event
 from .input.base import InputDriver
 from .input.pointer import Pointer, PointerError
 from .platform import Platform
-from .savestate import SaveState, resolve_target
+from .savestate import SaveState, learned_save_dir, resolve_target
 from .sensors.logtail import YomawariRecord, tail_file
 from .sensors.window import ClientArea
 from .state import GameState
@@ -71,7 +71,8 @@ async def inspect_build(
         result.notes += ["前回の未復元の退避を見つけたため復元しました"] + saves.restore()
     # 退避先は毎回別にする（前回の inspect の退避と混ざらないように）
     backup_dir = work / f"{build.name}_{datetime.now():%Y%m%d_%H%M%S}"
-    result.notes += saves.backup(backup_dir, resolve_target(build, platform), build.initial_save)
+    result.notes += saves.backup(backup_dir, resolve_target(build, platform, learned_save_dir(runs_dir, build.name)),
+                                 build.initial_save)
 
     state = GameState()
     proc = launcher.launch(exe, build, log_path)
