@@ -26,6 +26,10 @@ class InputBlocked(PointerError):
     """OS がゲームへの入力を受け付けない（画面がロックされている、ゲームを前面にできない）。人が画面を戻すまで続く。"""
 
 
+class ScreenChanged(PointerError):
+    """操作を決めてから入力を送るまでに、押せるもの（選択肢・ボタンのある画面）が変わったので送らなかった。"""
+
+
 # タイトルバーをつかむとき、左端の閉じる・最小化・拡大のボタンを避ける幅（ポイント）
 _TITLE_BUTTONS = 80.0
 # ウィンドウが見える範囲に収まっているとみなす誤差（ポイント）
@@ -77,6 +81,9 @@ class Pointer:
         self._fit_size: tuple[float, float] | None = None
         self._fit_count = 0
         self._visible: ScreenRect | None = None  # 最後に area() で見た、ディスプレイの見える範囲
+        # 操作を決めたときの state.ui_seq。入れておくと、入力を送る直前に押せるものの並びが変わっていれば送らない
+        # （run 2026-11-21_1512: 本文送りの Enter を送るあいだに選択肢が出て、フォーカスの当たった 1 つめを選び続けた）
+        self.expect_ui: int | None = None
 
     def area(self) -> ClientArea:
         info = self.platform.window_info(self.pid)
@@ -159,6 +166,11 @@ class Pointer:
         if front != self.pid:
             raise InputBlocked("ゲームを前面にできません")
 
+    def _check_screen(self) -> None:
+        """入力を送る直前: 操作を決めたあとに、押せるもの（選択肢・ボタンのある画面）が変わっていれば送らない。"""
+        if self.expect_ui is not None and self.state.ui_seq != self.expect_ui:
+            raise ScreenChanged("操作を決めたあとに、選択肢・ボタンのある画面が変わった")
+
     def click(self, target: Target, button: str = "left", clicks: int = 1) -> tuple[float, float]:
         """target を押し、押した画面座標を返す。押す直前に、target が最新の状態にまだあるか確かめる。"""
         current = self.state.find(target.key, target.nth)
@@ -175,6 +187,7 @@ class Pointer:
         x, y = area.to_screen(nx, ny)
         self._check_visible(x, y)
         self.ensure_front()
+        self._check_screen()
         self.driver.click(x, y, button=button, clicks=clicks)
         return (x, y)
 
@@ -183,6 +196,7 @@ class Pointer:
         x, y = area.to_screen(nx, ny)
         self._check_visible(x, y)
         self.ensure_front()
+        self._check_screen()
         self.driver.scroll(x, y, amount)
         return (x, y)
 
@@ -193,6 +207,7 @@ class Pointer:
         x1, y1 = area.to_screen(nx1, ny1)
         self._check_visible(x0, y0)
         self.ensure_front()
+        self._check_screen()
         self.driver.drag(x0, y0, x1, y1)
         return (x0, y0)
 
@@ -221,4 +236,5 @@ class Pointer:
         self.area()  # ウィンドウが出ていなければ押さない
         self.ensure_front()
         for _ in range(times):
+            self._check_screen()
             self.driver.key(name)

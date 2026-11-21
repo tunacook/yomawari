@@ -143,6 +143,10 @@ class GameState:
     title_returns: int = 0
     resolution_changes: int = 0  # resolution の値（w / h / mode）が変わった回数
     settings_changes: int = 0  # settings の値が変わった回数（押したボタンで設定が変わったかを見るため）
+    # 押せるものの並び（選択肢と、menu ごとの名前・モーダルか・見えているボタン）が変わった回数。ハーネスが操作を決めて
+    # から入力を送るまでに変われば、押すと決めたときと違うものを押すので、送らない（Pointer.expect_ui）
+    ui_seq: int = 0
+    ui_key: tuple[Any, ...] = ()
     saves: int = 0  # セーブが始まった回数（押したボタンでセーブしたかを見るため。V-07）
     # スクリプトのコマンドを実行した回数（応答確認のあいだにスクリプトが進んでいたかを見るため。S-01）
     commands: int = 0
@@ -188,6 +192,12 @@ class GameState:
         handler = getattr(self, f"_on_{ev.kind}", None)
         if handler is not None:
             handler(d, ev.t)
+        if ev.kind in ("choices", "menu", "menu_close"):
+            ui = (tuple(c.key for c in self.choices),
+                  tuple(sorted((m.name, m.modal, tuple(b.label for b in m.visible_buttons)) for m in self.menus.values())))
+            if ui != self.ui_key:
+                self.ui_key = ui
+                self.ui_seq += 1
 
     # --- イベントごと ---
 

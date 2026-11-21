@@ -282,3 +282,46 @@ def test_arrow_keys_on_the_way_to_a_button_are_remembered():
     s, st, run, drv, published = _menu_session()
     asyncio.run(s._navigate(Op("click", st.find("UI/C"), via_key=NAV)))
     assert [k for _, k in s._key_ops] == ["down", "down"]
+
+
+def test_input_is_not_sent_when_choices_appear_after_deciding():
+    # run 2026-11-21_1512: 本文のない待ちのあいだに本文送りを決め、Enter を送るまでに選択肢が出て、フォーカスの当たった
+    # 1 つめ（バッドエンドへ進む方）を選び続けた。押せるものが決めたときと変わっていれば送らず、選び直す
+    from yomawari.fuzz.loop import FuzzSession
+
+    s, st, run, _ = _session()
+    drv = KeyDriver()
+    s.pointer.driver = drv
+    s.pointer.platform.info = WindowInfo(1, ScreenRect(100, 50, 1280, 748), True)
+    published = []
+    s.publish = published.append
+    items = [{"id": "a", "text": "話す", "rect": [0.2, 0.4, 0.8, 0.5]}, {"id": "b", "text": "話さない", "rect": [0.2, 0.5, 0.8, 0.6]}]
+
+    def decide_then_choices_appear():
+        s._decided_ui = st.ui_seq
+        _game(s, st, "choices", items=items)
+
+    decide_then_choices_appear()
+    assert asyncio.run(FuzzSession._do(s, Op("advance", via_key="enter"))) is False
+    assert drv.keys == [] and [e.kind for e in published] == ["op_skipped"]
+    assert published[0].data["kind"] == "advance"
+    # 決めたあとに押せるものが変わらなければ送る（ボタンの矩形だけの変化は数えない）
+    s._decided_ui = st.ui_seq
+    items[0]["rect"] = [0.2, 0.41, 0.8, 0.51]
+    _game(s, st, "choices", items=items)
+    assert asyncio.run(FuzzSession._do(s, Op("advance", via_key="enter"))) is True
+    assert drv.keys == ["enter"]
+    # イレギュラー操作は、画面の切り替わりの途中に押すのが目的なので確かめない
+    _game(s, st, "choices", items=[])
+    decide_then_choices_appear()
+    assert asyncio.run(FuzzSession._do(s, Op("advance", via_key="enter", irregular=True))) is True
+    # 画面が変わり続けて送れないときは、続けて stale_screen_skips 回送らなかったら、確かめずに送る
+    drv.keys.clear()
+    for n in range(FUZZ_DEFAULTS["stale_screen_skips"]):
+        _game(s, st, "choices", items=[])
+        decide_then_choices_appear()
+        assert asyncio.run(FuzzSession._do(s, Op("advance", via_key="enter"))) is False
+    _game(s, st, "choices", items=[])
+    decide_then_choices_appear()
+    assert asyncio.run(FuzzSession._do(s, Op("advance", via_key="enter"))) is True
+    assert drv.keys == ["enter"]
