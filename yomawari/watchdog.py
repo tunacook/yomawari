@@ -156,6 +156,7 @@ class Harness:
         self._save_target: SaveTarget | None = None  # 退避したセーブの場所と PlayerPrefs のドメイン
         # ゲームが boot で教えたセーブの場所が、退避した場所と違った。セッションを終え、退避し直してから起動し直す
         self._save_moved: Path | None = None
+        self._first_launch = 0  # ランの最初の起動とみなす起動（セーブの場所が違って起動し直したら、その起動）
         self._save_resolved = False  # 退避し直した（1 ランで 1 回だけ。場所が変わり続けても起動し直し続けない）
         self._screen: Screen | None = None  # ランの画面の前提（--screen）
         self._screen_seen: set[int] = set()  # 画面の大きさを一度でも見た起動
@@ -418,7 +419,8 @@ class Harness:
             pointer = Pointer(self.platform, self._driver, proc.pid, self.state,
                               fit_wait=float(self.fuzz_cfg["window_fit_wait_sec"]),
                               fit_tries=int(self.fuzz_cfg["window_fit_tries"]))
-            self._session_fuzz = FuzzSession(self._fuzz, self.state, pointer, self._publish, launch, self._on_expect_exit)
+            self._session_fuzz = FuzzSession(self._fuzz, self.state, pointer, self._publish, launch, self._on_expect_exit,
+                                             first=launch == self._first_launch)
             self._fuzz_task = asyncio.create_task(self._session_fuzz.loop(stop))
             tasks.append(self._fuzz_task)
         reason = "deadline"
@@ -660,6 +662,7 @@ class Harness:
                     # 最初の退避（run_dir/backup）とは別の場所に退避する（ラン後の状態も、それぞれの退避の下に残る）
                     backup(SaveTarget(moved, prefs), run_dir / "save_dir_moved")
                     launch += 1
+                    self._first_launch = launch  # ゲームはまだ何も進めていないので、最初の起動と同じく遊ぶ
                     continue
                 if self.restarts >= max_restarts:
                     self.notes.append(f"再起動回数が上限（{max_restarts}）に達したため打ち切りました")
