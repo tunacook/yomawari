@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import struct
+import zlib
 from dataclasses import dataclass
 
 from ..state import Rect
@@ -80,3 +82,22 @@ def vividness(shot: Shot, rect: Rect) -> tuple[float, float] | None:
     mean = sum(lum) / len(lum)
     var = sum((v - mean) ** 2 for v in lum) / len(lum)
     return var ** 0.5, sat / len(lum)
+
+
+def to_png(shot: Shot) -> bytes:
+    """キャプチャを PNG（RGBA）にする。レポートに残す画面の写し用（外部のパッケージを使わない）。"""
+    if shot.order not in ("BGRA", "RGBA"):
+        raise ValueError(f"このピクセルの並びは PNG にできません: {shot.order}")
+    w, h, stride = shot.width, shot.height, shot.bytes_per_row
+    rows = bytearray()
+    for y in range(h):
+        row = bytearray(shot.data[y * stride: y * stride + w * 4])
+        if shot.order == "BGRA":
+            row[0::4], row[2::4] = row[2::4], row[0::4]
+        rows += b"\x00" + row  # フィルタなし
+
+    def chunk(kind: bytes, body: bytes) -> bytes:
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(rows), 6)) + chunk(b"IEND", b""))

@@ -61,7 +61,7 @@ from .listing import (
 OPENER_KINDS = ("right_click", "key")
 INTENTS = {"progress": "本編を進める", "explore": "画面を見て回る"}
 # 再起動する前に、抜け出す操作を試すルール（ゲームは動いているが進まない）
-RECOVERABLE = ("S-02", "S-03")
+RECOVERABLE = ("S-02", "S-03", "S-06")
 
 # イレギュラー操作を差し込むきっかけにするゲームのイベント
 # drag の向き → 描画領域の正規化座標での移動の向き（上へドラッグすると、下にある項目が出てくる）
@@ -1841,7 +1841,7 @@ class FuzzSession:
     # --- 再起動の前に抜け出す ---
 
     def recover(self, rule: str, on_fail: Callable[[], None]) -> bool:
-        """S-02 / S-03 のとき、再起動する前に、抜け出す操作を recover_ops 回まで試す。試せないときは False。"""
+        """S-02 / S-03 / S-06 のとき、再起動する前に、抜け出す操作を recover_ops 回まで試す。試せないときは False。"""
         if rule not in RECOVERABLE:
             return False
         if int(self.cfg["recover_ops"]) <= 0 or self._exiting:

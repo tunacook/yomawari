@@ -531,6 +531,11 @@ def render_top(items: list[Item], events: list[dict], duration_sec: float, launc
                 out += ["- ログ抜粋:", "", "```text", str(first.evidence["log"]).rstrip("\n"), "```"]
             if first.evidence.get("dump"):
                 out.append(f"- クラッシュダンプ: `{first.evidence['dump']}`")
+            snap = first.evidence.get("snapshot") or {}
+            if snap:
+                links = [f"[画面]({snap['png']})"] if snap.get("png") else []
+                links.append(f"[状態と直前のイベント]({snap['json']})")
+                out.append(f"- 最初の検出のときの状況（再起動の前に残した）: {'・'.join(links)}")
             log_name = "player.log" if first.launch == 0 else f"player.{first.launch}.log"
             out.append(f"- ログ: [{log_name}]({log_name})")
         if it.timeline:
