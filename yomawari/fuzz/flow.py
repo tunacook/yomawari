@@ -163,7 +163,7 @@ def _names(raw: Any, where: str) -> tuple[str, ...]:
     return tuple(raw)
 
 
-ANSWER_KEYS = ("at", "pick", "press", "note")
+ANSWER_KEYS = ("at", "at_text", "pick", "press", "note")
 
 
 @dataclass(frozen=True)
@@ -176,12 +176,16 @@ class Answer:
         1つの手順に書き方をいくつも配列で書け、どれかに当たればよい。
     press: 何も選ばずに一覧を閉じるのが正解のときなど、選ぶ手順の代わりに押すボタン（steps の press と同じ書き方）。
         pick と press は、どちらか一方だけ書く。flow の avoid に書いたボタンでも、正解として押す。
+    at_text: at の行の本文（話し手の名前を除く。タグと空白は比べない。ワイルドカード可）。at が配列なら、同じ数の配列で
+        at の順に書く。書いておくと、ゲームが出した at の行の本文と比べ、違えばその正解を使わない（スクリプトを直して
+        行番号がずれ、at が別の行を指していても、別の質問の正解で答え続けないため）。
     """
 
     at: tuple[str, ...]
     pick: tuple[str | tuple[str, ...], ...] = ()
     note: str = ""
     press: str = ""
+    at_text: tuple[str, ...] = ()
 
 
 def _is_spelling(x: Any) -> bool:
@@ -211,6 +215,13 @@ def _answers(raw: Any, where: str) -> tuple[Answer, ...]:
             raise ConfigError(
                 f"{aw}.at に質問の本文の行（line_id。例: \"main/chapter1_04:44.0\"。いくつもあるときは配列）を書いてください"
             )
+        at_text = a.get("at_text", ())
+        if isinstance(at_text, str):
+            at_text = [at_text]
+        if at_text and (not isinstance(at_text, list) or len(at_text) != len(at)
+                        or not all(isinstance(x, str) and x for x in at_text)):
+            raise ConfigError(f"{aw}.at_text に、at の行の本文を at と同じ数だけ書いてください（at が配列なら、同じ順の配列）")
+        at_text = tuple(at_text)
         pick, press = a.get("pick"), a.get("press")
         if (pick is None) == (press is None):
             raise ConfigError(
@@ -219,14 +230,15 @@ def _answers(raw: Any, where: str) -> tuple[Answer, ...]:
         if press is not None:
             if not isinstance(press, str) or not press:
                 raise ConfigError(f"{aw}.press に、選ぶ代わりに押すボタンの名前を書いてください（例: \"ListUI/CloseButton\"）")
-            out.append(Answer(tuple(at), (), str(a.get("note", "")), press))
+            out.append(Answer(tuple(at), (), str(a.get("note", "")), press, at_text))
             continue
         if not isinstance(pick, list) or not pick or not all(_is_spelling(x) for x in pick):
             raise ConfigError(
                 f"{aw}.pick に、選ぶ手順ごとの選ぶものの文字を配列で書いてください"
                 "（例: [\"No.030*\", \"屋上\"]。書き方がいくつもあれば [[\"No.030*\", \"題名\"], \"屋上\"]）"
             )
-        out.append(Answer(tuple(at), tuple(tuple(x) if isinstance(x, list) else x for x in pick), str(a.get("note", ""))))
+        out.append(Answer(tuple(at), tuple(tuple(x) if isinstance(x, list) else x for x in pick), str(a.get("note", "")),
+                          at_text=at_text))
     return tuple(out)
 
 

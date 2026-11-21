@@ -123,6 +123,15 @@ def test_parse_answers():
         bad([{"at": [], "pick": ["x"]}])
     with pytest.raises(ConfigError, match="at に質問"):
         bad([{"at": ["a:1", ""], "pick": ["x"]}])
+    # at_text は at の行の本文。at が配列なら同じ数の配列で書く
+    raw[0]["answers"] = [{"at": ["a:1", "a:5"], "at_text": ["どこ？", "違う場所"], "pick": ["x"]}]
+    assert parse_flows(raw)[0].answers[0].at_text == ("どこ？", "違う場所")
+    raw[0]["answers"] = [{"at": "a:1", "at_text": "どこ？", "press": "UI/Close"}]
+    assert parse_flows(raw)[0].answers[0].at_text == ("どこ？",)
+    with pytest.raises(ConfigError, match="at_text"):
+        bad([{"at": ["a:1", "a:5"], "at_text": "どこ？", "pick": ["x"]}])
+    with pytest.raises(ConfigError, match="at_text"):
+        bad([{"at": "a:1", "at_text": "", "pick": ["x"]}])
     with pytest.raises(ConfigError, match="pick に"):
         bad([{"at": "a:1", "pick": []}])
     with pytest.raises(ConfigError, match="どちらか一方"):
@@ -1055,6 +1064,25 @@ def test_profile_answer_is_tried_first():
     _ask_yes_no(s, st)
     _weights(s, st)
     assert s._answer_options({"はい", "いいえ"}, {"はい": "はい", "いいえ": "いいえ"}) is None
+
+
+def test_profile_answer_with_stale_at_is_not_used():
+    # run 2026-11-20_2206: スクリプトを直して行番号がずれ、at が隣の質問の行を指し、別の質問の正解で答え続けた。
+    # at_text を書いておけば、ゲームが出した at の行の本文と比べ、違えばその正解を使わずに記録する
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    for at_text, used in (("どう　する？", True), ("どう*", True), ("行く？", False)):
+        profile = ANSWER_PROFILE.replace('note = "いいえが正解"', f'at_text = "{at_text}", note = "いいえが正解"')
+        s, st, run, _ = _session({"ai_context_lines": 3, "wrong_answer_prob": 0.0})
+        run.flow = FlowTracker(parse_flows(tomllib.loads(profile)["flow"]))
+        _ask_yes_no(s, st)
+        w = _weights(s, st)
+        stale = [n for n in run.notes if "at_text" in n]
+        if used:
+            assert w["click choices/いいえ"] == click * k and not stale
+        else:
+            assert s._answer_options({"はい", "いいえ"}, {"はい": "はい", "いいえ": "いいえ"}) is None
+            assert stale == ["プロファイルの正解（いいえが正解）の at `main/s1:10` の本文が「どうする？」で、at_text「行く？」と違う"
+                             "ので、この正解を使わなかった（スクリプトを直して行番号がずれたなどで、at が古い可能性がある）"]
 
 
 def test_deliberate_wrong_answer_then_the_right_one():
