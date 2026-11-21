@@ -489,13 +489,18 @@ role_min_confidence = 0.7    # ボタンの見た目からの役割の推定（�
 - 画面のロック中（`platform` の `screen_locked`）とゲームを前面にできないときは、OS が入力を受け付けない。試す間隔を `blocked_wait_sec` あけ、`blocked_note_sec` 以上続いた時間を「ハーネスの記録」に書く。`events.jsonl` には `input_blocked` / `input_resumed` を1回ずつ出す
 
 保存場所（macOS、ビルド）:
-- セーブ: `~/Library/Application Support/<バンドルID>/`（`Info.plist` の `CFBundleIdentifier`。例: `com.Company.Product`）
-- PlayerPrefs: `~/Library/Preferences/<バンドルID>.plist`
-- `~/Library/Application Support/<Company>/<Product>/` と `~/Library/Preferences/unity.<company>.<product>.plist` はエディタのもの。ビルドの退避・復元の対象にしない
+- セーブ: ゲームが `boot` の `data_path` で教えた場所（準備の項）。教わる前の推測は `~/Library/Application Support/<バンドルID>/`（`Info.plist` の `CFBundleIdentifier`。例: `com.Company.Product`）
+  - 推測は外れることがある。run 2026-11-21_1613 では、製品名を変えたビルドが `~/Library/Application Support/<Company>/<Product>/`（エディタのプレイモードと同じ場所）に書いた。どちらに書くかはビルドの設定で変わるので、決め打ちせず `data_path` を使う
+- PlayerPrefs: `~/Library/Preferences/<バンドルID>.plist`（`~/Library/Preferences/unity.<company>.<product>.plist` はエディタのもの）
 - Player.log 既定: `~/Library/Logs/<Company>/<Product>/Player.log`
 - クラッシュ: `~/Library/Logs/DiagnosticReports/*.ips`
 
 （Windows: セーブ `%USERPROFILE%\AppData\LocalLow\<Company>\<Product>\`、PlayerPrefs `HKCU\Software\<Company>\<Product>`、クラッシュ `%TEMP%\<Company>\<Product>\Crashes\`）
+
+Windows 対応（フェーズ7）への申し送り（セーブ・PlayerPrefs の場所）:
+- セーブ: `data_path` で教わった場所を覚えて退避し、外れたら起動し直して退避し直す流れ（準備の項）は OS によらないので、そのまま使う。`platform/win.py` の `default_save_dir` は教わる前の推測（`LocalLow\<Company>\<Product>`）を返せばよい
+- パスの比べ方: Unity は `data_path` を `/` 区切り（`C:/Users/.../AppData/LocalLow/...`）で出す。ハーネスは `Path` どうしで比べる（Windows のパスは区切りと大文字・小文字の違いを同じとみなす）ので、同じ場所を違うと判定して起動し直すことはないはず。実機で確かめる
+- PlayerPrefs: レジストリ（`HKCU\Software\<Company>\<Product>`）にあり、`data_path` の下にない。macOS ではバンドル ID で決まり推測が当たるが、Windows では会社名・製品名から推測するので、製品名を変えたビルドなどで外れうる。`boot` に `Application.companyName` / `Application.productName` を足し、セーブの場所と同じく教わった値で退避する（足すときはパッケージ・ハーネス・§3 を同じ PR で変える）。退避・復元は `prefs_export` / `prefs_replace` をレジストリのキーの書き出し・書き戻し（`reg export` / `reg import` など）で作る
 
 ---
 
