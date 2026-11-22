@@ -1222,6 +1222,59 @@ class NothingRespondsDetector(Detector):
         ]
 
 
+class HarnessIdleDetector(Detector):
+    """Y-01: ゲームは生きている（ハートビートが来ている）のに、ハーネスが idle_sec 以上なにも操作していない。
+
+    操作のループが止まると、どの検出も出ない（操作がないので S-01・S-02・S-06 は数えない）。ゲームの進行不能と
+    見分けがつかず、レポートでは「進めなかった区間」になる（run 2026-11-22_2202: 画面の文字の読み取りが戻らず、
+    操作が 3 時間止まった）。操作・操作の結果・押せなかった操作は、ハーネスが動いている印として数え直す。
+    入力を送れなかった（input_blocked。画面のロックなどで OS がゲームへの入力を受け付けない）あとは、次の操作まで見ない。
+    ハーネスは入力が通るまで黙って待ち、その時間は「ハーネスの記録」に残る（run 2026-11-18_2153: 画面のロックで
+    1 時間 37 分操作できなかった）。このランで一度も操作していなければ見ない（aging は操作しない）。"""
+
+    ACTIVE = ("op", "op_result", "op_skipped", "op_error", "input_blocked")
+
+    def __init__(self, rule: Rule) -> None:
+        super().__init__(rule)
+        self.idle = float(rule.param("idle_sec"))
+        self.alive = float(rule.param("heartbeat_alive_sec"))
+        self.armed = False  # このランで操作したことがある
+        self.last: float | None = None  # ハーネスが最後に動いた時刻（起動し直したら起動の時刻）
+        self.last_wall = ""
+        self.last_op = ""
+        self.heartbeat: float | None = None
+        self.blocked = False  # OS が入力を受け付けず、ハーネスが待っている
+        self.fired = False
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        if ev.kind == "launch":
+            self.last, self.last_wall, self.heartbeat, self.fired = ev.t, ev.wall, None, False
+        elif ev.source == "game" and ev.kind in ("boot", "heartbeat"):
+            self.heartbeat = ev.t
+        elif ev.source == "harness" and ev.kind in self.ACTIVE:
+            self.armed = True
+            self.last, self.last_wall, self.fired = ev.t, ev.wall, False
+            self.last_op = str(ev.data.get("label") or ev.kind)
+            self.blocked = ev.kind == "input_blocked"
+        return []
+
+    def on_tick(self, now: float, launch: int) -> list[Issue]:
+        if not self.armed or self.blocked or self.fired or self.last is None or self.heartbeat is None:
+            return []
+        if now - self.heartbeat > self.alive or now - self.last < self.idle:
+            return []
+        self.fired = True
+        gap = now - self.last
+        return [
+            self.issue(
+                f"ゲームは動いているのに、ハーネスが {gap / 60:.0f} 分なにも操作していません（最後の操作: {self.last_op}、"
+                f"{self.last_wall[11:19]}）",
+                key="idle", launch=launch, t=now, wall=self.last_wall, sec=round(gap, 1), last_op=self.last_op,
+                since_wall=self.last_wall,
+            )
+        ]
+
+
 class DimButtonRespondedDetector(Detector):
     """V-07: ほかの同じ種類のボタンより暗い（今は押せないように見える）ボタンを押したら、別の画面が出た。
 
@@ -1539,6 +1592,7 @@ DETECTORS: dict[str, Callable[[Rule], Detector]] = {
     "S-03": TransitionStuckDetector,
     "S-05": ButtonNoResponseDetector,
     "S-06": NothingRespondsDetector,
+    "Y-01": HarnessIdleDetector,
     "V-07": DimButtonRespondedDetector,
     "V-03": WindowLostDetector,
     "V-04": ResolutionMismatchDetector,

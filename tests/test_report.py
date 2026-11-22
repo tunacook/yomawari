@@ -4,7 +4,7 @@ import json
 from dataclasses import replace
 
 from yomawari.events import Issue
-from yomawari.post.digest import WHO_GAME, WHO_HARNESS, WHO_UNKNOWN, family
+from yomawari.post.digest import WHO_GAME, WHO_HARNESS, WHO_HARNESS_STOPPED, WHO_UNKNOWN, family
 from yomawari.post.report import RunSummary, render
 
 
@@ -276,3 +276,13 @@ def test_restart_item_says_when_recovery_worked(tmp_path):
     _write(tmp_path, [_ev(100, "issue"), _ev(110, "recovered", rule="S-02", ops=["advance"])])
     i = replace(_issue("S-02", "critical", "本文が進まない", 100), action="restart")
     assert "検出のあと: `advance` を試し、抜け出せたので、再起動しなかった" in _section(render(_summary(), [i], tmp_path), 1)
+
+
+def test_harness_idle_is_fixed_by_the_harness(tmp_path):
+    issues = [_issue("Y-01", "info", "ハーネスが 10 分なにも操作していません", 600, key="Y-01:idle"),
+              _issue("S-02", "critical", "本文が進まない", 3)]
+    text = render(_summary(), issues, tmp_path)
+    rows = _rows(text)
+    assert "[Y-01]" in rows[1] and f"| {WHO_HARNESS_STOPPED} |" in rows[1]
+    assert "- やること 2 件（未確定 1、ハーネス 1）" in text
+    assert "根拠: ゲームは動いていたのに、ハーネスが操作していなかった" in _section(text, 2)

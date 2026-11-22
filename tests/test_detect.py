@@ -178,3 +178,35 @@ def test_s06_counts_again_after_progress_or_irregular_ops_do_not_count(repo_rule
     more = [_miss(100 + 10 * n, "click ScreenUI/A", "ScreenUI/A") for n in range(8)]
     irregular = [_miss(180 + n, "key esc", irregular=True) for n in range(20)]
     assert [i for i in run(Engine(repo_rules), [first, *misses, line, *more, *irregular]) if i.rule_id == "S-06"] == []
+
+
+def _y01(repo_rules, events, ticks):
+    return [i for i in run(Engine(repo_rules), events, ticks) if i.rule_id == "Y-01"]
+
+
+def test_y01_harness_does_nothing_while_game_is_alive(repo_rules):
+    idle = repo_rules["Y-01"].param("idle_sec")
+    base = [ev("harness", "launch", 0), ev("game", "boot", 1), ev("harness", "op", 2, label="click A"),
+            ev("harness", "op_result", 3, label="click A")]
+    hbs = [ev("game", "heartbeat", t) for t in range(4, idle + 20)]
+    assert _y01(repo_rules, base + hbs, ticks=[3 + idle - 1]) == []
+    issues = _y01(repo_rules, base + hbs, ticks=[3 + idle + 1, 3 + idle + 10])
+    assert len(issues) == 1 and issues[0].action == "restart"
+    assert "click A" in issues[0].detail
+    # 操作が続いていれば出ない
+    ops = [ev("harness", "op_result", t, label="click A") for t in range(10, idle + 20, 60)]
+    assert _y01(repo_rules, base + hbs + ops, ticks=[3 + idle + 10]) == []
+
+
+def test_y01_not_without_ops_nor_while_input_blocked_nor_when_game_is_silent(repo_rules):
+    idle = repo_rules["Y-01"].param("idle_sec")
+    base = [ev("harness", "launch", 0), ev("game", "boot", 1)]
+    hbs = [ev("game", "heartbeat", t) for t in range(2, idle + 20)]
+    # 一度も操作していない（aging）
+    assert _y01(repo_rules, base + hbs, ticks=[idle + 10]) == []
+    # 画面のロックなどで入力を送れず、ハーネスが待っている
+    blocked = [ev("harness", "op", 2, label="click A"), ev("harness", "input_blocked", 3, label="click A")]
+    assert _y01(repo_rules, base + blocked + hbs, ticks=[idle + 10]) == []
+    # ゲームのハートビートが止まっているのは H-01 の担当
+    op = [ev("harness", "op_result", 2, label="click A")]
+    assert _y01(repo_rules, base + op, ticks=[idle + 10]) == []
