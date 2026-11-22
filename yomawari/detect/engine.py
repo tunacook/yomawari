@@ -1148,6 +1148,80 @@ class ButtonNoResponseDetector(Detector):
         ]
 
 
+class NothingRespondsDetector(Detector):
+    """S-06: ハーネスの操作が、続けてどれも反応しない状態が min_sec 以上・min_ops 回以上続いた（ハートビートは生存）。
+
+    S-01 はイレギュラー操作のあと、S-02 は本文送り、S-05 はボタン 1 つずつを見るので、画面のボタンがどれも反応しなく
+    なっても、そのボタンを押し続けるあいだはどれも再起動しない（run 2026-11-21_2157: 画面の 2 つのボタンを 5 時間 20 分、
+    12101 回押し続けた）。操作の種類を問わず、反応がない回が続いたら、抜け出す操作を試してから再起動する。
+    反応した操作、本文・scene・選択肢、スクリプトのコマンドが進んだ（commands_ran）で数え直す。
+    反応しないのが仕様の押下（expected_silent）とイレギュラー操作は数えない。
+    ゲームが入力を受けなくなった証拠として、反応しなかった操作のうち、このランで前に反応したことのあるボタンのクリックが
+    min_known 回以上あるときだけ出す（右クリックが何も起こさない画面で右クリックを続けた、ロック中のスロットを押し続けた、
+    はゲームの不具合ではない。過去のランでは、これで出たものはすべてそうだった）。暗く見えた（quiet）ボタンも数える
+    （S-05 のあと、反応しないボタンを暗く見えるとみなし、停止を見逃した）。"""
+
+    PROGRESS = ("line", "choices", "scene", "command")
+
+    def __init__(self, rule: Rule) -> None:
+        super().__init__(rule)
+        self.min_sec = float(rule.param("min_sec"))
+        self.min_ops = int(rule.param("min_ops"))
+        self.min_known = int(rule.param("min_known"))
+        self.alive = float(rule.param("heartbeat_alive_sec"))
+        self.responded: set[str] = set()  # このランで前に反応したボタン
+        self.since: float | None = None
+        self.since_wall = ""
+        self.ops: list[str] = []
+        self.known = 0
+
+    def _reset(self) -> None:
+        self.since = None
+        self.since_wall = ""
+        self.ops = []
+        self.known = 0
+
+    def on_event(self, ev: Event) -> list[Issue]:
+        d = ev.data
+        if ev.source == "game" and ev.kind in self.PROGRESS:
+            self._reset()
+            return []
+        if ev.kind == "launch":
+            self._reset()
+            return []
+        if ev.kind != "op_result" or d.get("interfered"):
+            return []
+        if d.get("responded") or d.get("commands_ran"):
+            if d.get("responded") and d.get("kind") == "click":
+                self.responded.add(str(d.get("target")))
+            self._reset()
+            return []
+        if d.get("irregular") or d.get("expected_silent") or not _alive(ev, self.alive):
+            # イレギュラー操作（Esc・右クリックなど）は、画面によって何も起きないのが仕様なので数えない
+            return []
+        if self.since is None:
+            self.since, self.since_wall = ev.t, ev.wall
+        self.ops.append(str(d.get("label")))
+        if d.get("kind") == "click" and str(d.get("target")) in self.responded:
+            self.known += 1
+        if len(self.ops) < self.min_ops or ev.t - self.since < self.min_sec or self.known < self.min_known:
+            return []
+        sec, ops, since_wall = ev.t - self.since, self.ops, self.since_wall
+        self._reset()
+        state = d.get("state") or {}
+        where = ",".join(state.get("menus") or []) or state.get("scene") or "?"
+        kinds = sorted(set(ops))
+        return [
+            self.issue(
+                f"{sec:.0f} 秒のあいだ、{len(ops)} 回の操作（{'、'.join(kinds[:5])}{' ほか' if len(kinds) > 5 else ''}）の"
+                f"どれにも画面が反応しません",
+                key=where, launch=ev.launch, t=ev.t, wall=ev.wall,
+                ops=kinds, count=len(ops), sec=round(sec, 1), since_wall=since_wall, recent=d.get("recent"),
+                state=state,
+            )
+        ]
+
+
 class DimButtonRespondedDetector(Detector):
     """V-07: ほかの同じ種類のボタンより暗い（今は押せないように見える）ボタンを押したら、別の画面が出た。
 
@@ -1464,6 +1538,7 @@ DETECTORS: dict[str, Callable[[Rule], Detector]] = {
     "S-02": AdvanceStallDetector,
     "S-03": TransitionStuckDetector,
     "S-05": ButtonNoResponseDetector,
+    "S-06": NothingRespondsDetector,
     "V-07": DimButtonRespondedDetector,
     "V-03": WindowLostDetector,
     "V-04": ResolutionMismatchDetector,

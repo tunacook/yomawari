@@ -252,3 +252,27 @@ def test_timeline_uses_what_the_adapter_says_not_engine_names():
     assert [r for r in rows if "コマンド" in r] == [
         "10:00:01 コマンド @stop（`a:1.0`）", "10:00:02 コマンド @Level（`a:2.0`）", "10:00:05 コマンド @bgm（`a:5.0`）"]
     assert [r for r in rows if "入力" in r] == ["10:00:07 ゲームが本文送りの入力を止めた"]
+
+
+def test_restart_item_shows_where_it_got_stuck_and_how_recovery_went(tmp_path):
+    # 検出は止まってから 2 分後なので、検出の前後は同じ操作が続くだけ。止まり始めたところの前後と、検出のあとに
+    # 抜け出す操作を試した結果を項目に出す
+    events = [_ev(10, "menu", source="game", name="ScreenUI", buttons=[]),
+              _ev(15, "op_result", label="click ScreenUI/A", responded=False),
+              _ev(140, "issue"),
+              _ev(150, "recover_failed", rule="S-06", ops=["key esc", "right_click"])]
+    _write(tmp_path, events)
+    i = _issue("S-06", "critical", "反応しない", 140, since_wall=_w(15))
+    i = replace(i, action="restart")
+    text = render(_summary(), [i], tmp_path)
+    sec = _section(text, 1)
+    assert "- 止まり始めた時刻: 00:00:15（最初に反応しなかった操作。検出の 125 秒前）" in sec.replace("  - ", "- ")
+    assert "経過（止まり始めた時刻（00:00:15、起動 #0）の前後）" in sec
+    assert "画面が開いた `ScreenUI`" in sec
+    assert "検出のあと: `key esc` → `right_click` を試し、抜け出せなかったので、再起動した" in sec
+
+
+def test_restart_item_says_when_recovery_worked(tmp_path):
+    _write(tmp_path, [_ev(100, "issue"), _ev(110, "recovered", rule="S-02", ops=["advance"])])
+    i = replace(_issue("S-02", "critical", "本文が進まない", 100), action="restart")
+    assert "検出のあと: `advance` を試し、抜け出せたので、再起動しなかった" in _section(render(_summary(), [i], tmp_path), 1)

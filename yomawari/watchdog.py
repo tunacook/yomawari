@@ -16,13 +16,14 @@ import signal
 import subprocess
 import sys
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import __version__, launcher
+from . import __version__, launcher, snapshot
 from .bus import EventBus
 from .config import FUZZ_DEFAULTS, BuildConfig
 from .detect.engine import Engine, Rule, RuleError
@@ -104,6 +105,12 @@ def _optional(platform: Platform, name: str) -> Callable[..., Any] | None:
         return None
 
 
+# 再起動の前に残す状況（snapshot.py）に入れる、直前のイベントの数
+SNAPSHOT_EVENTS = 80
+# 直前のイベントに入れない種類（毎秒来るもの）
+_SNAPSHOT_SKIP = ("heartbeat", "proc_stats", "issue")
+
+
 class Harness:
     def __init__(
         self,
@@ -157,7 +164,10 @@ class Harness:
         # ゲームが boot で教えたセーブの場所が、退避した場所と違った。セッションを終え、退避し直してから起動し直す
         self._save_moved: Path | None = None
         self._first_launch = 0  # ランの最初の起動とみなす起動（セーブの場所が違って起動し直したら、その起動）
-        self._save_resolved = False  # 退避し直した（1 ランで 1 回だけ。場所が変わり続けても起動し直し続けない）
+        self._save_resolved = False
+        self._run_dir: Path | None = None
+        # 再起動の前に残す状況のための、直前のイベント（ハートビートなど毎秒来るものは除く）
+        self._recent_events: deque[dict[str, Any]] = deque(maxlen=int(SNAPSHOT_EVENTS))  # 退避し直した（1 ランで 1 回だけ。場所が変わり続けても起動し直し続けない）
         self._screen: Screen | None = None  # ランの画面の前提（--screen）
         self._screen_seen: set[int] = set()  # 画面の大きさを一度でも見た起動
         self._screen_abort = ""  # 決めた画面で起動できなかった（ランを止める理由）
@@ -174,6 +184,9 @@ class Harness:
     def _on_event(self, ev: Event) -> None:
         if ev.kind == "issue":
             return
+        if ev.kind not in _SNAPSHOT_SKIP:
+            self._recent_events.append({"wall": ev.wall, "source": ev.source, "kind": ev.kind, "data": ev.data,
+                                        "launch": ev.launch})
         self.state.feed(ev)
         self._handle_issues(self.engine.feed(ev))
         if self._session_fuzz is not None:
@@ -234,8 +247,30 @@ class Harness:
                               f"（起動 #{ev.launch}）")
         self._restart_req.set()
 
+    def _take_snapshot(self, i: Issue) -> None:
+        """再起動する検出の前に、画面の写しと状態をランのフォルダに残し、検出の証拠に場所を書く（snapshot.py）。
+        抜け出す操作を試す前に撮る（試すと画面が変わる）。撮れなくても検出は続ける。"""
+        if self._run_dir is None:
+            return
+        shot = None
+        fuzz = self._session_fuzz
+        if fuzz is not None and fuzz.launch == i.launch:
+            try:
+                shot = self.platform.capture(fuzz.pointer.area().rect)
+            except Exception as e:  # ウィンドウが見えないなど。状態だけ残す
+                i.evidence["snapshot_error"] = repr(e)
+        name = f"{i.wall[11:19].replace(':', '')}_{i.rule_id}_{i.launch}"
+        info = {"rule_id": i.rule_id, "title": i.title, "detail": i.detail, "wall": i.wall, "launch": i.launch,
+                "recent_ops": i.evidence.get("recent"), "recent_events": list(self._recent_events)}
+        try:
+            i.evidence["snapshot"] = snapshot.take(self._run_dir, name, info, self.state, shot)
+        except Exception as e:
+            self.notes.append(f"{i.rule_id} の再起動の前に状況を残せませんでした: {e!r}（起動 #{i.launch}）")
+
     def _handle_issues(self, issues: list[Issue]) -> None:
         for i in issues:
+            if i.action == "restart":
+                self._take_snapshot(i)
             if self._fuzz is not None and self._fuzz.burst is not None:
                 # 区間（ガチャプレイ・ボタンの網羅）の間に見つけたもの
                 spot = self._fuzz.burst[0]
@@ -245,7 +280,7 @@ class Harness:
             self._publish(Event("harness", "issue", i.to_json(), i.launch))
             if i.action == "restart" and self._restart_req is not None:
                 req = self._restart_req
-                # ゲームは動いているが進まない（S-02 / S-03）なら、再起動する前に抜け出す操作を試す
+                # ゲームは動いているが進まない（S-02 / S-03 / S-06）なら、再起動する前に抜け出す操作を試す
                 if self._session_fuzz is not None and self._session_fuzz.launch == i.launch and \
                         self._session_fuzz.recover(i.rule_id, req.set):
                     continue
@@ -467,6 +502,7 @@ class Harness:
 
     async def run(self, opts: RunOptions) -> RunResult:
         run_dir = new_run_dir(self.runs_dir, self.build.name)
+        self._run_dir = run_dir
         if self.on_run_dir is not None:
             self.on_run_dir(run_dir)  # 見張り役に、どのランを見張るかを知らせる（supervisor.py）
         # --continue: 前のランが終わったときのセーブを置いて、その続きから遊ぶ（DESIGN.md §9「続きから遊ぶ」）。

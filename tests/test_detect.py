@@ -140,3 +140,41 @@ def test_l06_same_place_and_message_share_key_and_ignore_works(repo_rules):
     ])
     assert [i.rule_id for i in issues] == ["L-06", "L-06"]
     assert issues[0].key == issues[1].key
+
+
+def _op(t, label, target=None, responded=False, **kw):
+    op_kind = "click" if target else label.split(" ", 1)[0]
+    data = dict(kind=op_kind, label=label, target=target, responded=responded, heartbeat_age=0.5,
+                state={"menus": ["ScreenUI"]}, **kw)
+    return Event("harness", "op_result", data, launch=0, t=t, wall=f"w{t}")
+
+
+def _miss(t, label, target=None, **kw):
+    return _op(t, label, target, **kw)
+
+
+def test_s06_buttons_that_used_to_respond_stop_responding(repo_rules):
+    # run 2026-11-21_2157: 画面の 2 つのボタンを 5 時間 20 分押し続けた。前に反応したボタンが反応しなくなったら、
+    # 2 分で抜け出す操作を試し、だめなら再起動する
+    events = [_op(0, "click ScreenUI/A", "ScreenUI/A", responded=True)]
+    events += [_miss(10 + 10 * n, f"click ScreenUI/{'AB'[n % 2]}", f"ScreenUI/{'AB'[n % 2]}", quiet=n > 5)
+               for n in range(13)]
+    issues = [i for i in run(Engine(repo_rules), events) if i.rule_id == "S-06"]
+    assert [(i.severity, i.action, i.t) for i in issues] == [("critical", "restart", 130)]
+    assert "13 回の操作" in issues[0].detail and issues[0].evidence["count"] == 13
+
+
+def test_s06_ignores_screens_where_only_never_responding_ops_fail(repo_rules):
+    # 過去のランで右クリックが何も起こさない画面で右クリックを続けた・ロック中のスロットを押し続けたのは、ゲームの不具合ではない
+    events = [_miss(10 * n, "right_click") for n in range(30)]
+    events += [_miss(300 + 10 * n, "click ScreenUI/Locked", "ScreenUI/Locked") for n in range(30)]
+    assert [i for i in run(Engine(repo_rules), events) if i.rule_id == "S-06"] == []
+
+
+def test_s06_counts_again_after_progress_or_irregular_ops_do_not_count(repo_rules):
+    first = _op(0, "click ScreenUI/A", "ScreenUI/A", responded=True)
+    misses = [_miss(10 + 10 * n, "click ScreenUI/A", "ScreenUI/A") for n in range(8)]
+    line = ev("game", "line", 95, line_id="s:1")
+    more = [_miss(100 + 10 * n, "click ScreenUI/A", "ScreenUI/A") for n in range(8)]
+    irregular = [_miss(180 + n, "key esc", irregular=True) for n in range(20)]
+    assert [i for i in run(Engine(repo_rules), [first, *misses, line, *more, *irregular]) if i.rule_id == "S-06"] == []

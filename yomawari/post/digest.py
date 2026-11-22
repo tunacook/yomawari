@@ -315,11 +315,41 @@ def _issue_items(issues: list[Issue], log: Log | None, cfg: dict[str, Any]) -> l
         item.numbers.insert(0, f"回数: {len(members)}（起動 {', '.join(f'#{n}' for n in launches)}）")
         if log is not None:
             item.numbers += _before(log, first)
-            lo, hi = log.around(first.wall, float(cfg["report_timeline_before_sec"]), float(cfg["report_timeline_after_sec"]))
+            since = str(first.evidence.get("since_wall") or "")
+            if since:
+                # 止まってから検出するまでのあいだは同じ操作が続くだけなので、止まり始めたところの前後を見せる
+                item.numbers.append(f"止まり始めた時刻: {since[11:19]}（最初に反応しなかった操作。検出の "
+                                    f"{_sec_between(since, first.wall):.0f} 秒前）")
+                lo, hi = log.around(since, float(cfg["report_timeline_before_sec"]),
+                                    float(cfg["report_timeline_after_sec"]))
+                item.timeline_label = f"止まり始めた時刻（{since[11:19]}、起動 #{first.launch}）の前後"
+            else:
+                lo, hi = log.around(first.wall, float(cfg["report_timeline_before_sec"]),
+                                    float(cfg["report_timeline_after_sec"]))
+                item.timeline_label = f"最初の検出（{first.wall[11:19]}、起動 #{first.launch}）の前後"
             item.timeline = timeline(log, lo, hi, int(cfg["report_timeline_lines"]), first.launch)
-            item.timeline_label = f"最初の検出（{first.wall[11:19]}、起動 #{first.launch}）の前後"
+            if first.action == "restart":
+                item.numbers.append(_recovery_of(log, first))
         items.append(item)
     return items
+
+
+def _sec_between(a: str, b: str) -> float:
+    return (datetime.fromisoformat(b) - datetime.fromisoformat(a)).total_seconds()
+
+
+def _recovery_of(log: Log, first: Issue) -> str:
+    """再起動する検出のあと、抜け出す操作を試した結果（fuzz/loop.py の recovered / recover_failed）。"""
+    lo = log.index(first.wall)
+    for e in log.events[lo:]:
+        d = e.get("data") or {}
+        if e.get("launch") != first.launch:
+            break
+        if e.get("kind") in ("recovered", "recover_failed") and d.get("rule") == first.rule_id:
+            ops = " → ".join(f"`{o}`" for o in d.get("ops") or []) or "（操作なし）"
+            how = "抜け出せたので、再起動しなかった" if e["kind"] == "recovered" else "抜け出せなかったので、再起動した"
+            return f"検出のあと: {ops} を試し、{how}"
+    return "検出のあと: 抜け出す操作は試さずに再起動した（操作では戻らない検出か、抜け出す操作を試さない設定）"
 
 
 def _answers(log: Log, lo: int, hi: int) -> list[str]:
@@ -531,6 +561,11 @@ def render_top(items: list[Item], events: list[dict], duration_sec: float, launc
                 out += ["- ログ抜粋:", "", "```text", str(first.evidence["log"]).rstrip("\n"), "```"]
             if first.evidence.get("dump"):
                 out.append(f"- クラッシュダンプ: `{first.evidence['dump']}`")
+            snap = first.evidence.get("snapshot") or {}
+            if snap:
+                links = [f"[画面]({snap['png']})"] if snap.get("png") else []
+                links.append(f"[状態と直前のイベント]({snap['json']})")
+                out.append(f"- 最初の検出のときの状況（再起動の前に残した）: {'・'.join(links)}")
             log_name = "player.log" if first.launch == 0 else f"player.{first.launch}.log"
             out.append(f"- ログ: [{log_name}]({log_name})")
         if it.timeline:
