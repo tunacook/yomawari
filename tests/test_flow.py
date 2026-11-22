@@ -1085,6 +1085,46 @@ def test_profile_answer_with_stale_at_is_not_used():
                              "ので、この正解を使わなかった（スクリプトを直して行番号がずれたなどで、at が古い可能性がある）"]
 
 
+def test_profile_answer_with_moved_at_uses_the_line_whose_text_matches():
+    # スクリプトに行を足して質問の行がずれても、同じスクリプトで at から answer_at_shift 行以内の行の本文が at_text に当たれば、
+    # その行を質問の行として正解を使い、ずれていたことを記録する
+    k, click = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["weights"]["click"]
+    profile = ANSWER_PROFILE.replace('at = "main/s1:1*", pick = ["いいえ"], note = "いいえが正解"',
+                                     'at = "main/s1:8.0", at_text = "どうする？", pick = ["いいえ"], note = "いいえが正解"')
+    for line_id, shift, used in (("main/s1:10.0", 30, True), ("main/s1:10.0", 1, False), ("main/s1:10.0", 0, False),
+                                 ("main/s2:10.0", 30, False)):
+        s, st, run, _ = _session({"ai_context_lines": 3, "wrong_answer_prob": 0.0, "answer_at_shift": shift})
+        run.flow = FlowTracker(parse_flows(tomllib.loads(profile)["flow"]))
+        _ask_yes_no(s, st, line_id)
+        w = _weights(s, st)
+        moved = [n for n in run.notes if "ずれている" in n]
+        if used:
+            assert w["click choices/いいえ"] == click * k
+            assert moved == ["プロファイルの正解（いいえが正解）の at `main/s1:8.0` の本文（at_text）が `main/s1:10.0` にあったので、"
+                             "その行を質問の行として正解を使った（スクリプトの行がずれている。プロファイルの at を直すとよい）"]
+        else:
+            assert s._answer_options({"はい", "いいえ"}, {"はい": "はい", "いいえ": "いいえ"}) is None and not moved
+
+
+def test_moved_at_picks_the_nearest_and_gives_up_on_a_tie():
+    # 同じ本文の質問がいくつもあるときは、いちばん近い at の正解を使う。同じ近さで別の at があれば補わない。
+    # at に当たる正解があれば、そちらを先に使う
+    from yomawari.fuzz.flow import Answer
+    from yomawari.fuzz.loop import _nearest_answers
+    near = Answer(("a:8.0",), ("x",), at_text=("どこ？",))
+    far = Answer(("a:14.0",), ("y",), at_text=("どこ？",))
+    texts = {"a:10.0": "どこ？"}
+    hit, stale, moved = _nearest_answers((near, far), ["a:10.0"], texts, 30)
+    assert hit == (near,) and moved == [(near, "a:8.0", "a:10.0")] and not stale
+    tie = Answer(("a:12.0",), ("y",), at_text=("どこ？",))
+    assert _nearest_answers((near, tie), ["a:10.0"], texts, 30) == ((), [], [])
+    exact = Answer(("a:10.0",), ("z",), at_text=("どこ？",))
+    assert _nearest_answers((near, exact), ["a:10.0"], texts, 30) == ((exact,), [], [])
+    # ワイルドカードの at は補わない
+    wild = Answer(("a:8*",), ("w",), at_text=("どこ？",))
+    assert _nearest_answers((wild,), ["a:10.0"], texts, 30) == ((), [], [])
+
+
 def test_deliberate_wrong_answer_then_the_right_one():
     # wrong_answer_prob の確率で、正解の前にわざと外れを答える。外れは wrong_answers_per_question 回まで、そのあと正解
     k, low = FUZZ_DEFAULTS["flow_factor"], FUZZ_DEFAULTS["flow_avoid_factor"]
