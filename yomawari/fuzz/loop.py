@@ -23,6 +23,7 @@ import dataclasses
 from fnmatch import fnmatchcase
 import random
 import re
+import threading
 import time
 from collections import Counter, deque
 from collections.abc import Callable
@@ -450,6 +451,37 @@ def _pressed_key(op: Op) -> str | None:
     if op.via_key is not None and op.via_key != NAV:
         return op.via_key
     return None
+
+
+async def in_daemon_thread(fn: Callable[..., Any], *args: Any) -> Any:
+    """fn をデーモンのスレッドで呼んで待つ。
+
+    asyncio.to_thread のスレッドは、プロセスの終了のときに Python が終わるのを待つ。戻らない呼び出しがあると、
+    ランが終わってもプロセスが終わらない（2026-11-22 のラン: 画面の文字の読み取りが戻らず、終了で止まり続けた）。
+    デーモンのスレッドは終了のときに待たれない。待つのをやめた（asyncio.wait_for で打ち切った）あとに戻っても、結果は捨てる。
+    """
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future[Any] = loop.create_future()
+
+    def deliver(setter: Callable[[Any], None], value: Any) -> None:
+        def put() -> None:
+            if not fut.done():
+                setter(value)
+        try:
+            loop.call_soon_threadsafe(put)
+        except RuntimeError:
+            pass  # イベントループがもう閉じている
+
+    def work() -> None:
+        try:
+            res = fn(*args)
+        except BaseException as e:  # noqa: BLE001  呼び出し元へそのまま渡す
+            deliver(fut.set_exception, e)
+        else:
+            deliver(fut.set_result, res)
+
+    threading.Thread(target=work, name=f"yomawari-{getattr(fn, '__name__', 'call')}", daemon=True).start()
+    return await fut
 
 
 class FuzzSession:
@@ -2552,7 +2584,7 @@ class FuzzSession:
             self._drain_fits()
         if shot is None:
             return False
-        boxes = await asyncio.to_thread(read, shot)
+        boxes = await self._ocr(read, shot)
         if boxes is None:
             return False
         after = assign(boxes, others, float(self.cfg["read_text_min_conf"]))
@@ -2563,6 +2595,21 @@ class FuzzSession:
             self.publish(Event("harness", "read_text", {"tried": len(others), "texts": after, "after": pressed.label},
                                self.launch))
         return changed
+
+    async def _ocr(self, read: Callable[[Shot], Any], shot: Shot) -> Any:
+        """画面の文字を読む（OS の文字認識）。read_text_timeout_sec で戻らなければ、このランでは読むのをやめて None を返す。
+
+        2026-11-22 のラン: macOS の Vision が戻らず、操作が 3 時間止まった。止まった文字認識は同じプロセスでまた呼んでも
+        止まるおそれがあるので、起動し直しても読まない。戻らないスレッドが終了を止めないよう、デーモンのスレッドで呼ぶ。
+        """
+        timeout = float(self.cfg["read_text_timeout_sec"])
+        try:
+            return await asyncio.wait_for(in_daemon_thread(read, shot), timeout)
+        except asyncio.TimeoutError:
+            self.run.read_off = True
+            self.run.notes.append(f"画面の文字の読み取りが {timeout:g} 秒たっても戻らなかったので、このランの残りでは文字を読まず、"
+                                  f"ボタンは名前と見た目だけで扱った（起動 #{self.launch}）")
+            return None
 
     async def _read_text(self, shot: Shot, measured: dict[str, Values]) -> None:
         """ボタンの文字を、撮った画像から読む（fuzz/reading.py）。読んだボタンは、見た目が変わるまで読み直さない。"""
@@ -2583,8 +2630,10 @@ class FuzzSession:
         if not todo:
             return
         read = getattr(self.pointer.platform, "read_text", None)
-        boxes = await asyncio.to_thread(read, shot) if read is not None else None
+        boxes = await self._ocr(read, shot) if read is not None else None
         if boxes is None:
+            if run.read_off:
+                return  # 読み取りが戻らなかった（_ocr が記録した）
             run.read_off = True
             run.notes.append(f"画面の文字を読めない（この OS では未対応、または文字認識が使えない）ので、ボタンは名前と"
                              f"見た目だけで扱った（起動 #{self.launch}）")

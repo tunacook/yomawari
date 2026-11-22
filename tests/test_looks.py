@@ -734,3 +734,31 @@ def test_text_changed_by_button_row():
     assert not text_changed(before, shaky, 0.5)
     # 番号の付いたボタン（ページ）の 1 つが揺れても同じ
     assert not text_changed(before, dict(before) | {"SaveLoadUI/Page09": "09 10"}, 0.5)
+
+
+def test_read_text_that_never_returns_is_given_up_and_does_not_block_exit():
+    # run 2026-11-22_2202: macOS の文字認識が戻らず、操作が 3 時間止まった。ランのあとも、そのスレッドを待ってプロセスが終わらなかった
+    import threading
+    import time
+
+    slots = [_slot(i) for i in range(3)]
+    s, st, run, windows, mouse, events = _list_session(slots, _shot([(x.rect, 120) for x in slots]))
+    run.cfg = {**CFG, "read_text_timeout_sec": 0.2}
+    release = threading.Event()
+    calls = []
+
+    def stuck(shot):
+        calls.append(threading.current_thread())
+        release.wait(5)
+        return []
+
+    windows.read_text = stuck
+    t0 = time.monotonic()
+    asyncio.run(s._look())
+    assert time.monotonic() - t0 < 2  # 打ち切って先へ進む
+    assert run.read_off and any("戻らなかった" in n for n in run.notes)
+    assert calls and calls[0].daemon  # 終了のときに Python が待たないスレッド
+    # このランの残りでは読まない
+    asyncio.run(s._look())
+    assert len(calls) == 1
+    release.set()
