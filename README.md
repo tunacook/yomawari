@@ -3,6 +3,17 @@ Unity製ノベルゲームを自動でプレイしてくれる仕組み。
 
 Unity のビルド（`.app` / `.exe`）を、人がゲームを見ていない間（寝ている間・外出中・仕事中など）に自動でプレイさせ、クラッシュ・ハング・進行不能・表示異常を Markdown のレポートにまとめる。設計は [DESIGN.md](DESIGN.md) を参照。
 
+## 対応環境
+
+いまは macOS と Naninovel の組み合わせだけに対応している。
+
+| ノベルゲームのエンジン | macOS（Apple Silicon） | Windows |
+|---|---|---|
+| Naninovel 1.21 以上 | 対応 | 未対応（DESIGN.md フェーズ7） |
+| Naninovel を使わない Unity のゲーム | 未対応 | 未対応 |
+
+Naninovel がないと、パッケージのうち、画面のボタン・セリフの行・選択肢をハーネスに知らせる部分（`Yomawari.Naninovel`）がコンパイルされない。起動・エラーのログは出るが、ハーネスは画面にどのボタンやセリフが出ているかを知れない。
+
 ## 技術スタック
 
 | 層 | 使っているもの | 用途 |
@@ -16,7 +27,7 @@ Unity のビルド（`.app` / `.exe`）を、人がゲームを見ていない�
 | macOS の API | [PyObjC](https://pyobjc.readthedocs.io/)（Quartz・Cocoa）、ctypes | ウィンドウの位置と倍率、前面のアプリ、画面収録・アクセシビリティの権限の確認 |
 | 画像の判定 | [Ollama](https://ollama.com/)（ローカル）＋画像対応モデル `qwen2.5vl:7b`、[httpx](https://www.python-httpx.org/) | ボタンの見た目からの役割の推定などの補助。判定の主役はルール（`rules.yaml`）で、AI の答えから Critical は出さない |
 | テスト | [pytest](https://docs.pytest.org/) | 実ゲームなしで、Player.log のサンプルや模擬ゲームを流し込んで確かめる |
-| ゲーム側 | Unity 6000.3 以上、UPM パッケージ `com.tunacook.yomawari`（C#）、Naninovel 1.21 以上（任意） | 起動引数 `-yomawari` のときだけ Player.log に `[YOMAWARI]` 行（1行 JSON）を出す |
+| ゲーム側 | Unity 6000.3 以上、UPM パッケージ `com.tunacook.yomawari`（C#）、Naninovel 1.21 以上（[対応環境](#対応環境)を参照） | 起動引数 `-yomawari` のときだけ Player.log に `[YOMAWARI]` 行（1行 JSON）を出す |
 
 ゲームからハーネスへは Player.log の `[YOMAWARI]` 行、ハーネスからゲームへは OS の入力、の一方向ずつで通信する。主な実行環境は Apple Silicon の Mac。Windows 対応は後日（DESIGN.md フェーズ7）。
 
