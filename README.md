@@ -9,8 +9,8 @@ Unity のビルド（`.app` / `.exe`）を、人がゲームを見ていない�
 
 | ノベルゲームのエンジン | macOS（Apple Silicon） | Windows |
 |---|---|---|
-| Naninovel 1.21 以上 | 対応 | 未対応（DESIGN.md フェーズ7） |
-| Naninovel を使わない Unity のゲーム | 未対応 | 未対応 |
+| Naninovel 1.21 以上 | ⭕️ | ❌（DESIGN.md フェーズ7） |
+| Naninovel を使わない Unity のゲーム | ❌ | ❌ |
 
 Naninovel がないと、パッケージのうち、画面のボタン・セリフの行・選択肢をハーネスに知らせる部分（`Yomawari.Naninovel`）がコンパイルされない。起動・エラーのログは出るが、ハーネスは画面にどのボタンやセリフが出ているかを知れない。
 
