@@ -76,12 +76,53 @@ def _pick_matches(text: str | None, pattern: str) -> bool:
     return text_matches(text, (pattern, f"*{pattern}*"))
 
 
-def _nearest_answers(answers: tuple[Answer, ...], ids: list[str],
-                     texts: dict[str, str] | None = None) -> tuple[tuple[Answer, ...], list[tuple[Answer, str, str, str]]]:
+# 本文の行（line_id）の「スクリプト:行番号(.インラインの番号)」。行番号がずれた at を補うときに、同じスクリプトの近さを比べる
+_LINE_ID = re.compile(r"^(.+):(\d+)(?:\.\d+)?$")
+
+
+def _line_pos(line_id: str) -> tuple[str, int] | None:
+    m = _LINE_ID.match(line_id)
+    return (m[1], int(m[2])) if m else None
+
+
+def _moved_answers(answers: tuple[Answer, ...], line: str, got: str | None,
+                   shift: int) -> list[tuple[Answer, str, str]]:
+    """行 line の本文 got が at_text に当たり、同じスクリプトで at から shift 行以内にある正解（at の行番号がずれたもの）。
+    at がいちばん近いものだけを (正解, at, line) で返す。同じ近さで別の at の正解があれば、どちらの質問か決められないので返さない。
+    ワイルドカードで書いた at は補わない。"""
+    pos = _line_pos(line)
+    if shift <= 0 or got is None or pos is None:
+        return []
+    found: list[tuple[int, Answer, str]] = []
+    for a in answers:
+        best: tuple[int, str] | None = None
+        for p, want in zip(a.at, a.at_text):
+            if any(c in p for c in "*?["):
+                continue
+            ap = _line_pos(p)
+            if ap is None or ap[0] != pos[0]:
+                continue
+            d = abs(ap[1] - pos[1])
+            if 0 < d <= shift and text_matches(got, (want,)) and (best is None or d < best[0]):
+                best = (d, p)
+        if best is not None:
+            found.append((best[0], a, best[1]))
+    if not found:
+        return []
+    near = min(d for d, _, _ in found)
+    picked = [(a, p, line) for d, a, p in found if d == near]
+    return picked if len({p for _, p, _ in picked}) == 1 else []
+
+
+def _nearest_answers(answers: tuple[Answer, ...], ids: list[str], texts: dict[str, str] | None = None,
+                     shift: int = 0) -> tuple[tuple[Answer, ...], list[tuple[Answer, str, str, str]],
+                                          list[tuple[Answer, str, str]]]:
     """直近の本文の行（古い順）のうち、いちばん新しい行で at に当たる正解。その前の行で当たるものは、前の質問の正解なので含めない
     （run 2026-11-08_2227: 質問が続く場面で、前の質問の正解まで当たり、前の質問の思い出を選び続けた）。
     at_text を書いた正解は、ゲームが出したその行の本文と比べ、違えば使わずに、(正解, 行, 出た本文, at_text) を2つめに返す
-    （run 2026-11-20_2206: スクリプトを直して行番号がずれ、at が隣の質問の行を指し、別の質問の正解で答え続けた）。"""
+    （run 2026-11-20_2206: スクリプトを直して行番号がずれ、at が隣の質問の行を指し、別の質問の正解で答え続けた）。
+    at に当たる正解がない行でも、同じスクリプトで at から shift 行以内にあり、本文が at_text に当たれば、その行を質問の行とし、
+    (正解, at, 行) を3つめに返す（スクリプトに行を足し引きしただけで、正解が使えなくならないため）。"""
     texts = texts or {}
     for line in reversed(ids):
         hit, stale = [], []
@@ -94,9 +135,14 @@ def _nearest_answers(answers: tuple[Answer, ...], ids: list[str],
                 stale.append((a, line, got, a.at_text[k]))
             else:
                 hit.append(a)
-        if hit or stale:
-            return tuple(hit), stale
-    return (), []
+        if hit:
+            return tuple(hit), stale, []
+        moved = _moved_answers(answers, line, texts.get(line), shift)
+        if moved:
+            return tuple(a for a, _, _ in moved), stale, moved
+        if stale:
+            return (), stale, []
+    return (), [], []
 
 
 @dataclass
@@ -1330,7 +1376,12 @@ class FuzzSession:
             return
         if flow.answers:
             ids = list(run.line_ids)[-int(cfg["ai_context_lines"]):]
-            hit, stale = _nearest_answers(flow.answers, ids, run.line_texts)
+            hit, stale, moved = _nearest_answers(flow.answers, ids, run.line_texts, int(cfg["answer_at_shift"]))
+            for a, at, line in moved:
+                note = (f"プロファイルの正解{f'（{a.note}）' if a.note else ''}の at `{at}` の本文（at_text）が `{line}` に"
+                        f"あったので、その行を質問の行として正解を使った（スクリプトの行がずれている。プロファイルの at を直すとよい）")
+                if note not in run.notes:
+                    run.notes.append(note)
             for a, line, got, want in stale:
                 note = (f"プロファイルの正解{f'（{a.note}）' if a.note else ''}の at `{line}` の本文が「{got}」で、at_text"
                         f"「{want}」と違うので、この正解を使わなかった（スクリプトを直して行番号がずれたなどで、at が古い可能性がある）")
