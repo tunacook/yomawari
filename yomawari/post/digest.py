@@ -25,6 +25,7 @@ from .stalls import Stall, find_stalls
 
 WHO_GAME = "ゲーム"
 WHO_HARNESS = "ハーネス（誤検知の見込み）"
+WHO_HARNESS_STOPPED = "ハーネス"  # ハーネスの操作が止まった（Y-01）
 WHO_UNKNOWN = "未確定"
 SEVERITY_LABEL = {"critical": "Critical", "major": "Major", "minor": "Minor", "info": "Info", "check": "要確認"}
 RANK = {s: n for n, s in enumerate((*SEVERITIES[:2], "check", *SEVERITIES[2:]))}
@@ -311,6 +312,8 @@ def _issue_items(issues: list[Issue], log: Log | None, cfg: dict[str, Any]) -> l
             item.who, item.basis = WHO_GAME, "ゲームが出したログ"
         elif first.evidence.get("dump"):
             item.who, item.basis = WHO_GAME, "クラッシュダンプがある"
+        elif first.rule_id == "Y-01":
+            item.who, item.basis = WHO_HARNESS_STOPPED, "ゲームは動いていたのに、ハーネスが操作していなかった"
         launches = sorted({i.launch for i in members})
         item.numbers.insert(0, f"回数: {len(members)}（起動 {', '.join(f'#{n}' for n in launches)}）")
         if log is not None:
@@ -458,7 +461,7 @@ def build_items(issues: list[Issue], events: list[dict], cfg: dict[str, Any], no
     s = _silent_item(silent)
     if s is not None:
         items.append(s)
-    order = {WHO_GAME: 0, WHO_UNKNOWN: 1, WHO_HARNESS: 2}
+    order = {WHO_GAME: 0, WHO_UNKNOWN: 1, WHO_HARNESS_STOPPED: 2, WHO_HARNESS: 3}
 
     def first_focus(it: Item) -> int:
         return min((focus[i.rule_id] for i in it.issues if i.rule_id in focus), default=len(focus))
@@ -505,7 +508,7 @@ def render_top(items: list[Item], events: list[dict], duration_sec: float, launc
     who = Counter(it.who for it in items)
     if items:
         out.append(f"- やること {len(items)} 件（"
-                   + "、".join(f"{w} {who[w]}" for w in (WHO_GAME, WHO_UNKNOWN, WHO_HARNESS) if who[w]) + "）")
+                   + "、".join(f"{w} {who[w]}" for w in (WHO_GAME, WHO_UNKNOWN, WHO_HARNESS_STOPPED, WHO_HARNESS) if who[w]) + "）")
     else:
         out.append(f"- {NOTHING_TO_DO}" + ("（途中で止めたので、止めるまでの範囲）" if interrupted else ""))
     out.append("")
