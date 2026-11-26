@@ -1401,3 +1401,86 @@ def test_pressing_already_selected_value_or_profile_silent_is_expected():
     st.feed(Event("game", "settings", base, 0))
     locale["value"] = "en-US"  # 押しても変わらない（壊れた）とする
     assert press(option)["expected_silent"] is None
+
+
+def _skip_session():
+    from .test_looks import CFG, _Mouse
+
+    st = GameState()
+    st.feed(Event("game", "resolution", {"w": 2000, "h": 1000}, 0))
+    st.feed(Event("game", "settings", {"skip_mode": "ReadOnly"}, 0))
+    st.feed(Event("game", "input", {"muted": [], "advance_muted": False, "skip_muted": False,
+                                    "skip_keys": ["ctrl"], "toggle_skip_keys": []}, 0))
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                  rng=random.Random(1), cfg={**CFG, "skip_max_sec": 2.0, "skip_idle_sec": 1.0}, response_timeout=0.2)
+    events = []
+    s = FuzzSession(run, st, Pointer(windows, _Mouse(), 1, st, activate_wait=0), events.append, 0, lambda _: None)
+    return s, st, run, events
+
+
+def _line(st, n):
+    st.feed(Event("game", "line", {"label": "s", "line_id": f"s:{n}", "text": f"本文 {n}"}, 0))
+
+
+def test_reread_lines_are_skipped_with_the_hold_key_until_an_unread_line():
+    # run 2026-11-26_2218: ロードのたびに、読んだことのある本文を 1 行ずつ送り直し、124 分のあいだ 3888 行を読み直した。
+    # 人と同じく、このランで前に読んだ行はゲームのスキップ（押しているあいだスキップするキー）で送り、未読の行で離す
+    s, st, run, events = _skip_session()
+    for n in range(3):
+        _line(st, n)
+    assert s._skip_key() is None  # 初めて読む行ではスキップしない
+    _line(st, 0)  # ロードして読んだ行に戻った
+    assert st.reread and s._skip_key() == "ctrl"
+    held = []
+
+    def key_down(name):
+        held.append(("down", name))
+        for n in (1, 2, 3):  # 読んだ行を飛ばし、未読の行 3 でゲームがスキップを止める
+            _line(st, n)
+
+    s.pointer.driver.key_down = key_down
+    s.pointer.driver.key_up = lambda name: held.append(("up", name))
+    asyncio.run(s._skip_read("ctrl"))
+    assert held == [("down", "ctrl"), ("up", "ctrl")]
+    res = [e.data for e in events if e.kind == "op_result"][-1]
+    assert res["kind"] == "skip" and res["responded"] and res["skipped_lines"] == 3 and res["stopped_by"] == "未読の行"
+
+
+def test_skip_is_not_used_unless_the_game_skips_only_read_lines():
+    s, st, run, _ = _skip_session()
+    _line(st, 0)
+    _line(st, 0)
+    assert s._skip_key() == "ctrl"
+    st.feed(Event("game", "settings", {"skip_mode": "Everything"}, 0))  # 未読も飛ばす方式では、新しい本文を読み飛ばす
+    assert s._skip_key() is None
+    st.feed(Event("game", "settings", {"skip_mode": "ReadOnly"}, 0))
+    st.feed(Event("game", "input", {"muted": ["Skip"], "skip_muted": True, "skip_keys": ["ctrl"]}, 0))
+    assert s._skip_key() is None  # ゲームがスキップを止めている
+    st.feed(Event("game", "input", {"muted": [], "skip_keys": [], "toggle_skip_keys": ["tab"]}, 0))
+    assert s._skip_key() is None  # 押すたびに切り替えるキーは使わない
+    st.feed(Event("game", "input", {"muted": [], "skip_keys": ["leftCtrl"]}, 0))
+    assert s._skip_key() == "ctrlleft"
+    s.cfg["skip_read"] = False
+    assert s._skip_key() is None
+
+
+def test_skip_key_is_released_when_reading_stops():
+    s, st, run, events = _skip_session()
+    _line(st, 0)
+    _line(st, 0)
+    held = []
+    s.pointer.driver.key_down = lambda name: held.append("down")
+    s.pointer.driver.key_up = lambda name: held.append("up")
+    asyncio.run(s._skip_read("ctrl"))  # 本文が届かない（演出の途中で止まった）
+    assert held == ["down", "up"]
+    res = [e.data for e in events if e.kind == "op_result"][-1]
+    assert not res["responded"] and res["stopped_by"] == "本文が届かない"
+
+
+def test_driver_key_names():
+    from yomawari.input.keys import driver_key
+
+    assert [driver_key(n) for n in ("ctrl", "rightCtrl", "tab", "a", "digit1", "f5", "escape")] == \
+        ["ctrl", "ctrlright", "tab", "a", "1", "f5", "esc"]
+    assert driver_key("someUnknownKey") is None
