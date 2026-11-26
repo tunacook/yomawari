@@ -290,9 +290,13 @@ rules:
       対象は、押せないときの一般的な見せ方（半透明: fade_ratio、色を抜いた灰色: grey_ratio。yomawari.toml の [fuzz]）か、
       伏せ字（inactive_hints.masked、「？？？」）で押せないと見たボタン。ほかより暗いだけ（dim_ratio / dim_min_gap）では出さない
       （絵柄・サムネイルが暗いだけのことがあり、暗い＝押せないかはデザイン次第のため。押す順番を後回しにするのには使う）。
-      DESIGN.md §9「画像による推定」
+      半透明・灰色はそのランで測った回の disabled_look_min_share（0.8）以上でそう見えたものだけ（後ろの絵や絵柄で、
+      たまたまそう見えることがある。run 2026-11-17〜2026-11-23 の 8 件は、どれも半分未満の回でしかそう見えていなかった）。
+      判断できるように、押す前に見た目を測ったときの画面を残す。DESIGN.md §9「画像による推定」
     params:
       heartbeat_alive_sec: 3
+      # 押す前に見た目を測ったときの画面の写しを残す（押したあとは別の画面に変わっているため）
+      snapshot: before_press
 
   - id: F-03
     severity: major

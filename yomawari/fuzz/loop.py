@@ -210,6 +210,9 @@ class FuzzRun:
     dim_seen: set[str] = field(default_factory=set)  # 暗いボタンがあると記録した並び
     bright_noted: set[str] = field(default_factory=set)  # 新しく明るくなったとして先に押したボタン（ランで1回だけ）
     dim_history: dict[str, bool] = field(default_factory=dict)  # ボタン（label）→ 前に測ったとき暗かったか
+    # ボタン（label）ごとの、明るさを測った回数と、そのうち半透明・灰色に見えた回数（V-07 に渡す見た目を、揺れで決めないため）
+    look_seen: Counter[str] = field(default_factory=Counter)
+    look_faded: Counter[str] = field(default_factory=Counter)
     newly_bright: set[str] = field(default_factory=set)  # 前は暗かったのに明るくなり、まだ押していないボタン
     screen_weights: dict[str, float] = field(default_factory=dict)  # プロファイルの [screens.<menu>] weight
     flow: FlowTracker = field(default_factory=lambda: FlowTracker([]))  # ゲームの流れ（プロファイルの [[flow]]）
@@ -510,6 +513,8 @@ class FuzzSession:
         self._lock = asyncio.Lock()
         self._verify_next = False
         self._verify_tried: list[str] = []  # いまの応答確認で、押しても反応がなかった操作
+        # 見た目を測ったときの画面の写し（いちばん新しいもの）。押す前の見た目を、検出の証拠に残すため（V-07）
+        self.look_shot: Any = None
         self._irregular_t = -1.0
         self._sig: Any = None
         self._sig_t = 0.0
@@ -2484,6 +2489,7 @@ class FuzzSession:
                 run.notes.append(f"画面を撮れなかった（画面収録の権限がないなど）ので、ボタンの見た目（明るさ・半透明・文字）で"
                                  f"押せるかを推定できなかった。押して確かめた（起動 #{self.launch}）")
             return
+        self.look_shot = shot
         measured = measure(targets, shot) if looks else {}
         if reading:
             await self._read_text(shot, measured)
@@ -2505,6 +2511,8 @@ class FuzzSession:
                                       float(self.cfg["grey_ratio"]), float(self.cfg["fade_min_gap"]))
                 dk = set(fade)
             dk = self._by_text(gkey, values, dk, texts)
+            run.look_seen.update(values)
+            run.look_faded.update(fade)
             run.look_groups.setdefault(gkey, set()).update(values)
             if dk:
                 run.look_split.add(gkey)
@@ -2650,6 +2658,22 @@ class FuzzSession:
                 run.notes.append(f"ボタンの文字を画面から読んだ（例: "
                                  f"{', '.join(f'`{k}` 「{v}」' for k, v in list(texts.items())[:3])}）（起動 #{self.launch}）")
         self.publish(Event("harness", "read_text", {"tried": len(todo), "texts": texts}, self.launch))
+
+    def _steady_disabled(self, label: str, text: str | None) -> bool:
+        """押せない見た目（V-07 に渡す disabled_look）が、揺れでなく続いているか。
+
+        伏せ字（「？？？」）は文字で分かるので、そのまま押せない見た目とする。半透明・灰色は、後ろの絵や絵柄で変わる
+        （半透明の右クリックメニューで、背景によって 1 つのボタンだけ薄く見えた。サムネイルの並びで、色の少ない絵が灰色に
+        見えた）。本当に押せない見せ方なら、見るたびにそう見えるので、このランで測った回の disabled_look_min_share 以上で
+        そう見えたもの（disabled_look_min_seen 回以上測ったもの）だけにする（run 2026-11-17〜2026-11-23 の V-07 の 8 件は、
+        どれも半分未満の回でしかそう見えていなかった。そのうち右クリックメニューのボタンは、押せないのが仕様ではなかった）。"""
+        if label not in self._disabled:
+            return False
+        if masked(text, self.run.masked_chars):
+            return True
+        seen = self.run.look_seen[label]
+        return (seen >= int(self.cfg["disabled_look_min_seen"])
+                and self.run.look_faded[label] >= seen * float(self.cfg["disabled_look_min_share"]))
 
     def _verify_candidates(self, cands: list[Op], key: str) -> list[Op]:
         """応答確認に使える操作: 同じ状態で前に反応があったもの。
@@ -2835,7 +2859,7 @@ class FuzzSession:
                     "target": op.target.label if op.target else None,  # 同じ名前のボタンは #n で分けて数える
                     "type": op.target.type if op.target else None,
                     "dim": bool(op.target and op.target.label in self._dim),
-                    "disabled_look": bool(op.target and op.target.label in self._disabled),
+                    "disabled_look": bool(op.target and self._steady_disabled(op.target.label, op.target.text)),
                     "screen_changed": screen_changed,
                     "saved": self.state.saves != saves_before,  # 押してセーブが始まった（空きのスロットにセーブした）
                     # 押してゲームの設定（settings）が変わった。変わった後の値は settings

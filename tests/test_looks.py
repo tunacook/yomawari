@@ -762,3 +762,23 @@ def test_read_text_that_never_returns_is_given_up_and_does_not_block_exit():
     asyncio.run(s._look())
     assert len(calls) == 1
     release.set()
+
+
+def test_disabled_look_given_to_v07_only_when_it_stays():
+    # run 2026-11-17〜2026-11-23: 半透明の右クリックメニューのボタンや、サムネイルの並びのスロットが、背景や絵柄で
+    # たまたま半透明・灰色に見え、押せたので V-07 にした（8 件とも、そう見えたのは測った回の半分未満）。
+    # 本当に押せない見せ方なら見るたびにそう見えるので、測った回の disabled_look_min_share 以上でそう見えたものだけを渡す
+    slots = [_slot(i) for i in range(4)]
+    s, st, run, *_ = _list_session(slots, _shot([(sl.rect, 120) for sl in slots]))
+    label = "AlbumUI/Slot#1"
+    s._disabled = {label}
+    run.masked_chars = "？?"
+    run.look_seen[label], run.look_faded[label] = 10, 4
+    assert not s._steady_disabled(label, None)
+    run.look_faded[label] = 8
+    assert s._steady_disabled(label, None)
+    run.look_seen[label], run.look_faded[label] = 2, 2  # 測った回が少なければ渡さない
+    assert not s._steady_disabled(label, None)
+    assert s._steady_disabled(label, "？？？")  # 伏せ字は文字で分かるので、そのまま渡す
+    s._disabled = set()
+    assert not s._steady_disabled(label, "？？？")
