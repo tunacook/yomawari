@@ -136,7 +136,7 @@ Unity のゲームでも、ノベルゲームのアセットによって進め�
 | `menu_close` | `name` | 応答確認 |
 | `transition` | `phase: start/end`, `name` | 操作待ち、進行不能判定 |
 | `resolution` | `w`, `h`, `mode` | 起動直後と変化時（`Update` で監視）。描画領域の位置と Retina 倍率の計算（§8）、解像度テスト |
-| `input` | `muted`, `advance_muted` | 起動直後と変化時（0.2 秒ごとに監視）。`muted` はゲームが止めているプレイヤーの入力の id の並びで、id はアセットの入力の名前（レポートで見るためのもの。ハーネスの判定には使わない）。`advance_muted` は本文送りの入力が止められているか（どの入力が本文送りかはアダプタが決める。0.17.0 から）。ハーネスは、`advance_muted` が true のあいだの本文送りを S-02 に数えない。パッケージ 0.16.0 から |
+| `input` | `muted`, `advance_muted`, `skip_muted`, `skip_keys`, `toggle_skip_keys` | 起動直後と変化時（0.2 秒ごとに監視）。`muted` はゲームが止めているプレイヤーの入力の id の並びで、id はアセットの入力の名前（レポートで見るためのもの。ハーネスの判定には使わない）。`advance_muted` は本文送りの入力が止められているか（どの入力が本文送りかはアダプタが決める。0.17.0 から）。ハーネスは、`advance_muted` が true のあいだの本文送りを S-02 に数えない。`skip_keys` は押しているあいだスキップする入力、`toggle_skip_keys` は押すたびにスキップを切り替える入力に割り当てられたキーボードのキー（Unity の Input System のキーの名前。`ctrl`・`tab` など）、`skip_muted` はスキップの入力がどちらも止められているか（0.20.0 から）。ハーネスは読んだことのある本文をスキップで送る（§9「読んだ本文をスキップで送る」）。パッケージ 0.16.0 から |
 | `settings` | `locale`, `locales`, `reveal_speed`, `auto_delay`, `master_volume`, `bgm_volume`, `sfx_volume`, `voice_volume`, `voice_locale`, `skip_mode`, `font`, `font_size`, `quality`, `screen_mode`, `resolution` | 起動直後と変化時（0.2 秒ごとに監視、値は小数第 3 位まで）。ゲームの設定の値。フィールドの名前と値の決まりはアセットによらず1つで、アダプタはアセットの設定をこの名前に当てて出し、アセットにない項目は出さない。`locale` は言語タグ（`locales` は使える言語の一覧）、`reveal_speed` は本文の出る速さ（大きいほど速い）、音量は 0〜1、`resolution` は `"1280x720"`。`quality`・`screen_mode`・`resolution` は Unity 共通の値（`QualitySettings`・`Screen`）。ゲームがこのうちどれをプレイヤーに変えさせるかは、パッケージには分からないので、プロファイルの `[settings]` に書く（§9「設定を変えに行く」）。設定画面がゲーム独自の部品でも、値はアセットのサービスから読める。ハーネスは、押して値が変われば反応ありとする（設定画面の選択肢・スライダーは、押しても画面の並びが変わらない）。パッケージ 0.10.0 から |
 | `selected` | `menu`, `name`, `nth` | 変化時（0.2 秒ごとに監視）。エンジンのフォーカス（`EventSystem.current.currentSelectedGameObject`）があるボタン。Enter・Space で押されるのはこのボタン。`menu` はそのボタンを含む表示中の `menu` のうちいちばん内側のもの、`nth` は `menu` の `buttons` と同じ数え方で、同じ名前のボタンの何番目か（0 から）。`menu` の外のもの・押せないものにフォーカスがあるときは `menu` と `name` を `null` にする。ハーネスは、通常の操作で押さないボタン（ガードの区分が `expect_exit` / `external` / `deny` など）にフォーカスがあるあいだ、Enter を押さない（§9「ガード」）。パッケージ 0.12.0 から |
 | `save` / `load` | `slot`, `type`, `phase: start/end` | セーブ検証、分岐の巻き戻し。ロードで戻った位置の `scene` は、`load` の `end` のあとに出す（上の `scene`） |
@@ -155,7 +155,7 @@ Naninovel 1.21 以上があるときだけコンパイルする。Naninovel は�
 | `command` | `IScriptPlayer.OnExecute` のメイントラック。`name` はスクリプトに書く名前（`char`・`back`・`spawn`・`bgm` など。別名があれば別名）、`target` は名前のない引数。`kind` は、`Stop`・`Goto`・`Gosub`・`Return` なら `control`、Naninovel のアセンブリの外で定義したコマンドなら `custom` | 本文の `print` もコマンドなので、`command` には出さない |
 | `choices` / `choices_done` | `IChoiceHandlerManager` の選択肢のアクターと、`OnChoiceHandled` | 選択肢の `id` は表示のたびに変わる。ハーネスは選択肢を本文で数える |
 | `save` / `load` | `IStateManager` の `OnGameSave*` / `OnGameLoad*` | |
-| `input` | `IInputManager` の標準の入力（`Continue`・`Skip`・`ToggleSkip`・`AutoPlay`・`Rollback`・`Pause`・`ToggleUI`・`ShowBacklog`）のうち `IsMuted` が true のもの。`advance_muted` は `Continue` が止められているか。`@processInput`、`AddMuter` で一時的に止める方法、入力の処理自体が止まっているのも含めた、実際に効いている状態。入力の割り当てがない id も止められているものとして出る | |
+| `input` | `IInputManager` の標準の入力（`Continue`・`Skip`・`ToggleSkip`・`AutoPlay`・`Rollback`・`Pause`・`ToggleUI`・`ShowBacklog`）のうち `IsMuted` が true のもの。`advance_muted` は `Continue` が止められているか。`skip_keys`・`toggle_skip_keys` は `Skip`・`ToggleSkip` に割り当てられたキーボードのキーで、Naninovel が入力を作るのと同じ入力の設定（`InputConfiguration` の `InputActions`、なければ Naninovel の既定。`ActionMaps`）から読む。組み合わせのキーとキーボード以外は出さない。Input System がなければ空。`skip_muted` は `Skip` と `ToggleSkip` がどちらも止められているか。`@processInput`、`AddMuter` で一時的に止める方法、入力の処理自体が止まっているのも含めた、実際に効いている状態。入力の割り当てがない id も止められているものとして出る | |
 | `settings` | `ILocalizationManager.SelectedLocale` / `AvailableLocales`（0.11.0 から）、`ITextPrinterManager.BaseRevealSpeed` / `BaseAutoDelay`、`IAudioManager` の各音量と `VoiceLocale`、0.15.0 から `IScriptPlayer.SkipMode`（`skip_mode`。列挙の名前）、`IUIManager.FontName` / `FontSize`（`font`・`font_size`。既定は null・-1） | Naninovel の標準の設定画面にある項目がそろう。`BaseRevealSpeed` は大きいほど速いので、そのまま出す |
 | `bgm_play` / `bgm_stop` / `voice` / `voice_stop` | `IAudioManager.CollectPlayedBgm` / `GetPlayedVoice`。`id` はリソースのパス | `OnPlayBgm` などは再生・停止を頼まれたときのイベントで、ボイスが最後まで鳴って終わったときには来ないので、鳴っているかを見に行く |
 | `menu` の `role` | `TitleExitButton`（exit）、`ControlPanelTitleButton`（to_title）、`TitleNewGameButton`（new_game）、`GameSettingsLanguage` / `Resolution` / `ScreenMode` / `GraphicsDropdown`（system_setting） | §9「ゲーム固有の仕様」① |
@@ -586,6 +586,16 @@ Windows 対応（フェーズ7）への申し送り（セーブ・PlayerPrefs �
     - `why`: 重みを変えた層と倍率（`screen`・`looks`・`intent`・`resume`・`saved_slot`・`save_first`・`flow`・`list`・`list_dead`）
     - `odds`: Decider が選んだ確率と、確率の高かった候補 3 つ（`p`・`n`（候補の数）・`top`）
 - pyautogui の FailSafe（人がマウスを画面の隅に動かした）などで止まったら、以降はそのランを観測だけで続ける
+
+### 読んだ本文をスキップで送る
+人はロードして前に読んだところに戻ってきたら、スキップで送る。ハーネスも本文を送るときに、いまの行がこのランで前にも届いていれば（`GameState.reread`）、ゲームのスキップで送る（`skip_read`。run 2026-11-26_2218: ロードのたびに本文を 1 行ずつ送り直し、124 分のあいだ 3888 行を読み直した）。
+
+- 使うのは、押しているあいだスキップするキー（パッケージの `input` の `skip_keys`。§3）。押したままにして、未読の行・選択肢・モーダルな画面が出るか、`skip_max_sec`（20 秒）たつか、`skip_idle_sec`（3 秒）のあいだ本文が届かなければ離す。押すたびに切り替えるキーは使わない。ゲームが先にスキップを止めると、もう一度押したときに逆にスキップを始めてしまうため
+- スキップの方式が既読だけ（`settings` の `skip_mode` が `ReadOnly`）のときだけ使う。未読の行に来るとゲームがスキップを止めるので、新しい本文を読み飛ばさない。すべてを飛ばす方式では使わない
+- スキップの入力が止められている（`skip_muted`）とき、本文送りが止められているときは使わない
+- 既読かどうかはゲームが覚えている（前のランで読んだ行も含む）。ハーネスがスキップを始めるのは、このランで読んだ行だけだが、ゲームはこのランでまだ読んでいない既読の行も飛ばす
+- `op` の種類は `skip`。`op_result` に、飛ばした行の数（`skipped_lines`）と、離した理由（`stopped_by`）を残す
+- キーの名前は Input System の名前から入力の送り手の名前に変える（`input/keys.py`）。分からない名前のキーは使わない
 
 ### 入力の方式
 マウスで遊ぶ人とキーボードで遊ぶ人では、通る道が違う（キーで送ると本文の途中で止まる、Esc で開くメニューが右クリックと違う、など）。`--input mouse|keyboard`（`fuzz.input`）で主に使う方を選び、`--input-mix`（`fuzz.input_mix`、0〜1）で主でない方を混ぜる。既定（`mouse`、0）は、これまでどおりマウスだけ（`fuzz/keyboard.py`）。

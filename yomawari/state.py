@@ -175,6 +175,15 @@ class GameState:
     muted: frozenset[str] = frozenset()
     # 本文送りの入力が止められている（input イベントの advance_muted。どの入力が本文送りかはアダプタが知っている）
     advance_muted: bool = False
+    # スキップの入力（input イベント）: 押しているあいだスキップするキー・押すたびに切り替えるキー（Input System の名前）と、
+    # 止められているか。ハーネスは、読んだことのある本文をスキップで送る（DESIGN.md §9「読んだ本文をスキップで送る」）
+    skip_keys: tuple[str, ...] = ()
+    toggle_skip_keys: tuple[str, ...] = ()
+    skip_muted: bool = False
+    # このランで届いた本文の行（line_id）と、いまの行がこのランで前にも届いていたか（読み直し）
+    seen_lines: set[str] = field(default_factory=set)
+    reread: bool = False
+    lines_total: int = 0  # 届いた本文の行の数（同じ行も数える）
     _played_since_title: bool = False
     _order: int = 0
 
@@ -219,6 +228,9 @@ class GameState:
     def _on_input(self, d: dict[str, Any], t: float) -> None:
         self.muted = frozenset(str(x) for x in d.get("muted") or [])
         self.advance_muted = d.get("advance_muted") is True
+        self.skip_muted = d.get("skip_muted") is True
+        self.skip_keys = tuple(str(k) for k in d.get("skip_keys") or [])
+        self.toggle_skip_keys = tuple(str(k) for k in d.get("toggle_skip_keys") or [])
 
     def _on_selected(self, d: dict[str, Any], t: float) -> None:
         menu, name = d.get("menu"), d.get("name")
@@ -241,6 +253,11 @@ class GameState:
         self.handled_choices.clear()
 
     def _on_line(self, d: dict[str, Any], t: float) -> None:
+        line_id = d.get("line_id")
+        self.reread = line_id is not None and str(line_id) in self.seen_lines
+        if line_id is not None:
+            self.seen_lines.add(str(line_id))
+        self.lines_total += 1
         self.line = {k: d.get(k) for k in ("label", "line_id", "speaker", "text")}
         self.line_done = False
         self.command_line = None

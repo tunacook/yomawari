@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..events import Event
+from ..input.keys import driver_key
 from ..input.pointer import InputBlocked, Pointer, PointerError, ScreenChanged
 from ..sensors.screen import Shot
 from ..state import GameState, Rect, Target
@@ -914,6 +915,11 @@ class FuzzSession:
         op = self.run.decider.choose(key, cands)
         if op is None:
             return  # 暗転中などで押せない。応答確認は次に押せるときまで持ち越す
+        if op.kind == "advance" and op.by == "normal" and not verify:
+            skip = self._skip_key()
+            if skip is not None:
+                await self._skip_read(skip)
+                return
         self._odds = (op.label, getattr(self.run.decider, "last_odds", {}))
         self._verify_next = False
         self._decided_ui = decided_ui
@@ -3165,10 +3171,74 @@ class FuzzSession:
         self.publish(Event("harness", "op", data, self.launch))
         return True
 
+    def _skip_key(self) -> str | None:
+        """読んだことのある本文をスキップで送れるなら、押し続けるキー（入力の送り手の名前）。送れなければ None。
+
+        人は、前に読んだところに戻ってきたら、スキップで送る（run 2026-11-26_2218: ロードのたびに本文を 1 行ずつ送り直し、
+        124 分のあいだ 3888 行を読み直した）。いまの行がこのランで前にも届いていて、スキップの方式が既読だけ（未読の行に
+        来るとゲームがスキップを止める）、スキップの入力が止められておらず、押しているあいだスキップするキーが分かるときだけ。
+        押すたびに切り替えるキーは使わない（ゲームが先にスキップを止めると、もう一度押したときに逆にスキップを始めてしまう）。"""
+        st = self.state
+        if not bool(self.cfg["skip_read"]) or not st.reread or st.skip_muted or st.advance_muted:
+            return None
+        if (st.settings or {}).get("skip_mode") != "ReadOnly":
+            return None
+        if st.choices or st.top_modal() is not None or st.busy:
+            return None
+        for name in st.skip_keys:
+            key = driver_key(name)
+            if key is not None:
+                return key
+        return None
+
+    async def _skip_read(self, key: str) -> None:
+        """スキップのキーを押し続け、未読の行・選択肢・画面が出るか、時間がたったら離す。op と op_result を出す。"""
+        op = Op("skip", arg=key, by="skip")
+        st = self.state
+        lines0, commands0, sig0 = st.lines_total, st.commands, st.signature()
+        started = time.monotonic()
+        self._decided_ui = None
+        if not await self._do(op):
+            return
+        last_line, seen, why = started, lines0, "時間"
+        try:
+            while True:
+                await asyncio.sleep(0.1)
+                now = time.monotonic()
+                if st.lines_total != seen:
+                    seen, last_line = st.lines_total, now
+                if st.lines_total > lines0 and not st.reread:
+                    why = "未読の行"
+                    break
+                if st.choices:
+                    why = "選択肢"
+                    break
+                if st.top_modal() is not None:
+                    why = "画面"
+                    break
+                if now - started >= float(self.cfg["skip_max_sec"]):
+                    break
+                if now - last_line >= float(self.cfg["skip_idle_sec"]):
+                    why = "本文が届かない"
+                    break
+        finally:
+            self.pointer.key_up(key)  # 止められても必ず離す
+        lines = st.lines_total - lines0
+        self.run.stats["skip"] += 1
+        self.publish(Event("harness", "op_result", {
+            **op.to_json(), "target": None, "responded": lines > 0 or st.signature() != sig0, "screen_changed": False,
+            "commands_ran": st.commands != commands0, "waited": round(time.monotonic() - started, 3),
+            "verify": False, "recheck": False, "verify_tried": [], "interfered": False,
+            "skipped_lines": lines, "stopped_by": why, "recent": list(self.run.recent), "state": st.snapshot(),
+        }, self.launch))
+
     def _input(self, op: Op) -> tuple[float, float] | None:
         p = self.pointer
         ax, ay = (float(v) for v in self.cfg["advance_point"])
         k = op.kind
+        if k == "skip":
+            p.key_down(str(op.arg))  # 離すのは _skip_read
+            return None
         if k in ("advance", "right_click", "click") and op.via_key is not None:
             p.key(op.via_key)  # キーボードで押す（fuzz/keyboard.py）。ボタンは、方向キーでフォーカスを移してから
             return None

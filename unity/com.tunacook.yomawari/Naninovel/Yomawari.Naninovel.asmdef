@@ -4,7 +4,8 @@
     "references": [
         "Yomawari",
         "Elringus.Naninovel.Runtime",
-        "UnityEngine.UI"
+        "UnityEngine.UI",
+        "Unity.InputSystem"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -20,6 +21,11 @@
             "name": "com.elringus.naninovel",
             "expression": "1.21",
             "define": "YOMAWARI_NANINOVEL"
+        },
+        {
+            "name": "com.unity.inputsystem",
+            "expression": "",
+            "define": "YOMAWARI_INPUT_SYSTEM"
         }
     ],
     "noEngineReferences": false

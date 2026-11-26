@@ -211,6 +211,9 @@ namespace Yomawari
         // （IInputManager.IsMuted）。入力の割り当てがない id も止められているものとして出る。
         // 本文送りの入力（Naninovel では Continue）が止められているかは advance_muted で出す。ハーネスは、そのあいだ
         // 押しても進まないのを進行不能（S-02）と数えない（入力の名前はアセットごとに違うので、ハーネスは muted を見ない）
+        // スキップの入力（押しているあいだスキップする Skip と、押すたびに切り替える ToggleSkip）は、割り当てられた
+        // キーボードのキー（skip_keys / toggle_skip_keys。Input System のキーの名前）と、止められているか（skip_muted）を出す。
+        // ハーネスは、読んだことのある本文をスキップで送る（DESIGN.md §9「読んだ本文をスキップで送る」）
         void ScanInput()
         {
             if (!Engine.TryGetService<IInputManager>(out var input)) return;
@@ -222,10 +225,48 @@ namespace Yomawari
                 muted.Append(YomawariFormat.Str(id));
             }
             var body = "\"muted\":" + muted.Append(']') +
-                       ",\"advance_muted\":" + (input.IsMuted(Inputs.Continue) ? "true" : "false");
+                       ",\"advance_muted\":" + (input.IsMuted(Inputs.Continue) ? "true" : "false") +
+                       ",\"skip_muted\":" + (input.IsMuted(Inputs.Skip) && input.IsMuted(Inputs.ToggleSkip) ? "true" : "false") +
+                       ",\"skip_keys\":" + KeyboardKeys(Inputs.Skip) +
+                       ",\"toggle_skip_keys\":" + KeyboardKeys(Inputs.ToggleSkip);
             if (body == inputSignature) return;
             inputSignature = body;
             YomawariLog.Emit("input", body);
+        }
+
+        readonly Dictionary<string, string> keysOf = new Dictionary<string, string>();
+
+        // Naninovel の入力（id）に割り当てられた、キーボードのキーの名前の配列（"[\"ctrl\"]"）。Naninovel が入力を作るのと
+        // 同じ、入力の設定（InputConfiguration）の InputActions（なければ Naninovel の既定）と ActionMaps から読む。
+        // 組み合わせ（Composite）と、キーボード以外の割り当ては出さない。Input System がなければ空
+        string KeyboardKeys(string id)
+        {
+            if (keysOf.TryGetValue(id, out var cached)) return cached;
+            var json = new StringBuilder("[");
+#if ENABLE_INPUT_SYSTEM && YOMAWARI_INPUT_SYSTEM
+            var config = Engine.GetConfiguration<InputConfiguration>();
+            var asset = config.InputActions != null
+                ? config.InputActions
+                : Resources.Load<UnityEngine.InputSystem.InputActionAsset>("Naninovel/Input/DefaultControls");
+            if (asset != null)
+                foreach (var mapName in config.ActionMaps)
+                {
+                    var action = asset.FindActionMap(mapName)?.FindAction(id);
+                    if (action == null) continue;
+                    foreach (var binding in action.bindings)
+                    {
+                        const string keyboard = "<Keyboard>/";
+                        var path = binding.effectivePath;
+                        if (binding.isComposite || binding.isPartOfComposite || path == null ||
+                            !path.StartsWith(keyboard)) continue;
+                        if (json.Length > 1) json.Append(',');
+                        json.Append(YomawariFormat.Str(path.Substring(keyboard.Length)));
+                    }
+                }
+#endif
+            var keys = json.Append(']').ToString();
+            keysOf[id] = keys;
+            return keys;
         }
 
         void ScanUIs(IUIManager manager)
