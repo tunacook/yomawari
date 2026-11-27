@@ -140,6 +140,26 @@ def test_mute_check_presses_advance_once_on_a_muted_modal():
     assert s._mute_check(262.0) is not None  # 開き直したら、また確かめる
 
 
+def test_mute_check_again_after_input_comes_back_between_steps():
+    # run 2026-11-27_1400: 確かめたあと、操作の結果を待つあいだに入力が戻ってすぐ止め直された。S-02 は入力が戻ったときに
+    # 確かめたことを取り消すので、ハーネスも数え直して、また確かめる
+    s, st, run, _ = _session(mute_check_sec=60)
+    _game(s, st, "menu", name="SaveMenu", modal=True,
+          buttons=[{"name": "Back", "rect": [0.1, 0.1, 0.2, 0.2], "type": "button"}])
+    _game(s, st, "input", muted=["Continue"], advance_muted=True)
+    assert s._mute_check(0.0) is None
+    assert s._mute_check(60.0) is not None
+    # ハーネスが状態を見ないあいだに、入力が戻ってまた止められた
+    _game(s, st, "input", muted=[], advance_muted=False)
+    _game(s, st, "input", muted=["Continue"], advance_muted=True)
+    assert s._mute_check(61.0) is None
+    assert s._mute_check(120.0) is None
+    assert s._mute_check(121.0) is not None
+    # 止められたままの知らせが続いても、数え直さない
+    _game(s, st, "input", muted=["Continue", "Skip"], advance_muted=True)
+    assert s._mute_check(300.0) is None
+
+
 def test_mute_check_clicks_where_no_button_is():
     """本文送りの位置（advance_point）にボタンがあれば、ボタンのない場所を押す。人も本文を送るときはボタンを押さない
     （ロードの画面で、真ん中にあったセーブのスロットを押して古いセーブをロードした）。"""

@@ -175,6 +175,9 @@ class GameState:
     muted: frozenset[str] = frozenset()
     # 本文送りの入力が止められている（input イベントの advance_muted。どの入力が本文送りかはアダプタが知っている）
     advance_muted: bool = False
+    # 本文送りの入力が止められた回数（戻ってからまた止められるたびに増える）。ハーネスは操作の合間に状態を見るので、
+    # 戻ってすぐ止め直されると、戻ったことに気づかない。この回数で気づく（fuzz/loop.py の _mute_check）
+    mute_epoch: int = 0
     # スキップの入力（input イベント）: 押しているあいだスキップするキー・押すたびに切り替えるキー（Input System の名前）と、
     # 止められているか。ハーネスは、読んだことのある本文をスキップで送る（DESIGN.md §9「読んだ本文をスキップで送る」）
     skip_keys: tuple[str, ...] = ()
@@ -227,7 +230,10 @@ class GameState:
 
     def _on_input(self, d: dict[str, Any], t: float) -> None:
         self.muted = frozenset(str(x) for x in d.get("muted") or [])
-        self.advance_muted = d.get("advance_muted") is True
+        muted = d.get("advance_muted") is True
+        if muted and not self.advance_muted:
+            self.mute_epoch += 1
+        self.advance_muted = muted
         self.skip_muted = d.get("skip_muted") is True
         self.skip_keys = tuple(str(k) for k in d.get("skip_keys") or [])
         self.toggle_skip_keys = tuple(str(k) for k in d.get("toggle_skip_keys") or [])
