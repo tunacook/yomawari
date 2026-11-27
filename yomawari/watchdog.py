@@ -16,6 +16,7 @@ import signal
 import subprocess
 import sys
 import time
+import traceback
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -171,6 +172,7 @@ class Harness:
         self._screen: Screen | None = None  # ランの画面の前提（--screen）
         self._screen_seen: set[int] = set()  # 画面の大きさを一度でも見た起動
         self._screen_abort = ""  # 決めた画面で起動できなかった（ランを止める理由）
+        self._fuzz_error = ""  # 操作のループが例外で止まった（ランを止める理由）
         self._bus: EventBus | None = None
         self._started = 0.0
         self._last_status = 0.0
@@ -465,6 +467,7 @@ class Harness:
             self._session_fuzz = FuzzSession(self._fuzz, self.state, pointer, self._publish, launch, self._on_expect_exit,
                                              first=launch == self._first_launch)
             self._fuzz_task = asyncio.create_task(self._session_fuzz.loop(stop))
+            self._fuzz_task.add_done_callback(lambda task: self._on_fuzz_done(task, launch))
             tasks.append(self._fuzz_task)
         reason = "deadline"
         cancelled = False
@@ -485,6 +488,28 @@ class Harness:
             self._session_fuzz = None
             await self._end_session(proc, stop, tasks, wait_dump=not cancelled and reason == "restart")
         return reason
+
+    def _on_fuzz_done(self, task: asyncio.Task[None], launch: int) -> None:
+        """操作のループが例外で終わったら、記録してランを止める。
+
+        ゲームは動いたままなので、止めずにおくとハーネスは何も押さないまま待ち、S-02・Y-01 で再起動を繰り返す。
+        ハーネスのコードの不具合は起動し直しても同じところで起きることが多いので、再起動せずにランを止める
+        （run 2026-11-27: 見た目の測定の例外で、再起動の上限まで同じことを繰り返し、原因はレポートに残らなかった）。"""
+        if task.cancelled() or task.exception() is None:
+            return
+        exc = task.exception()
+        assert exc is not None
+        frames = traceback.extract_tb(exc.__traceback__)
+        where = f"{Path(frames[-1].filename).name}:{frames[-1].lineno}" if frames else "不明"
+        error = f"{type(exc).__name__}: {exc}"
+        self._publish(Event("harness", "harness_error", {
+            "where": "fuzz", "error": error, "at": where,
+            "traceback": "".join(traceback.format_exception(exc)),
+        }, launch))
+        self._fuzz_error = (f"ハーネスの操作のループが例外で止まったため、ランを止めました（起動 #{launch}、{where}、{error}）。"
+                            "yomawari の不具合なので、events.jsonl の harness_error のスタックトレースを添えて yomawari 側に渡す")
+        if self._restart_req is not None:
+            self._restart_req.set()
 
     async def _end_session(
         self,
@@ -687,6 +712,10 @@ class Harness:
                 if self._screen_abort:
                     self.notes.append(self._screen_abort)
                     interrupted, stop_reason = True, self._screen_abort
+                    break
+                if self._fuzz_error:
+                    self.notes.append(self._fuzz_error)
+                    interrupted, stop_reason = True, self._fuzz_error
                     break
                 if reason == "deadline":
                     break
