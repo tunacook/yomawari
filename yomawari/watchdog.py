@@ -739,7 +739,11 @@ class Harness:
                     self._first_launch = launch  # ゲームはまだ何も進めていないので、最初の起動と同じく遊ぶ
                     continue
                 if self.restarts >= max_restarts:
-                    self.notes.append(f"再起動回数が上限（{max_restarts}）に達したため打ち切りました")
+                    # 予定の時間より前に終わるので、途中で止めたランとしてレポートの「終わり方」に書く
+                    # （run 2026-11-27: 3 時間の予定が 0.9 時間で打ち切られたのに、まとめには「予定どおり終わった」と出た）
+                    limit = f"再起動回数が上限（{max_restarts}）に達したため打ち切りました"
+                    self.notes.append(limit)
+                    interrupted, stop_reason = True, limit
                     break
                 self.restarts += 1
                 launch += 1
