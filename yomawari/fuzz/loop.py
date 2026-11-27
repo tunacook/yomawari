@@ -518,6 +518,8 @@ class FuzzSession:
         self._verify_next = False
         self._verify_tried: list[str] = []  # いまの応答確認で、押しても反応がなかった操作
         self._verify_retry: str | None = None  # ほかに確かめる操作がないので、もう一度押して確かめる操作
+        # スキップしても本文が 1 行も届かなかったときの GameState.lines_total（次の行が届くまで、スキップせずに本文送りで押す）
+        self._skip_stuck: int | None = None
         # 見た目を測ったときの画面の写し（いちばん新しいもの）。押す前の見た目を、検出の証拠に残すため（V-07）
         self.look_shot: Any = None
         self._irregular_t = -1.0
@@ -3202,9 +3204,14 @@ class FuzzSession:
         人は、前に読んだところに戻ってきたら、スキップで送る（run 2026-11-26_2218: ロードのたびに本文を 1 行ずつ送り直し、
         124 分のあいだ 3888 行を読み直した）。いまの行がこのランで前にも届いていて、スキップの方式が既読だけ（未読の行に
         来るとゲームがスキップを止める）、スキップの入力が止められておらず、押しているあいだスキップするキーが分かるときだけ。
-        押すたびに切り替えるキーは使わない（ゲームが先にスキップを止めると、もう一度押したときに逆にスキップを始めてしまう）。"""
+        押すたびに切り替えるキーは使わない（ゲームが先にスキップを止めると、もう一度押したときに逆にスキップを始めてしまう）。
+        スキップしても本文が 1 行も届かなかった行では、次の行が届くまでスキップしない。いまの行を読んでいても、次の行が
+        未読ならゲームはスキップを止める（run 2026-11-27_1400: 読んだ範囲の最後の行でスキップを選び続け、何も送らないまま
+        14 分のあいだに 198 回、3 秒ずつ待った）。"""
         st = self.state
         if not bool(self.cfg["skip_read"]) or not st.reread or st.skip_muted or st.advance_muted:
+            return None
+        if self._skip_stuck == st.lines_total:
             return None
         if (st.settings or {}).get("skip_mode") != "ReadOnly":
             return None
@@ -3249,6 +3256,8 @@ class FuzzSession:
         finally:
             self.pointer.key_up(key)  # 止められても必ず離す
         lines = st.lines_total - lines0
+        if lines == 0:
+            self._skip_stuck = st.lines_total
         self.run.stats["skip"] += 1
         self.publish(Event("harness", "op_result", {
             **op.to_json(), "target": None, "responded": lines > 0 or st.signature() != sig0, "screen_changed": False,

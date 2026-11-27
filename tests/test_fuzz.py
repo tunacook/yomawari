@@ -1611,6 +1611,24 @@ def test_skip_key_is_released_when_reading_stops():
     assert not res["responded"] and res["stopped_by"] == "本文が届かない"
 
 
+def test_skip_is_not_repeated_on_a_line_where_it_did_not_move():
+    # run 2026-11-27_1400: 読んだ範囲の最後の行（次の行は未読）でスキップを押しても、ゲームはスキップを止めるので何も進まない。
+    # ハーネスは本文送りを選ぶたびにスキップを選び、14 分のあいだに 198 回、3 秒ずつ待った。次の行が届くまで本文送りで押す
+    s, st, run, events = _skip_session()
+    _line(st, 0)
+    _line(st, 1)
+    _line(st, 1)  # ロードして、読んだ範囲の最後の行に戻った
+    s.pointer.driver.key_down = lambda name: None
+    s.pointer.driver.key_up = lambda name: None
+    assert s._skip_key() == "ctrl"
+    asyncio.run(s._skip_read("ctrl"))
+    assert [e.data for e in events if e.kind == "op_result"][-1]["skipped_lines"] == 0
+    assert s._skip_key() is None  # この行では、もうスキップしない
+    _line(st, 2)  # 本文送りで未読の行へ進んだ
+    _line(st, 0)  # またロードして読んだ行に戻った
+    assert s._skip_key() == "ctrl"
+
+
 def test_driver_key_names():
     from yomawari.input.keys import driver_key
 
