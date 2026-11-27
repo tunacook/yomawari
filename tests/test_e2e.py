@@ -63,6 +63,10 @@ def test_crash_is_c01_and_restarts(tmp_path, mock_app, fake_platform):
     assert (r.run_dir / "player.log").exists() and (r.run_dir / "player.1.log").exists()
     report = r.report_path.read_text()
     assert "[C-01]" in report and "回数: 2（起動 #0, #1）" in report and "打ち切り" in report
+    # 予定の時間より前に打ち切ったので、まとめに「予定どおり終わった」と書かず、理由を書く（run 2026-11-27）
+    summary = report.split("## まとめ")[1].split("\n## ")[0]
+    assert "予定どおり" not in summary and "再起動回数が上限（1）に達したため打ち切りました" in summary
+    assert "| 終わり方 | 再起動回数が上限（1）" in report
     assert_restored(fake_platform, tmp_path)
 
 
