@@ -5,7 +5,9 @@ OS の入力とウィンドウは、tests/test_window.py と同じ作りのフ�
 """
 
 import asyncio
+import json
 import random
+import time
 
 import pytest
 
@@ -1030,6 +1032,41 @@ def test_harness_random_mode_clicks_mock_game(tmp_path, mock_app, fake_platform)
     assert "NewGameButton" not in report.split("## 一度も反応しなかったボタン")[1].split("\n## ")[0]
     assert "操作: 通常" in report
     assert (fake_platform.save / "slot1.dat").read_text() == "original"
+
+
+def test_harness_stops_run_when_fuzz_loop_raises(tmp_path, mock_app, fake_platform, monkeypatch):
+    # run 2026-11-27: 操作のループが例外で終わり、ハーネスは何も押さないまま S-02・Y-01 で再起動を繰り返した。
+    # 例外を記録して、再起動せずにランを止める
+    from yomawari.config import RUN_DEFAULTS, SENSOR_DEFAULTS, BuildConfig
+    from yomawari.fuzz.loop import FuzzSession
+    from yomawari.platform.mac import MacPlatform
+    from yomawari.watchdog import Harness, RunOptions
+
+    from .conftest import RULES_PATH
+    from .test_window import RecordingDriver
+
+    async def broken(self):
+        raise TypeError("壊れた")
+
+    monkeypatch.setattr(FuzzSession, "_step", broken)
+    fake_platform.save.mkdir(parents=True)
+    build = BuildConfig("mock", mock_app, args=["--mock-hb", "0.05", "--mock-mode", "menus", "--mock-after", "60"])
+    exe = MacPlatform().resolve_executable(mock_app)
+    sensors = {**SENSOR_DEFAULTS, "log_poll_sec": 0.02, "process_poll_sec": 0.05, "tick_sec": 0.05}
+    h = Harness(
+        build, exe, _WindowedPlatform(fake_platform), scaled_rules(0.05), RULES_PATH, tmp_path / "runs",
+        {**RUN_DEFAULTS, "quit_timeout_sec": 2.0, "max_restarts": 5}, sensors,
+        fuzz_cfg=CFG, spec=GameSpec(), driver_factory=RecordingDriver,
+    )
+    started = time.monotonic()
+    r = asyncio.run(h.run(RunOptions(hours=60 / 3600, mode="random", seed="1")))
+    assert time.monotonic() - started < 30  # 予定の 60 秒を待たずに止めた
+    assert r.interrupted and h.launches == 1 and h.restarts == 0
+    events = [json.loads(line) for line in (r.report_path.parent / "events.jsonl").read_text().splitlines()]
+    err = [e["data"] for e in events if e["kind"] == "harness_error"]
+    assert len(err) == 1 and err[0]["error"] == "TypeError: 壊れた" and "broken" in err[0]["traceback"]
+    report = r.report_path.read_text()
+    assert "操作のループが例外で止まった" in report and "TypeError: 壊れた" in report
 
 
 def test_example_toml_matches_fuzz_defaults():
