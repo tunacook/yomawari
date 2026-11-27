@@ -587,7 +587,9 @@ def render_top(items: list[Item], events: list[dict], duration_sec: float, launc
             if snap:
                 links = [f"[画面]({snap['png']})"] if snap.get("png") else []
                 links.append(f"[状態と直前のイベント]({snap['json']})")
-                out.append(f"- 最初の検出のときの状況（再起動の前に残した）: {'・'.join(links)}")
+                when = ("押す前に見た目を測ったときの画面" if first.evidence.get("snapshot_before_press")
+                        else "再起動の前に残した" if first.action == "restart" else "検出したときに残した")
+                out.append(f"- 最初の検出のときの状況（{when}）: {'・'.join(links)}")
             log_name = "player.log" if first.launch == 0 else f"player.{first.launch}.log"
             out.append(f"- ログ: [{log_name}]({log_name})")
         if it.timeline:

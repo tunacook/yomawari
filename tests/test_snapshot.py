@@ -73,3 +73,25 @@ def test_restart_issue_leaves_snapshot_before_restart(tmp_path: Path, fake_platf
     i.evidence["snapshot"] = {"png": "snapshots/a.png", "json": "snapshots/a.json"}
     text = render(summary, [i], tmp_path)
     assert "- 最初の検出のときの状況（再起動の前に残した）: [画面](snapshots/a.png)・[状態と直前のイベント](snapshots/a.json)" in text
+
+
+def test_v07_leaves_the_screen_measured_before_the_press(tmp_path: Path, fake_platform):
+    # V-07 は押したあとに出る。押すと別の画面に変わっていて、押せないように見えたボタンが写らないので、
+    # 押す前に見た目を測ったときの画面を残す。再起動はしない
+    from yomawari.detect.engine import load_rules
+
+    h = Harness(None, Path("x"), fake_platform, load_rules(Path("rules.yaml")), Path("rules.yaml"), tmp_path, {}, {})
+    h._run_dir = tmp_path
+    h._bus = type("Bus", (), {"publish": lambda self, ev: None})()
+    h.state = _state()
+    before = Shot(1, 1, 4, bytes([10, 20, 30, 255]))
+    h._session_fuzz = type("F", (), {"launch": 0, "look_shot": before, "burst": None})()
+    i = Issue("V-07", "major", "暗いボタンで別の画面に進める", "押せた", "V-07:x", 0, 2.0, "2026-01-01T00:01:02+09:00")
+    h._handle_issues([i])
+    snap = i.evidence["snapshot"]
+    assert snap["png"] == "snapshots/000102_V-07_0.png" and i.evidence["snapshot_before_press"]
+    assert (tmp_path / snap["png"]).read_bytes() == to_png(before)
+    summary = RunSummary(run_id="r", build_name="b", build_path="/b.app", started="s", ended="e", duration_sec=60.0,
+                         mode="random", seed="1", launches=1, restarts=0, interrupted=False, rules_path="rules.yaml")
+    text = render(summary, [i], tmp_path)
+    assert "- 最初の検出のときの状況（押す前に見た目を測ったときの画面）: [画面](snapshots/000102_V-07_0.png)" in text

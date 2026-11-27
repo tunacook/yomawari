@@ -249,12 +249,19 @@ class Harness:
 
     def _take_snapshot(self, i: Issue) -> None:
         """再起動する検出の前に、画面の写しと状態をランのフォルダに残し、検出の証拠に場所を書く（snapshot.py）。
-        抜け出す操作を試す前に撮る（試すと画面が変わる）。撮れなくても検出は続ける。"""
+        抜け出す操作を試す前に撮る（試すと画面が変わる）。撮れなくても検出は続ける。
+        rules.yaml の snapshot が before_press のルール（V-07）は、押したあとの画面ではなく、押す前に見た目を測ったときの
+        画面を残す（押すと別の画面に変わっていて、押せないように見えたボタンが写らない）。"""
         if self._run_dir is None:
             return
         shot = None
         fuzz = self._session_fuzz
-        if fuzz is not None and fuzz.launch == i.launch:
+        rule = self.rules.get(i.rule_id)
+        before = rule is not None and rule.params.get("snapshot") == "before_press"
+        if fuzz is not None and fuzz.launch == i.launch and before:
+            shot = fuzz.look_shot
+            i.evidence["snapshot_before_press"] = True
+        elif fuzz is not None and fuzz.launch == i.launch:
             try:
                 shot = self.platform.capture(fuzz.pointer.area().rect)
             except Exception as e:  # ウィンドウが見えないなど。状態だけ残す
@@ -269,7 +276,8 @@ class Harness:
 
     def _handle_issues(self, issues: list[Issue]) -> None:
         for i in issues:
-            if i.action == "restart":
+            rule = self.rules.get(i.rule_id)
+            if i.action == "restart" or (rule is not None and rule.params.get("snapshot")):
                 self._take_snapshot(i)
             if self._fuzz is not None and self._fuzz.burst is not None:
                 # 区間（ガチャプレイ・ボタンの網羅）の間に見つけたもの
