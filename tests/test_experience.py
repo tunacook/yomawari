@@ -189,3 +189,52 @@ def test_experience_forget_command(tmp_path):
     assert "flow_wrong" not in json.loads(path.read_text(encoding="utf-8")) and "消しました" in res.output
     res = runner.invoke(app, ["--config", str(cfg), "experience", "forget", "--game", "Nope", "-y"])
     assert res.exit_code == 0 and "覚えたことはありません" in res.output and "Rachel" in res.output
+
+
+def test_choice_that_comes_back_to_the_same_choice_is_a_detour():
+    # run 2026-11-27_1400: バッドエンドに入る選択肢も、バッドエンドの本文が新しいので進行に数え、次から優先していた。
+    # 選んだあと別の scene を通り、ロードせずに同じ選択肢へ戻ってきたら、進行を取り消して巻き戻しに数える
+    import asyncio
+
+    from yomawari.fuzz.ops import Op
+
+    from .test_looks import _Mouse
+
+    s, st, run = _session()
+    mouse = _Mouse()
+    mouse.click = lambda *a, **k: None
+    s.pointer.driver = mouse
+    st.feed(Event("game", "resolution", {"w": 2000, "h": 1000}, 0))
+    items = [{"id": "a", "text": "話す", "rect": [0.1, 0.3, 0.9, 0.4]},
+             {"id": "b", "text": "話さない", "rect": [0.1, 0.5, 0.9, 0.6]}]
+
+    def offer():
+        _game(s, st, "choices", items=[dict(i, id=i["id"] + str(time.monotonic())) for i in items])
+
+    def pick(text):
+        target = next(t for t in st.choices if t.text == text)
+        asyncio.run(s._normal(Op("click", target), "choices", False))
+
+    _game(s, st, "scene", name="main/s1")
+    offer()
+    pick("話す")
+    _game(s, st, "scene", name="ending/bad")  # バッドエンドへ
+    _game(s, st, "line", line_id="ending/bad:1", text="b")
+    label = "click choices/話す"
+    assert run.experience.ops["choices"][label]["progress"] == 1
+    _game(s, st, "scene", name="main/s1")  # バッドエンドの終わりのボタンで、選択肢の前に戻った（ロードしない）
+    offer()
+    c = run.experience.ops["choices"][label]
+    assert c["progress"] == 0 and c["rewind"] == 1
+    assert sum("回り道" in n for n in run.notes) == 1
+    # もう片方を選んで先へ進んだ。ロードして同じ選択肢に戻ったのは、選択肢のせいではない
+    pick("話さない")
+    _game(s, st, "scene", name="main/s2")
+    _game(s, st, "load", slot="s", phase="start")
+    _game(s, st, "scene", name="main/s1")
+    offer()
+    assert run.experience.ops["choices"]["click choices/話さない"]["rewind"] == 1  # ロードが始まったときの巻き戻しだけ
+    # 同じ scene の中で戻ってきた（巻き戻しの操作など）のは数えない
+    pick("話す")
+    offer()
+    assert run.experience.ops["choices"][label]["rewind"] == 1
