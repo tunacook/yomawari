@@ -141,6 +141,25 @@ def test_dim_buttons_are_tried_later_and_noted():
     assert s._dim == set()
 
 
+def test_look_counts_each_measure_per_button():
+    # run 2026-11-27: 明るさの辞書をそのまま Counter.update に渡していたため、2 回目に別のボタンの並びを測ったときに
+    # TypeError で操作のループが終わり、ハーネスが何も押さなくなった
+    slots = [_slot(i) for i in range(4)]
+    s, st, run, windows, mouse, events = _list_session(slots, _shot([(x.rect, 120) for x in slots]))
+    asyncio.run(s._look())
+    others = [_slot(i, menu="OtherUI", name="Item") for i in range(4)]
+    st.feed(Event("game", "menu_close", {"name": "AlbumUI"}, 0))
+    st.feed(Event("game", "menu", {"name": "OtherUI", "modal": True, "buttons": [
+        {"name": "Item", "rect": list(x.rect)} for x in others]}, 0))
+    windows.shot = _shot([(x.rect, 120) for x in others])
+    asyncio.run(s._look())
+    _show(st, slots)
+    windows.shot = _shot([(x.rect, 120) for x in slots])
+    asyncio.run(s._look())
+    assert run.look_seen["AlbumUI/Slot#1"] == 2 and run.look_seen["OtherUI/Item#1"] == 1
+    assert all(isinstance(n, int) for n in (*run.look_seen.values(), *run.look_faded.values()))
+
+
 def test_compare_within_one_shot_and_newly_bright_goes_first():
     slots = [_slot(i) for i in range(4)]
     s, st, run, windows, mouse, events = _list_session(slots, _shot([(slots[0].rect, 230)] +
