@@ -286,3 +286,43 @@ def test_harness_idle_is_fixed_by_the_harness(tmp_path):
     assert "[Y-01]" in rows[1] and f"| {WHO_HARNESS_STOPPED} |" in rows[1]
     assert "- やること 2 件（未確定 1、ハーネス 1）" in text
     assert "根拠: ゲームは動いていたのに、ハーネスが操作していなかった" in _section(text, 2)
+
+
+def test_items_say_what_to_do_next_and_the_top_lists_the_first_steps(tmp_path):
+    # レポートを見た開発者が、項目ごとに次に何をすればよいか分かるようにする（ゲームを直す・プロファイルを直す・
+    # yomawari に渡す）。原因が同じ項目は、先に片づける項目の番号を書き、「まずやること」には並べない
+    issues = [
+        _issue("L-01", "major", "Error: スクリプトのラベルがない", 1),
+        _issue("S-02", "critical", "本文が進まない", 3),
+        _issue("S-02", "critical", "本文が進まない", 4),
+        _issue("R-07", "minor", "重いフレーム", 5),
+    ]
+    text = render(_summary(), issues, tmp_path)
+    rows = _rows(text)
+    assert "[S-02]" in rows[0] and "| #2 のエラーを先に直す |" in rows[0]
+    assert "[L-01]" in rows[1] and "| ゲーム: エラーを直す |" in rows[1]
+    top = text.split("### まずやること", 1)[1].split("## やること", 1)[0]
+    assert "1. ゲーム: エラーを直す: #2 [L-01]" in top and "[S-02]" not in top
+    assert "- 次にやること: 2/2 回で、直前にゲームがエラーを出していた" in _section(text, 1)
+
+
+def test_stall_of_rereading_is_the_harness_detour():
+    from collections import Counter
+
+    from yomawari.post.nextstep import for_stall
+    from yomawari.post.stalls import Stall
+
+    cfg = {"report_detour_reread_share": 0.8, "report_detour_min_loads": 3}
+    st = Stall("s", "e", 7440, 0, "a", "a:1", "", "`advance` のあと、新しいところへ進んだ", reread=3888, loads=21, flow_new=96)
+    short, long, detour = for_stall(st, cfg)
+    assert detour and short.startswith("ゲーム側は対応不要") and "ロードを 21 回" in long
+    # 進めなくなる検出があれば、そちらを先に見る。重いフレーム・警告は区間の原因にならないので見ない
+    st.issues = Counter({"R-07": 5, "S-02": 1})
+    short, _, detour = for_stall(st, cfg)
+    assert not detour and short == "このあいだの検出（S-02）を先に見る"
+    st.issues = Counter({"R-07": 5})
+    assert for_stall(st, cfg)[2]
+    # 読み直しが少なければ遠回りとしない
+    st.reread, st.flow_new = 100, 400
+    short, _, detour = for_stall(st, cfg)
+    assert not detour and short == "経過を見て、進めなかった理由を判断する"

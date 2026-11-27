@@ -21,11 +21,12 @@ from typing import Any
 
 from ..events import SEVERITIES, Issue
 from ..fuzz.reading import text_changed
+from . import nextstep
 from .stalls import Stall, find_stalls
 
 WHO_GAME = "ゲーム"
 WHO_HARNESS = "ハーネス（誤検知の見込み）"
-WHO_HARNESS_STOPPED = "ハーネス"  # ハーネスの操作が止まった（Y-01）
+WHO_HARNESS_STOPPED = "ハーネス"  # ハーネスの操作が止まった（Y-01）・遠回りした（進めなかった区間）
 WHO_UNKNOWN = "未確定"
 SEVERITY_LABEL = {"critical": "Critical", "major": "Major", "minor": "Minor", "info": "Info", "check": "要確認"}
 RANK = {s: n for n, s in enumerate((*SEVERITIES[:2], "check", *SEVERITIES[2:]))}
@@ -36,6 +37,8 @@ NOTHING_TO_DO = "問題は見つからなかった。やることはない"
 NOTHING_FOUND = ("検出・進めなかった区間・ハーネスが不具合の可能性を書いた記録・一度も反応しなかったボタンの、"
                  "どれもなかった")
 SHOWN_ISSUES = 5  # 項目の「検出」に並べる数（同じ項目の検出がもっとあれば、数だけ書く）
+FIRST_STEPS = 3  # まとめの「まずやること」に並べる項目の数
+NO_ACTION = ("ゲーム側は対応不要", "個別の対応は不要")
 
 
 @dataclass
@@ -54,6 +57,10 @@ class Item:
     timeline: list[str] = field(default_factory=list)
     timeline_label: str = ""
     key: tuple[str, ...] | None = None  # 検出の項目のまとめ方（item_key）。進めなかった区間などは None
+    kind: str = ""  # 検出以外の項目の種類（stall / short_stalls / suspects / silent）
+    stall: Stall | None = None
+    next_short: str = ""  # 次にやること（表に載せる短い形。post/nextstep.py）
+    next: str = ""  # 次にやること（項目の節に載せる形）
 
 
 def family(label: str) -> str | None:
@@ -414,7 +421,10 @@ def _stall_items(stalls: list[Stall], log: Log | None, cfg: dict[str, Any]) -> l
         item = Item(title=f"`{where}` から {_minutes(st.sec)}進めなかった", severity="check",
                     what=f"{st.start_wall[11:19]} から{_minutes(st.sec)}、新しい本文・scene・選択肢に届かなかった。{st.ended}",
                     count=1, place=f"`{where}`" + (f"「{st.line_text}」" if st.line_text else ""),
-                    numbers=_stall_numbers(st, log))
+                    numbers=_stall_numbers(st, log), kind="stall", stall=st)
+        item.next_short, item.next, detour = nextstep.for_stall(st, cfg)
+        if detour:
+            item.who, item.basis = WHO_HARNESS_STOPPED, "ロードと、読んだことのある本文の読み直しがほとんどだった"
         if log is not None:
             lo, hi = log.between(st.start_wall, st.end_wall)
             item.timeline = timeline(log, max(0, lo - 1), hi, int(cfg["report_timeline_lines"]))
@@ -423,7 +433,7 @@ def _stall_items(stalls: list[Stall], log: Log | None, cfg: dict[str, Any]) -> l
     if short:
         total = sum(s.sec for s in short)
         items.append(Item(
-            title=f"短く進めなかった区間 {len(short)} 件", severity="check", count=len(short),
+            title=f"短く進めなかった区間 {len(short)} 件", severity="check", count=len(short), kind="short_stalls",
             what=f"{_minutes(min(s.sec for s in short))}〜{_minutes(max(s.sec for s in short))}、計 {_minutes(total)}",
             numbers=[f"{_minutes(s.sec)}: `{s.line_id or s.scene}`（{s.start_wall[11:19]} から）。{s.ended}"
                      for s in sorted(short, key=lambda s: -s.sec)]))
@@ -436,7 +446,7 @@ def _silent_item(silent: dict[str, int]) -> Item | None:
     fams = Counter()
     for label, n in silent.items():
         fams[family(label) or label] += n
-    return Item(title=f"一度も反応しなかったボタン {len(silent)} 個", severity="check", count=len(silent),
+    return Item(title=f"一度も反応しなかったボタン {len(silent)} 個", severity="check", count=len(silent), kind="silent",
                 what="押しても画面が一度も変わらなかった。ロック中・空のスロットなど仕様どおりなら問題ない",
                 numbers=[f"`{f}`: 押した {n} 回" for f, n in fams.most_common()])
 
@@ -456,7 +466,7 @@ def build_items(issues: list[Issue], events: list[dict], cfg: dict[str, Any], no
     suspects = [n for n in notes if any(w in n for w in SUSPECT_NOTE_WORDS)]
     if suspects:
         items.append(Item(title=f"ハーネスが不具合の可能性を書いた記録 {len(suspects)} 件", severity="check",
-                          count=len(suspects), what="ハーネスの推定。プロファイルが古いか、ゲームの不具合か、ハーネスの読み違いか",
+                          count=len(suspects), kind="suspects", what="ハーネスの推定。プロファイルが古いか、ゲームの不具合か、ハーネスの読み違いか",
                           numbers=suspects))
     s = _silent_item(silent)
     if s is not None:
@@ -493,6 +503,7 @@ def render_top(items: list[Item], events: list[dict], duration_sec: float, launc
                prev_items: dict[tuple[str, ...], tuple[str, int]] | None = None) -> list[str]:
     """「まとめ」「やること」と項目ごとの節。項目がなければ、問題が見つからず、やることがないとはっきり書く。
     prev_items（前回のランの項目 → (見出し, 回数)）があれば、「やること」の表に前回の列を足す。"""
+    nextstep.assign(items, cfg, error_before)
     out = ["## まとめ", ""]
     hours = duration_sec / 3600
     out.append(f"- {hours:.1f} 時間、起動 {launches} 回（再起動 {restarts} 回）。{stopped}")
@@ -512,24 +523,32 @@ def render_top(items: list[Item], events: list[dict], duration_sec: float, launc
     else:
         out.append(f"- {NOTHING_TO_DO}" + ("（途中で止めたので、止めるまでの範囲）" if interrupted else ""))
     out.append("")
+    # 対応不要のものと、ほかの項目を先に片づけるもの（「#2 のエラーを先に直す」など）は並べない
+    first = [(n, it) for n, it in enumerate(items, 1)
+             if not it.next_short.startswith(NO_ACTION) and not it.next_short.startswith("#")][:FIRST_STEPS]
+    if first:
+        out += ["### まずやること", ""]
+        out += [f"{k}. {it.next_short}: #{n} {_cell(it.title)}" for k, (n, it) in enumerate(first, 1)]
+        out.append("")
     out += ["## やること", ""]
     if not items:
         return out + [f"なし。{NOTHING_FOUND}", ""]
     out += [("同じ種類の検出・区間を 1 項目にまとめ、重い順に並べた。「誰が直す」は、決まった根拠で判断できたときだけ書く"
-             "（ほかは未確定。下の節の数字と経過から切り分ける）"), ""]
+             "（ほかは未確定）。「次にやること」は、未確定なら、何を見ればどちらか決まるかを書く（詳しくは下の節）"), ""]
     if prev_items is None:
-        out += ["| # | 起きたこと | 重さ | 誰が直す | 回数 | 場所 |", "|---|---|---|---|---|---|"]
+        out += ["| # | 起きたこと | 次にやること | 重さ | 誰が直す | 回数 | 場所 |", "|---|---|---|---|---|---|---|"]
     else:
-        out += ["| # | 起きたこと | 重さ | 誰が直す | 回数 | 前回 | 場所 |", "|---|---|---|---|---|---|---|"]
+        out += ["| # | 起きたこと | 次にやること | 重さ | 誰が直す | 回数 | 前回 | 場所 |", "|---|---|---|---|---|---|---|---|"]
     for n, it in enumerate(items, 1):
         prev = ""
         if prev_items is not None:
             prev = f"{prev_mark(it, prev_items)} | "
-        out.append(f"| {n} | {_cell(it.title)} | {SEVERITY_LABEL.get(it.severity, it.severity)} | {it.who} | {it.count} | "
-                   f"{prev}{_cell(it.place)} |")
+        out.append(f"| {n} | {_cell(it.title)} | {_cell(it.next_short)} | {SEVERITY_LABEL.get(it.severity, it.severity)} | "
+                   f"{it.who} | {it.count} | {prev}{_cell(it.place)} |")
     out.append("")
     for n, it in enumerate(items, 1):
         out += [f"### {n}. {it.title}", "",
+                f"- 次にやること: {it.next}",
                 f"- 重さ: {SEVERITY_LABEL.get(it.severity, it.severity)}",
                 f"- 誰が直す: {it.who}" + (f"。根拠: {it.basis}" if it.basis else ""),
                 f"- 起きたこと: {it.what}"]

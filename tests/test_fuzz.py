@@ -414,6 +414,7 @@ def test_s01_rechecks_with_another_op_before_raising():
     key = "modal:Menu"
     tab, close, slot = st.targets()
     run.responsive |= {(key, f"click {t.label}") for t in (tab, close, slot)}
+    run.hits.update({(key, f"click {t.label}"): 2 for t in (tab, close, slot)})
     s._dim = {slot.label}  # 空きと見込んでいるスロットは、前に反応していても使わない
     engine = Engine(scaled_rules(1.0))
 
@@ -460,8 +461,103 @@ def test_verify_skips_switches():
     asyncio.run(s._normal(Op("click", option), key, False))  # 押すと言語だけが変わる
     assert (key, f"click {option.label}") in run.responsive and f"click {option.label}" in run.switches
     run.responsive |= {(key, f"click {toggle.label}"), (key, f"click {close.label}")}
+    run.hits.update({(key, f"click {t.label}"): 2 for t in (toggle, option, close)})
     cands = normal_candidates(st, Guard({}), CFG["weights"], False)
     assert [op.label for op in s._verify_candidates(cands, key)] == [f"click {close.label}"]
+
+
+def _verify_session(min_hits=2):
+    from .test_looks import CFG, _Mouse
+
+    st = GameState()
+    st.feed(Event("game", "resolution", {"w": 2000, "h": 1000}, 0))
+    st.feed(Event("game", "menu", {"name": "Menu", "modal": True, "buttons": [
+        {"name": "Close", "rect": [0.5, 0.1, 0.7, 0.25]}, {"name": "Other", "rect": [0.1, 0.5, 0.3, 0.65]}]}, 0))
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                  rng=random.Random(1), cfg=CFG, response_timeout=0.2, response_checks=2, response_min_hits=min_hits)
+    events = []
+    s = FuzzSession(run, st, Pointer(windows, _Mouse(), 1, st, activate_wait=0), events.append, 0, lambda _: None)
+    return s, st, run, events
+
+
+def test_verify_uses_only_ops_that_responded_more_than_once():
+    # run 2026-11-25_2142・2026-11-26_2218: そのランで 1 回だけ反応とみなした右クリック・Esc で確かめ、反応がなかったので
+    # S-01 にして再起動した。ゲームは止まっていなかった。同じ状態で probe_min_hits 回以上反応した操作だけを使う
+    from .test_looks import CFG
+
+    s, st, run, _ = _verify_session()
+    key = "modal:Menu"
+    close, other = st.targets()
+    st_feed = st.feed
+    s.pointer.driver.click = lambda *a, **k: st_feed(Event("game", "menu_close", {"name": "Menu"}, 0))
+    asyncio.run(s._normal(Op("click", close), key, False))
+    assert run.hits[(key, f"click {close.label}")] == 1
+    cands = lambda: normal_candidates(st, Guard({}), CFG["weights"], False)
+    st.feed(Event("game", "menu", {"name": "Menu", "modal": True, "buttons": [
+        {"name": "Close", "rect": [0.5, 0.1, 0.7, 0.25]}, {"name": "Other", "rect": [0.1, 0.5, 0.3, 0.65]}]}, 0))
+    assert s._verify_candidates(cands(), key) == []  # 1 回反応しただけでは使わない
+    asyncio.run(s._normal(Op("click", close), key, False))
+    st.feed(Event("game", "menu", {"name": "Menu", "modal": True, "buttons": [
+        {"name": "Close", "rect": [0.5, 0.1, 0.7, 0.25]}, {"name": "Other", "rect": [0.1, 0.5, 0.3, 0.65]}]}, 0))
+    assert [op.label for op in s._verify_candidates(cands(), key)] == [f"click {close.label}"]
+
+
+def test_s01_presses_the_same_op_again_when_nothing_else_can_check():
+    # run 2026-11-25_2142: 開いて 1 秒のバックログで、それまで 8 回とも反応した Esc に反応がなく、ほかに確かめる操作が
+    # なかったので、すぐ S-01 にして再起動した。画面が開く演出のあいだは入力を受けないゲームがある。ほかに確かめる操作が
+    # なければ、同じ操作をもう一度押す（1 回目で待ったあとなので、演出は終わっている）
+    s, st, run, events = _verify_session()
+    key = "modal:Menu"
+    close, _ = st.targets()
+    run.responsive.add((key, f"click {close.label}"))
+    run.hits[(key, f"click {close.label}")] = 8
+    engine = Engine(scaled_rules(1.0))
+    presses = []
+
+    def click(*a, **k):
+        presses.append(1)
+        if len(presses) == 2:  # 2 回目は演出が終わっていて、画面が閉じる
+            st.feed(Event("game", "menu_close", {"name": "Menu"}, 0))
+
+    s.pointer.driver.click = click
+
+    def press():
+        asyncio.run(s._normal(Op("click", close), key, True))
+        res = [e.data for e in events if e.kind == "op_result"][-1]
+        return res, engine.feed(Event("harness", "op_result", {**res, "heartbeat_age": 0.5}, 0))
+
+    run.recent.append("wheel_up 3")
+    res, issues = press()
+    assert res["recheck"] and issues == [] and s._verify_next
+    assert s._verify_retry == f"click {close.label}"
+    cands = normal_candidates(st, Guard({}), CFG_W(), False)
+    assert [op.label for op in s._verify_candidates(cands, key)] == [f"click {close.label}"]
+    res, issues = press()
+    assert res["responded"] and issues == [] and s._verify_retry is None
+
+
+def test_s01_after_the_same_op_fails_twice():
+    s, st, run, events = _verify_session()
+    key = "modal:Menu"
+    close, _ = st.targets()
+    run.responsive.add((key, f"click {close.label}"))
+    run.hits[(key, f"click {close.label}")] = 8
+    s.pointer.driver.click = lambda *a, **k: None
+    engine = Engine(scaled_rules(1.0))
+    run.recent.append("wheel_up 3")
+    out = []
+    for _ in range(2):
+        asyncio.run(s._normal(Op("click", close), key, True))
+        res = [e.data for e in events if e.kind == "op_result"][-1]
+        out.append((res, engine.feed(Event("harness", "op_result", {**res, "heartbeat_age": 0.5}, 0))))
+    assert out[0][0]["recheck"] and out[0][1] == []
+    assert not out[1][0]["recheck"] and [i.rule_id for i in out[1][1]] == ["S-01"]
+
+
+def CFG_W():
+    from .test_looks import CFG
+    return CFG["weights"]
 
 
 def test_settings_change_counts_as_response():
@@ -1401,3 +1497,86 @@ def test_pressing_already_selected_value_or_profile_silent_is_expected():
     st.feed(Event("game", "settings", base, 0))
     locale["value"] = "en-US"  # 押しても変わらない（壊れた）とする
     assert press(option)["expected_silent"] is None
+
+
+def _skip_session():
+    from .test_looks import CFG, _Mouse
+
+    st = GameState()
+    st.feed(Event("game", "resolution", {"w": 2000, "h": 1000}, 0))
+    st.feed(Event("game", "settings", {"skip_mode": "ReadOnly"}, 0))
+    st.feed(Event("game", "input", {"muted": [], "advance_muted": False, "skip_muted": False,
+                                    "skip_keys": ["ctrl"], "toggle_skip_keys": []}, 0))
+    windows = FakeWindows(WindowInfo(1, ScreenRect(0, 0, 1000, 500), True), front=1)
+    run = FuzzRun(mode="random", decider=RandomDecider(random.Random(1), 0.2), guard=Guard({}),
+                  rng=random.Random(1), cfg={**CFG, "skip_max_sec": 2.0, "skip_idle_sec": 1.0}, response_timeout=0.2)
+    events = []
+    s = FuzzSession(run, st, Pointer(windows, _Mouse(), 1, st, activate_wait=0), events.append, 0, lambda _: None)
+    return s, st, run, events
+
+
+def _line(st, n):
+    st.feed(Event("game", "line", {"label": "s", "line_id": f"s:{n}", "text": f"本文 {n}"}, 0))
+
+
+def test_reread_lines_are_skipped_with_the_hold_key_until_an_unread_line():
+    # run 2026-11-26_2218: ロードのたびに、読んだことのある本文を 1 行ずつ送り直し、124 分のあいだ 3888 行を読み直した。
+    # 人と同じく、このランで前に読んだ行はゲームのスキップ（押しているあいだスキップするキー）で送り、未読の行で離す
+    s, st, run, events = _skip_session()
+    for n in range(3):
+        _line(st, n)
+    assert s._skip_key() is None  # 初めて読む行ではスキップしない
+    _line(st, 0)  # ロードして読んだ行に戻った
+    assert st.reread and s._skip_key() == "ctrl"
+    held = []
+
+    def key_down(name):
+        held.append(("down", name))
+        for n in (1, 2, 3):  # 読んだ行を飛ばし、未読の行 3 でゲームがスキップを止める
+            _line(st, n)
+
+    s.pointer.driver.key_down = key_down
+    s.pointer.driver.key_up = lambda name: held.append(("up", name))
+    asyncio.run(s._skip_read("ctrl"))
+    assert held == [("down", "ctrl"), ("up", "ctrl")]
+    res = [e.data for e in events if e.kind == "op_result"][-1]
+    assert res["kind"] == "skip" and res["responded"] and res["skipped_lines"] == 3 and res["stopped_by"] == "未読の行"
+
+
+def test_skip_is_not_used_unless_the_game_skips_only_read_lines():
+    s, st, run, _ = _skip_session()
+    _line(st, 0)
+    _line(st, 0)
+    assert s._skip_key() == "ctrl"
+    st.feed(Event("game", "settings", {"skip_mode": "Everything"}, 0))  # 未読も飛ばす方式では、新しい本文を読み飛ばす
+    assert s._skip_key() is None
+    st.feed(Event("game", "settings", {"skip_mode": "ReadOnly"}, 0))
+    st.feed(Event("game", "input", {"muted": ["Skip"], "skip_muted": True, "skip_keys": ["ctrl"]}, 0))
+    assert s._skip_key() is None  # ゲームがスキップを止めている
+    st.feed(Event("game", "input", {"muted": [], "skip_keys": [], "toggle_skip_keys": ["tab"]}, 0))
+    assert s._skip_key() is None  # 押すたびに切り替えるキーは使わない
+    st.feed(Event("game", "input", {"muted": [], "skip_keys": ["leftCtrl"]}, 0))
+    assert s._skip_key() == "ctrlleft"
+    s.cfg["skip_read"] = False
+    assert s._skip_key() is None
+
+
+def test_skip_key_is_released_when_reading_stops():
+    s, st, run, events = _skip_session()
+    _line(st, 0)
+    _line(st, 0)
+    held = []
+    s.pointer.driver.key_down = lambda name: held.append("down")
+    s.pointer.driver.key_up = lambda name: held.append("up")
+    asyncio.run(s._skip_read("ctrl"))  # 本文が届かない（演出の途中で止まった）
+    assert held == ["down", "up"]
+    res = [e.data for e in events if e.kind == "op_result"][-1]
+    assert not res["responded"] and res["stopped_by"] == "本文が届かない"
+
+
+def test_driver_key_names():
+    from yomawari.input.keys import driver_key
+
+    assert [driver_key(n) for n in ("ctrl", "rightCtrl", "tab", "a", "digit1", "f5", "escape")] == \
+        ["ctrl", "ctrlright", "tab", "a", "1", "f5", "esc"]
+    assert driver_key("someUnknownKey") is None

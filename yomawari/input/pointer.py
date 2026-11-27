@@ -232,6 +232,16 @@ class Pointer:
                 time.sleep(hover_wait)
         return self.platform.capture(area.rect)
 
+    def key_down(self, name: str) -> None:
+        """キーを押したままにする。必ず key_up で離す（離し忘れると、人の入力にもキーが押されたまま残る）。"""
+        self.area()  # ウィンドウが出ていなければ押さない
+        self.ensure_front()
+        self._check_screen()
+        self.driver.key_down(name)
+
+    def key_up(self, name: str) -> None:
+        self.driver.key_up(name)
+
     def key(self, name: str, times: int = 1) -> None:
         self.area()  # ウィンドウが出ていなければ押さない
         self.ensure_front()

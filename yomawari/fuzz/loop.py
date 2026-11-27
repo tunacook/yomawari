@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..events import Event
+from ..input.keys import driver_key
 from ..input.pointer import InputBlocked, Pointer, PointerError, ScreenChanged
 from ..sensors.screen import Shot
 from ..state import GameState, Rect, Target
@@ -158,6 +159,8 @@ class FuzzRun:
     response_timeout: float
     # 応答確認に使う操作の数（rules.yaml の S-01 の checks）。反応がなければ、前に反応した別の操作でもう一度確かめる
     response_checks: int = 1
+    # 応答確認に使う操作は、同じ状態でこの回数以上反応したもの（rules.yaml の S-01 の probe_min_hits）
+    response_min_hits: int = 1
     started: float = field(default_factory=time.monotonic)
     last_exit_t: float | None = None
     run_sec: float = 0.0  # ランの長さ（--hours）。長いランで expect_exit の間隔を延ばすのに使う
@@ -165,6 +168,7 @@ class FuzzRun:
     labels: set[str] = field(default_factory=set)
     recent: deque[str] = field(default_factory=lambda: deque(maxlen=10))
     responsive: set[tuple[str, str]] = field(default_factory=set)  # (状態, 操作) のうち、反応があったもの
+    hits: Counter[tuple[str, str]] = field(default_factory=Counter)  # (状態, 操作) ごとの、反応があった回数
     # 押すと切り替わる操作（トグル、押すと設定の値だけが変わるもの）。オンになったあとは、もう一度押しても何も起きない
     # ことがあるので、応答確認に使わない（run 2026-11-14_2214: 押してロードに切り替えたタブを応答確認で押し直し、S-01 にした）
     switches: set[str] = field(default_factory=set)
@@ -513,6 +517,7 @@ class FuzzSession:
         self._lock = asyncio.Lock()
         self._verify_next = False
         self._verify_tried: list[str] = []  # いまの応答確認で、押しても反応がなかった操作
+        self._verify_retry: str | None = None  # ほかに確かめる操作がないので、もう一度押して確かめる操作
         # 見た目を測ったときの画面の写し（いちばん新しいもの）。押す前の見た目を、検出の証拠に残すため（V-07）
         self.look_shot: Any = None
         self._irregular_t = -1.0
@@ -915,6 +920,11 @@ class FuzzSession:
         op = self.run.decider.choose(key, cands)
         if op is None:
             return  # 暗転中などで押せない。応答確認は次に押せるときまで持ち越す
+        if op.kind == "advance" and op.by == "normal" and not verify:
+            skip = self._skip_key()
+            if skip is not None:
+                await self._skip_read(skip)
+                return
         self._odds = (op.label, getattr(self.run.decider, "last_odds", {}))
         self._verify_next = False
         self._decided_ui = decided_ui
@@ -2682,31 +2692,48 @@ class FuzzSession:
         結果が変わるので使わない。いま押しても反応しないと見込んでいるボタン（暗い、文字で空と分かる）と、
         この応答確認ですでに反応がなかった操作も使わない（run 2026-11-12_0959: セーブで反応したスロットを、
         ロードの画面で空きのスロットとして押して S-01 にした）。押すと切り替わるもの（トグル、押すと設定の値だけが
-        変わるもの）も使わない。すでにオンなら、押しても何も起きない（run 2026-11-14_2214）。"""
+        変わるもの）も使わない。すでにオンなら、押しても何も起きない（run 2026-11-14_2214）。
+        同じ状態で response_min_hits 回以上反応したものだけを使う。1 回反応しただけの操作は、たまたま画面が変わったのと
+        重なっただけのことがある（run 2026-11-25_2142: バックログで 1 回だけ反応とみなした右クリックで確かめ、S-01 にした）。
+        _verify_retry の操作は、反応がなかったあとでも（押しても反応しないと見込むようになっていても）、もう一度押すために使う。"""
         quiet = self._quiet()
         return [op for op in cands
-                if op.group not in ("move", "list", "search") and (key, op.label) in self.run.responsive
+                if op.group not in ("move", "list", "search")
                 and op.label not in self.run.switches and not (op.target is not None and op.target.type == "toggle")
-                and op.label not in self._verify_tried and not (op.target is not None and op.target.label in quiet)]
+                and (op.label == self._verify_retry or (
+                    (key, op.label) in self.run.responsive and op.label not in self._verify_tried
+                    and self.run.hits[(key, op.label)] >= self.run.response_min_hits
+                    and not (op.target is not None and op.target.label in quiet)))]
 
     def _recheck(self, op: Op, key: str, verify: bool, responded: bool, commands_ran: bool, interfered: bool) -> bool:
         """応答確認の操作に反応がなかったら、前に反応があった別の操作で、もう一度確かめるか（そのときは S-01 を出さない）。
 
         同じ画面でも、モード・スクロール位置・スロットの中身で、前に反応した操作が今は何も起こさないことがある
         （run 2026-11-12_0959: すでに選ばれているタブ、端までスクロールした一覧のスクロールバー、空きのスロット）。
-        反応がなかった操作は、この状態では応答確認に使わない。"""
+        反応がなかった操作は、この状態では応答確認に使わない。
+        ほかに使える操作がなければ、同じ操作をもう一度押して確かめる（1 回だけ）。画面が開く演出のあいだは入力を受けない
+        ゲームがあり、開いてすぐに押すと反応しない。もう一度押すときは、1 回目で timeout_sec 待ったあとなので、演出は
+        終わっている（run 2026-11-25_2142: 開いて 1 秒のバックログで、それまで 8 回とも反応した Esc に反応がなく、S-01 にした）。"""
         if not verify:
             return False
         if responded:
             self._verify_tried = []
+            self._verify_retry = None
             return False
         self.run.responsive.discard((key, op.label))
         self._verify_tried.append(op.label)
+        retried = op.label == self._verify_retry
+        self._verify_retry = None
         if commands_ran or interfered or len(self._verify_tried) >= self.run.response_checks:
             return False
         cands = normal_candidates(self.state, self.run.guard, self.cfg["weights"], False)
         if not self._verify_candidates(cands, state_key(self.state)):
-            return False
+            if retried:
+                return False
+            self._verify_retry = op.label
+            if not self._verify_candidates(cands, state_key(self.state)):
+                self._verify_retry = None
+                return False
         self._verify_next = True
         return True
 
@@ -2776,6 +2803,7 @@ class FuzzSession:
                 self._maybe_edge("answer")
         if responded:
             self.run.responsive.add((key, op.label))
+            self.run.hits[(key, op.label)] += 1
             if op.target is not None and (op.target.type == "toggle" or (
                     self.state.settings_changes != settings_before and not screen_changed)):
                 self.run.switches.add(op.label)
@@ -2984,6 +3012,7 @@ class FuzzSession:
             run.edge_sent[(trigger, op.kind)] += 1
             self._verify_next = True
             self._verify_tried = []
+            self._verify_retry = None
 
     async def _check_front(self, key: str) -> None:
         """押しても画面が変わらなかったボタン。ゲームの外のアプリが前面に出ていたら external と確定し、ゲームを前面に戻す。"""
@@ -3002,6 +3031,7 @@ class FuzzSession:
                                   f" external とはせず、ゲームを前面に戻した。起動 #{self.launch}）")
             self._verify_next = True
             self._verify_tried = []
+            self._verify_retry = None
             return
         self.run.guard.book.confirm(key, "external", "前面のアプリがゲーム以外に切り替わった")
         self.run.guard.use_external(key)
@@ -3013,6 +3043,7 @@ class FuzzSession:
         self.publish(Event("harness", "external", {"target": key, "front_changed": True, "back": back}, self.launch))
         self._verify_next = True
         self._verify_tried = []
+        self._verify_retry = None
 
     async def _expect_exit(self, op: Op) -> None:
         assert op.target is not None
@@ -3066,6 +3097,7 @@ class FuzzSession:
         )
         self._verify_next = True
         self._verify_tried = []
+        self._verify_retry = None
 
     def _drain_fits(self) -> None:
         """ウィンドウが画面からはみ出していて、タイトルバーをドラッグして戻そうとした記録を、イベントとハーネスの記録にする。
@@ -3163,10 +3195,74 @@ class FuzzSession:
         self.publish(Event("harness", "op", data, self.launch))
         return True
 
+    def _skip_key(self) -> str | None:
+        """読んだことのある本文をスキップで送れるなら、押し続けるキー（入力の送り手の名前）。送れなければ None。
+
+        人は、前に読んだところに戻ってきたら、スキップで送る（run 2026-11-26_2218: ロードのたびに本文を 1 行ずつ送り直し、
+        124 分のあいだ 3888 行を読み直した）。いまの行がこのランで前にも届いていて、スキップの方式が既読だけ（未読の行に
+        来るとゲームがスキップを止める）、スキップの入力が止められておらず、押しているあいだスキップするキーが分かるときだけ。
+        押すたびに切り替えるキーは使わない（ゲームが先にスキップを止めると、もう一度押したときに逆にスキップを始めてしまう）。"""
+        st = self.state
+        if not bool(self.cfg["skip_read"]) or not st.reread or st.skip_muted or st.advance_muted:
+            return None
+        if (st.settings or {}).get("skip_mode") != "ReadOnly":
+            return None
+        if st.choices or st.top_modal() is not None or st.busy:
+            return None
+        for name in st.skip_keys:
+            key = driver_key(name)
+            if key is not None:
+                return key
+        return None
+
+    async def _skip_read(self, key: str) -> None:
+        """スキップのキーを押し続け、未読の行・選択肢・画面が出るか、時間がたったら離す。op と op_result を出す。"""
+        op = Op("skip", arg=key, by="skip")
+        st = self.state
+        lines0, commands0, sig0 = st.lines_total, st.commands, st.signature()
+        started = time.monotonic()
+        self._decided_ui = None
+        if not await self._do(op):
+            return
+        last_line, seen, why = started, lines0, "時間"
+        try:
+            while True:
+                await asyncio.sleep(0.1)
+                now = time.monotonic()
+                if st.lines_total != seen:
+                    seen, last_line = st.lines_total, now
+                if st.lines_total > lines0 and not st.reread:
+                    why = "未読の行"
+                    break
+                if st.choices:
+                    why = "選択肢"
+                    break
+                if st.top_modal() is not None:
+                    why = "画面"
+                    break
+                if now - started >= float(self.cfg["skip_max_sec"]):
+                    break
+                if now - last_line >= float(self.cfg["skip_idle_sec"]):
+                    why = "本文が届かない"
+                    break
+        finally:
+            self.pointer.key_up(key)  # 止められても必ず離す
+        lines = st.lines_total - lines0
+        self.run.stats["skip"] += 1
+        self.publish(Event("harness", "op_result", {
+            **op.to_json(), "target": None, "responded": lines > 0 or st.signature() != sig0, "screen_changed": False,
+            "commands_ran": st.commands != commands0, "waited": round(time.monotonic() - started, 3),
+            "verify": False, "recheck": False, "verify_tried": [], "interfered": False,
+            "skipped_lines": lines, "stopped_by": why, "recent": list(self.run.recent), "state": st.snapshot(),
+        }, self.launch))
+
     def _input(self, op: Op) -> tuple[float, float] | None:
         p = self.pointer
         ax, ay = (float(v) for v in self.cfg["advance_point"])
         k = op.kind
+        if k == "skip":
+            p.key_down(str(op.arg))  # 離すのは _skip_read
+            return None
         if k in ("advance", "right_click", "click") and op.via_key is not None:
             p.key(op.via_key)  # キーボードで押す（fuzz/keyboard.py）。ボタンは、方向キーでフォーカスを移してから
             return None

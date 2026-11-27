@@ -36,5 +36,11 @@ class PyAutoGuiDriver:
     def key(self, name: str) -> None:
         self._g.press(name)
 
+    def key_down(self, name: str) -> None:
+        self._g.keyDown(name)
+
+    def key_up(self, name: str) -> None:
+        self._g.keyUp(name)
+
     def hotkey(self, *names: str) -> None:
         self._g.hotkey(*names)
