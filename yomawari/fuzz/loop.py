@@ -527,6 +527,7 @@ class FuzzSession:
         # モーダルが開いて本文送りが止められてからの時刻と、そのあいだに本文送りで確かめたか（S-02。_mute_check）
         self._mute_since: float | None = None
         self._mute_checked = False
+        self._mute_epoch = 0  # 確かめたときの GameState.mute_epoch
         # 最後に、セーブ済みのスロットが並んだ画面か、続きから遊ぶボタンを押した時刻と、直前の操作がそうだったか
         # （そのあとのロードは人が選んだもの）
         self._save_screen_at: float | None = None
@@ -954,9 +955,14 @@ class FuzzSession:
         ボタンのない場所がなければ、押さずに確かめたことにしない。
         """
         st = self.state
-        if st.top_modal() is None or not st.advance_muted:
+        # 入力が戻ってから止め直されたら、数え直す。S-02 は入力が戻ったときに確かめたことを取り消すので、操作の合間に戻って
+        # 止め直されたのを見逃すと、確かめ直さないまま検出される（run 2026-11-27_1400: スキップのボタンを押した結果を
+        # 待つあいだの 3 秒だけ入力が戻り、そのあと思い出の一覧で本文送りを押さないまま 120 秒たって S-02 になった）
+        if st.top_modal() is None or not st.advance_muted or st.mute_epoch != self._mute_epoch:
             self._mute_since, self._mute_checked = None, False
-            return None
+            self._mute_epoch = st.mute_epoch
+            if st.top_modal() is None or not st.advance_muted:
+                return None
         if self._mute_since is None:
             self._mute_since = now
         if self._mute_checked or st.busy or now - self._mute_since < float(self.cfg["mute_check_sec"]):
