@@ -2521,8 +2521,9 @@ class FuzzSession:
                                       float(self.cfg["grey_ratio"]), float(self.cfg["fade_min_gap"]))
                 dk = set(fade)
             dk = self._by_text(gkey, values, dk, texts)
-            run.look_seen.update(values)
-            run.look_faded.update(fade)
+            # 測った回数を数える（Counter.update に辞書を渡すと値を回数として足すので、ボタンの名前だけを渡す）
+            run.look_seen.update(values.keys())
+            run.look_faded.update(fade.keys())
             run.look_groups.setdefault(gkey, set()).update(values)
             if dk:
                 run.look_split.add(gkey)
