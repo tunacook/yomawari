@@ -560,6 +560,10 @@ class FuzzSession:
         self._stale_skips = 0
         self._title_returns = state.title_returns
         self._resolution_changes = state.resolution_changes
+        # 選んだ選択肢（選択肢の本文の並び → 押した操作と、そのときまでに来た scene の数）。選んだあと scene が変わって、
+        # ロードせずに同じ選択肢へ戻ってきたら、その選択肢は回り道（バッドエンドなど）として巻き戻しに数える（_choice_back）
+        self._choice_picks: dict[str, tuple[Press, int]] = {}
+        self._scenes = 0
         self._play_start = 0  # このプレイを始めたときに届いていた本文・scene・選択肢の数
         # 再起動の前に抜け出す操作を試している間: {"rule", "left", "since", "ops", "on_fail"}
         self._recovery: dict[str, Any] | None = None
@@ -708,6 +712,11 @@ class FuzzSession:
         elif ev.kind == "choices" and d.get("items"):
             # 選択肢の id は表示のたびに変わるので、本文で表す
             place = "choices:" + "|".join(str(c.get("text")) for c in d["items"] if isinstance(c, dict))
+            self._choice_back(place)
+        if ev.kind == "scene":
+            self._scenes += 1
+        elif ev.kind == "load" and d.get("phase") == "start":
+            self._choice_picks.clear()  # ロードで選択肢の前に戻ったのは、選んだ選択肢のせいではない
         if self.run.resume_until is not None:
             if ev.kind == "load" and d.get("phase") == "start":
                 label = self.recent_press()
@@ -741,6 +750,23 @@ class FuzzSession:
             self._credit("progress")
         elif ev.kind == "load" and d.get("phase") == "start":
             self._credit("rewind")
+
+    def _choice_back(self, place: str) -> None:
+        """選んだ選択肢のあと、scene が変わってからロードせずに同じ選択肢へ戻ってきた: その選択肢は回り道。
+
+        バッドエンドの本文も、まだ見ていない本文なので進行に数える。そのままだと、次から回り道の選択肢を優先してしまう
+        （run 2026-11-27_1400: バッドエンドに入る選択肢が、ほかの選択肢より進行の割合が高くなっていた。バッドエンドの
+        終わりのボタンで選択肢の前に戻れるゲームでは、ロードせずに同じ選択肢へ戻ってくる）。進行の数を取り消し、巻き戻しに
+        数える。同じ scene の中で戻ってきたもの（巻き戻しの操作など）は数えない。"""
+        pick = self._choice_picks.pop(place, None)
+        if pick is None or pick[1] == self._scenes:
+            return
+        press = pick[0]
+        self.run.experience.detour(press)
+        note = (f"選択肢 `{press.label.removeprefix('click ')}` を選んだあと、ほかの場面を通って同じ選択肢に戻ってきたので、"
+                f"回り道として後回しにする（起動 #{self.launch}）")
+        if not any(note.split("（起動")[0] in n for n in self.run.notes):
+            self.run.notes.append(note)
 
     def _credit(self, kind: str) -> None:
         """progress_window_sec のうちに押した最後の操作と、いま開いている寄り道の画面を開いた操作に数える。"""
@@ -2768,6 +2794,9 @@ class FuzzSession:
             self.run.presses.remove(press)
             return
         self.run.experience.pressed(key, op.label)
+        if op.target is not None and op.target.menu == "choices" and self.state.choices:
+            place = "choices:" + "|".join(str(c.text) for c in self.state.choices)
+            self._choice_picks[place] = (press, self._scenes)
         timeout = self.run.response_timeout
         if quiet:
             timeout = min(timeout, float(self.cfg["quiet_wait_sec"]))

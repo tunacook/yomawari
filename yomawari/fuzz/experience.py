@@ -189,6 +189,14 @@ class Experience:
                 self.new.append(f"状態 `{p.key}` で `{p.label}` を押すと先に進んだので、次から優先する")
         return out
 
+    def detour(self, press: Press) -> None:
+        """押した操作は回り道だった（選んだ選択肢から、同じ選択肢へ戻ってきた）。進行に数えていれば取り消し、巻き戻しに数える。"""
+        c = (self.ops.get(press.key) or {}).get(press.label)
+        if c is not None and "progress" in press.credited and c["progress"] > 0:
+            c["progress"] -= 1
+            press.credited.discard("progress")
+        self.credit([press], "rewind")
+
     def progressed_targets(self) -> set[str]:
         """押して先に進んだことのあるボタンの label（"click <label>" の操作から）。前のランの分も含む。"""
         return {
