@@ -1106,6 +1106,32 @@ def test_profile_answer_with_moved_at_uses_the_line_whose_text_matches():
             assert s._answer_options({"はい", "いいえ"}, {"はい": "はい", "いいえ": "いいえ"}) is None and not moved
 
 
+def test_profile_answer_moved_beyond_shift_is_reported():
+    # run 2026-11-27_2241: 演出を足している最中のスクリプトで at が answer_at_shift より大きくずれ、正解の分からない質問として
+    # 答えを探し続けた。レポートには「正解なし」としか出ず、ずれが原因だと分からなかった。
+    # 補う幅より遠くで本文が at_text に当たれば、正解は使わずに、ずれていることを記録と答えのイベントに残す
+    profile = ANSWER_PROFILE.replace('at = "main/s1:1*", pick = ["いいえ"], note = "いいえが正解"',
+                                     'at = "main/s1:8.0", at_text = "どうする？", pick = ["いいえ"], note = "いいえが正解"')
+    for line_id, shift, source, far in (("main/s1:67.0", 30, "profile", True), ("main/s1:67.0", 59, "profile", False),
+                                        ("main/s2:67.0", 30, "profile", False), ("main/s1:67.0", 30, "learn", False)):
+        s, st, run, events = _session({"ai_context_lines": 3, "wrong_answer_prob": 0.0, "answer_at_shift": shift,
+                                       "answer_source": source})
+        run.flow = FlowTracker(parse_flows(tomllib.loads(profile)["flow"]))
+        _ask_yes_no(s, st, line_id)
+        _weights(s, st)
+        notes = [n for n in run.notes if "より遠い" in n]
+        if far:
+            assert s._answer_options({"はい", "いいえ"}, {"はい": "はい", "いいえ": "いいえ"}) is None
+            assert notes == ["プロファイルの正解（いいえが正解）の at `main/s1:8.0` の本文（at_text）が `main/s1:67.0` にあったが、"
+                             "59 行ずれていて answer_at_shift（30 行）より遠いので、正解を使わなかった"
+                             "（プロファイルの at を直すか、answer_at_shift を広げる）"]
+            _choose(s, run, "はい", "a")
+            answer = [e.data for e in events if e.kind == "answer"][-1]
+            assert answer["known"] == [] and answer["far"] == ["at `main/s1:8.0` の本文（at_text）が `main/s1:67.0` にあった（59 行ずれ）"]
+        else:
+            assert not notes
+
+
 def test_moved_at_picks_the_nearest_and_gives_up_on_a_tie():
     # 同じ本文の質問がいくつもあるときは、いちばん近い at の正解を使う。同じ近さで別の at があれば補わない。
     # at に当たる正解があれば、そちらを先に使う

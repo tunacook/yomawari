@@ -166,6 +166,21 @@ def test_long_stall_is_an_item_with_answers_and_short_ones_are_merged(tmp_path):
     assert "分進めなかった" not in _table(render(_summary(mode="aging", report_cfg={"stall_report_sec": 300}), [], tmp_path))
 
 
+def test_stall_answers_say_the_profile_at_was_too_far(tmp_path):
+    # 補う幅より遠くで本文が at_text に当たった正解は、「正解なし」の理由として、ずれと直し方を書く
+    q = {"flow": "質問", "question": "s:67"}
+    far = ["at `s:8.0` の本文（at_text）が `s:67.0` にあった（59 行ずれ）"]
+    events = [_ev(0, "launch"), _ev(1, "line", "game", line_id="s:67", text="どれ？")]
+    for n in range(3):
+        events.append(_ev(100.0 + n * 400, "answer", **q, picked=["カード #2"], known=[], far=far, follows=None,
+                          deliberate=False, locale_off=False))
+    events += [_ev(2000, "line", "game", line_id="s:68", text="次"), _ev(2800, "heartbeat")]
+    _write(tmp_path, events)
+    sec = _section(render(_summary(report_cfg={"stall_report_sec": 300, "report_stall_item_sec": 1000}), [], tmp_path), 1)
+    assert ("プロファイルの正解: なし（正解の at `s:8.0` の本文（at_text）が `s:67.0` にあった（59 行ずれ）。補う幅 answer_at_shift "
+            "より遠いので使わなかった。プロファイルの at を直すか、answer_at_shift を広げる）") in sec
+
+
 def test_error_log_just_before_is_shown_as_the_clue(tmp_path):
     log = _issue("L-01", "major", "スクリプトを読み込めない\n  at Stack.Trace", 0)
     hit = _issue("S-02", "critical", "本文が進まない", 90)

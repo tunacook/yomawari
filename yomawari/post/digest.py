@@ -377,6 +377,9 @@ def _answers(log: Log, lo: int, hi: int) -> list[str]:
             deliberate = sum(1 for a in answers if a.get("deliberate"))
             out.append(f"プロファイルの正解: 分かっていた（{' / '.join(known)}）。正解に沿って答えた {follows} 回"
                        + (f"、わざと外れを答えるつもりだった {deliberate} 回" if deliberate else ""))
+        elif far := list(dict.fromkeys(f for a in answers for f in a.get("far") or [])):
+            out.append(f"プロファイルの正解: なし（正解の {' / '.join(far)}。補う幅 answer_at_shift より遠いので使わなかった。"
+                       "プロファイルの at を直すか、answer_at_shift を広げる）")
         else:
             out.append("プロファイルの正解: なし（この質問の正解はプロファイルに書いていないか、質問の行を特定できなかった）")
     if judged:
