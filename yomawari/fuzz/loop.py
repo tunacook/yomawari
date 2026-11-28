@@ -116,6 +116,27 @@ def _moved_answers(answers: tuple[Answer, ...], line: str, got: str | None,
     return picked if len({p for _, p, _ in picked}) == 1 else []
 
 
+def _far_answers(answers: tuple[Answer, ...], ids: list[str], texts: dict[str, str],
+                 shift: int) -> list[tuple[Answer, str, str, int]]:
+    """直近の本文の行（古い順）のうち、いちばん新しい行で、同じスクリプトで at から shift 行より遠くにあり、本文が at_text に
+    当たる正解を (正解, at, 行, ずれ) で返す。補う幅を超えてずれた at で、正解を使えなかったことをレポートで分かるようにするため
+    （run 2026-11-27_2241: 演出を足している最中のスクリプトで at が 59 行ずれ、正解の分からない質問として 6 時間答えを探した）。
+    ワイルドカードで書いた at は見ない。"""
+    for line in reversed(ids):
+        pos, got = _line_pos(line), texts.get(line)
+        if pos is None or got is None:
+            continue
+        found = []
+        for a in answers:
+            for p, want in zip(a.at, a.at_text):
+                ap = None if any(c in p for c in "*?[") else _line_pos(p)
+                if ap is not None and ap[0] == pos[0] and abs(ap[1] - pos[1]) > shift and text_matches(got, (want,)):
+                    found.append((a, p, line, abs(ap[1] - pos[1])))
+        if found:
+            return found
+    return []
+
+
 def _nearest_answers(answers: tuple[Answer, ...], ids: list[str], texts: dict[str, str] | None = None,
                      shift: int = 0) -> tuple[tuple[Answer, ...], list[tuple[Answer, str, str, str]],
                                           list[tuple[Answer, str, str]]]:
@@ -285,6 +306,8 @@ class FuzzRun:
     line_texts: dict[str, str] = field(default_factory=dict)  # 最近の本文の行 → 本文（タグを除く）。正解の at_text と比べる
     # 質問ごとの正解（DESIGN.md §9「答えの選び方」）。質問（流れの名前, 始めたときの行）→ プロファイルの answers のうち当たったもの
     ctx_answers: dict[Any, tuple[Answer, ...]] = field(default_factory=dict)
+    # 質問 → 補う幅（answer_at_shift）より遠くで本文が at_text に当たった正解の説明。使わなかったが、レポートで分かるようにする
+    ctx_far: dict[Any, list[str]] = field(default_factory=dict)
     wrong_left: dict[Any, int] = field(default_factory=dict)  # 質問 → この流れでまだわざと答える外れの数
     # (質問, ここまでに選んだものの並び) → その選ぶ手順で見えていた、正解に沿う候補。あとの手順で、正解から外れたものを
     # 選んだかを見る（_off_answer）
@@ -1471,6 +1494,16 @@ class FuzzSession:
             if hit:
                 # 外れへの返事のあとに同じ質問に戻ったときは、質問の行が直近にないことがあるので、前に当たったものを使う
                 run.ctx_answers[ctx] = hit
+            elif not stale and ctx not in run.ctx_answers and cfg["answer_source"] == "profile":
+                far = _far_answers(flow.answers, ids, run.line_texts, int(cfg["answer_at_shift"]))
+                if far:
+                    run.ctx_far[ctx] = [f"at `{at}` の本文（at_text）が `{line}` にあった（{d} 行ずれ）" for _, at, line, d in far]
+                for a, at, line, d in far:
+                    note = (f"プロファイルの正解{f'（{a.note}）' if a.note else ''}の at `{at}` の本文（at_text）が `{line}` に"
+                            f"あったが、{d} 行ずれていて answer_at_shift（{cfg['answer_at_shift']} 行）より遠いので、正解を使わなかった"
+                            f"（プロファイルの at を直すか、answer_at_shift を広げる）")
+                    if note not in run.notes:
+                        run.notes.append(note)
         if ctx not in run.wrong_left and not self._locale_off() and (self._profile_answers() or run.flow.known_right()):
             prob = float(cfg["wrong_answer_prob"])
             run.wrong_left[ctx] = int(cfg["wrong_answers_per_question"]) if prob > 0 and run.rng.random() < prob else 0
@@ -1591,6 +1624,8 @@ class FuzzSession:
         self.publish(Event("harness", "answer", {
             "flow": ctx[0], "question": ctx[1], "picked": [self._text_of(p) or p for p in path],
             "known": known,  # プロファイルに書いた、この質問の正解（なければ空）
+            # 補う幅より遠くで本文が at_text に当たった正解（使わなかった）。正解なしの理由をレポートに書く
+            "far": run.ctx_far.get(ctx, []) if self.cfg["answer_source"] == "profile" and not answers else [],
             "follows": self._is_answer(ctx, path) if answers else None,  # 選んだものがプロファイルの正解に沿うか
             "deliberate": run.wrong_left.get(ctx, 0) > 0,  # わざと外れを答えるつもりだった
             "locale_off": self._locale_off(),
